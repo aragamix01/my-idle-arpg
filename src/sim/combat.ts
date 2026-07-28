@@ -164,6 +164,18 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
  */
 export function farmRate(save: SaveState, stage: number): number {
   if (stage < 1) return 0;
+  return killsPerSecond(save, stage) * goldPerTrashKill(save, stage);
+}
+
+/**
+ * Steady-state kills per second while farming.
+ *
+ * Exported because the renderer needs it: the cosmetic layer kills circles at
+ * exactly this rate, which is what makes the spectacle honest rather than
+ * decorative theatre running at its own invented speed.
+ */
+export function killsPerSecond(save: SaveState, stage: number): number {
+  if (stage < 1) return 0;
   const ctx = ctxFor(stage, false, 1);
   const stats = deriveStats(save, ctx);
   const aoeTargets = Math.min(stats.area, enemyCount(stage));
@@ -173,6 +185,5 @@ export function farmRate(save: SaveState, stage: number): number {
   const secondsPerWave = timeToKill(save, perEnemyHp * aoeTargets, stage, false, aoeTargets);
   if (!Number.isFinite(secondsPerWave) || secondsPerWave <= 0) return 0;
 
-  const killsPerSecond = aoeTargets / secondsPerWave;
-  return killsPerSecond * goldPerTrashKill(save, stage);
+  return aoeTargets / secondsPerWave;
 }

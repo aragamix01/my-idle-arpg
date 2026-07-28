@@ -1,0 +1,80 @@
+import { expect, test, type ConsoleMessage } from '@playwright/test';
+
+/**
+ * The blind spot the unit suite structurally cannot see: the sim can be
+ * perfect and the app still a white screen. Everything here is about the app
+ * booting and the round trip closing, not about game rules.
+ */
+
+/** Next's dev overlay and asset 404s are noisy; only real page errors matter. */
+function collectErrors(messages: ConsoleMessage[]): string[] {
+  return messages
+    .filter((m) => m.type() === 'error')
+    .map((m) => m.text())
+    .filter((text) => !text.includes('favicon'));
+}
+
+test('boots, renders, and closes the command round trip', async ({ page }) => {
+  const consoleMessages: ConsoleMessage[] = [];
+  const pageErrors: Error[] = [];
+  page.on('console', (m) => consoleMessages.push(m));
+  page.on('pageerror', (e) => pageErrors.push(e));
+
+  await page.goto('/');
+
+  // The HUD only renders once /api/state has answered, so this covers session
+  // creation and the first save write as well.
+  await expect(page.getByRole('button', { name: /Attempt stage/ })).toBeVisible();
+
+  const canvas = page.locator('[data-testid="game-canvas"] canvas');
+  await expect(canvas).toBeVisible();
+  const size = await canvas.evaluate((el: HTMLCanvasElement) => ({ w: el.width, h: el.height }));
+  expect(size.w).toBeGreaterThan(0);
+  expect(size.h).toBeGreaterThan(0);
+
+  expect(pageErrors, 'uncaught page errors').toEqual([]);
+  expect(collectErrors(consoleMessages), 'console errors').toEqual([]);
+});
+
+test('the render loop actually advances', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: /Attempt stage/ })).toBeVisible();
+
+  // Pixi's Application.init is async and the dynamic import resolves after the
+  // HUD does, so the handle appears strictly later than the buttons.
+  await page.waitForFunction(() => '__stageVisual' in globalThis, undefined, { timeout: 15_000 });
+
+  // A mounted canvas proves nothing - a dead ticker looks identical from the
+  // DOM. Sample the cosmetic layer twice and require movement.
+  const moved = await page.evaluate(async () => {
+    const visual = (globalThis as { __stageVisual?: { player: { x: number; y: number } } })
+      .__stageVisual;
+    if (!visual) return 'no visual handle';
+    const first = { ...visual.player };
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const second = { ...visual.player };
+    return first.x !== second.x || first.y !== second.y ? 'moved' : 'static';
+  });
+
+  expect(moved).toBe('moved');
+});
+
+test('progress survives a reload', async ({ page }) => {
+  await page.goto('/');
+
+  const upgrade = page.getByRole('button', { name: /^Damage/ });
+  await expect(upgrade).toBeVisible();
+  const before = await upgrade.textContent();
+
+  // Stage 1 is beatable from a fresh save, so this pays for the first upgrade.
+  await page.getByRole('button', { name: /Attempt stage/ }).click();
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible();
+
+  await upgrade.click();
+  await expect(upgrade).not.toHaveText(before ?? '');
+  const after = await upgrade.textContent();
+
+  // The real assertion: the server persisted it, not just the local store.
+  await page.reload();
+  await expect(page.getByRole('button', { name: /^Damage/ })).toHaveText(after ?? '');
+});
