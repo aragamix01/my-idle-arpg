@@ -1,17 +1,17 @@
 'use client';
 
 /**
- * The vertical slice.
+ * The game shell.
  *
- * Deliberately one upgrade button, not seven. Clicking it exercises the whole
- * round trip - optimistic local applyCommand, POST, authoritative re-run,
- * persistence - and the remaining six tracks are a loop over UPGRADE_KEYS once
- * that path is proven.
+ * Every upgrade button runs the same path the slice proved: optimistic local
+ * applyCommand, POST, authoritative re-run, persistence. Adding the six that
+ * followed the first cost a loop, which is what having a real command boundary
+ * buys you.
  */
 
 import { useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import { killsPerSecond } from '@/sim';
+import { killsPerSecond, UPGRADE_TRACKS, type UpgradeView } from '@/sim';
 import { HUD_TICK_MS, useGameStore } from './store';
 
 // Pixi touches the DOM on import, so it must never run during SSR.
@@ -52,7 +52,6 @@ export function Game() {
     return <main className="grid min-h-screen place-items-center text-sm text-neutral-400">loading…</main>;
   }
 
-  const damage = hud.upgrades.find((u) => u.key === 'damage')!;
   const rate = killsPerSecond(state, Math.max(1, state.bestStage || 1));
 
   return (
@@ -87,6 +86,17 @@ export function Game() {
             ))}
           </ul>
 
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+            {hud.upgrades.map((upgrade) => (
+              <UpgradeButton
+                key={upgrade.key}
+                upgrade={upgrade}
+                disabled={pending}
+                onBuy={() => void send({ type: 'buyUpgrade', key: upgrade.key })}
+              />
+            ))}
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -95,15 +105,6 @@ export function Game() {
               className="rounded bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-40"
             >
               Attempt stage {hud.currentStage}
-            </button>
-
-            <button
-              type="button"
-              disabled={pending || !damage.affordable}
-              onClick={() => void send({ type: 'buyUpgrade', key: 'damage' })}
-              className="rounded bg-emerald-500 px-4 py-2 text-sm font-medium text-neutral-950 disabled:opacity-40"
-            >
-              Damage {damage.level} → {damage.level + 1} · {compact(damage.cost)} gold
             </button>
 
             <button
@@ -118,6 +119,67 @@ export function Game() {
         </footer>
       </div>
     </main>
+  );
+}
+
+/**
+ * Nouns only. The magnitudes are read from UPGRADE_TRACKS so retuning a curve
+ * cannot leave the UI advertising a number the sim no longer applies.
+ */
+const EFFECT_NOUNS: Record<string, { noun: string; percent: boolean }> = {
+  damage: { noun: 'damage', percent: true },
+  attackSpeed: { noun: 'attack speed', percent: true },
+  health: { noun: 'max HP', percent: true },
+  toughness: { noun: 'effective HP', percent: true },
+  greed: { noun: 'gold found', percent: true },
+  area: { noun: 'targets hit', percent: false },
+  crit: { noun: 'crit chance', percent: true },
+};
+
+function effectText(key: string): string {
+  const track = UPGRADE_TRACKS[key as keyof typeof UPGRADE_TRACKS];
+  const { noun, percent } = EFFECT_NOUNS[key];
+  if (track.valueGrowth !== null) {
+    return `+${((track.valueGrowth - 1) * 100).toFixed(0)}% ${noun}`;
+  }
+  const add = track.valueAdd ?? 0;
+  return percent ? `+${(add * 100).toFixed(1)}% ${noun}` : `+${add} ${noun}`;
+}
+
+function UpgradeButton({
+  upgrade,
+  disabled,
+  onBuy,
+}: {
+  upgrade: UpgradeView;
+  disabled: boolean;
+  onBuy: () => void;
+}) {
+  const blocked = disabled || upgrade.maxed || !upgrade.affordable;
+
+  return (
+    <button
+      type="button"
+      disabled={blocked}
+      onClick={onBuy}
+      // No title attribute: it duplicates the effect line already rendered
+      // below, and it shadows the label in the accessible name.
+      className={[
+        'flex flex-col items-start gap-0.5 rounded border px-3 py-2 text-left transition',
+        upgrade.maxed
+          ? 'border-neutral-800 bg-neutral-900/80 text-neutral-500'
+          : upgrade.affordable
+            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25'
+            : 'border-neutral-800 bg-neutral-900/80 text-neutral-400',
+        blocked ? 'cursor-not-allowed' : 'cursor-pointer',
+      ].join(' ')}
+    >
+      <span className="text-sm font-medium">{upgrade.label}</span>
+      <span className="text-[11px] text-neutral-400">{effectText(upgrade.key)}</span>
+      <span className="font-mono text-[11px]">
+        {upgrade.maxed ? 'MAX' : `Lv ${upgrade.level} · ${compact(upgrade.cost)}g`}
+      </span>
+    </button>
   );
 }
 

@@ -59,6 +59,27 @@ test('the render loop actually advances', async ({ page }) => {
   expect(moved).toBe('moved');
 });
 
+test('every upgrade track is rendered', async ({ page }) => {
+  await page.goto('/');
+
+  // Guards the loop over UPGRADE_KEYS. A track added to curves.ts with no
+  // EFFECT_NOUNS entry would render "undefined" rather than fail loudly.
+  for (const label of [
+    'Damage',
+    'Attack Speed',
+    'Area',
+    'Critical',
+    'Health',
+    'Toughness',
+    'Greed',
+  ]) {
+    await expect(page.getByRole('button', { name: new RegExp(`^${label}`) })).toBeVisible();
+  }
+
+  await expect(page.getByText('undefined')).toHaveCount(0);
+  await expect(page.getByText('NaN')).toHaveCount(0);
+});
+
 test('progress survives a reload', async ({ page }) => {
   await page.goto('/');
 
