@@ -21,5 +21,8 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
+    // A production build refuses the file adapter unless told explicitly, so a
+    // real deployment cannot come up healthy and silently lose every save.
+    env: { ALLOW_FILE_PERSISTENCE: '1' },
   },
 });

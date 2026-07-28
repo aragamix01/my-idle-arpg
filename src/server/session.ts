@@ -1,19 +1,22 @@
 /**
  * Anonymous identity.
  *
- * A server-issued opaque id in an httpOnly cookie. The player never sees it and
- * client JavaScript cannot read it, which matters because in this slice the
- * cookie *is* the account.
+ * Two paths behind one shape - "a request resolves to a player id":
  *
- * Supabase replaces this wholesale: signInAnonymously() creates a real
- * auth.users row, and the linking flow attaches a Discord or Google identity to
- * it later without the save moving. This exists so the slice is not blocked on
- * that, and the shape - "a request resolves to a player id" - is identical.
+ * - With Supabase, signInAnonymously() creates a real auth.users row. Linking a
+ *   Discord or Google identity later keeps that id, so the save comes along
+ *   with it. That is the whole reason for choosing anonymous-first over a
+ *   token-only scheme that cannot be upgraded.
+ * - Without it, a server-issued UUID in an httpOnly cookie. Local development
+ *   only; getSaveStore() refuses this path in production.
  */
 
+import 'server-only';
 import { cookies } from 'next/headers';
 import { newSave, type SaveState } from '@/sim';
+import { readSupabaseConfig } from './env';
 import { getSaveStore } from './store';
+import { createUserClient } from './supabase';
 
 const COOKIE = 'player_id';
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
@@ -26,12 +29,55 @@ export interface Session {
 }
 
 /**
- * Resolve the current player, creating the account on first visit.
- *
  * Seeds come from crypto, not Math.random - a guessable seed would let a player
  * predict every artifact drop the account will ever roll.
  */
+function freshSave(): SaveState {
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  return newSave(seed, Date.now());
+}
+
 export async function getSession(): Promise<Session> {
+  const config = readSupabaseConfig();
+  return config ? supabaseSession() : cookieSession();
+}
+
+async function supabaseSession(): Promise<Session> {
+  const config = readSupabaseConfig()!;
+  const supabase = await createUserClient(config);
+  const store = getSaveStore();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (user) {
+    const existing = await store.load(user.id);
+    if (existing) return { playerId: user.id, state: existing, created: false };
+
+    // Authenticated but no row: the account exists and the save write failed,
+    // or the row was deleted. Rebuilding beats a 500 the player cannot escape.
+    const state = freshSave();
+    await store.save(user.id, state);
+    return { playerId: user.id, state, created: true };
+  }
+
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error || !data.user) {
+    // Almost always anonymous sign-ins being disabled in the dashboard, which
+    // is invisible from the code and worth naming.
+    throw new Error(
+      `anonymous sign-in failed: ${error?.message ?? 'no user returned'}. ` +
+        'Check Authentication > Sign In / Providers > Allow anonymous sign-ins.',
+    );
+  }
+
+  const state = freshSave();
+  await store.save(data.user.id, state);
+  return { playerId: data.user.id, state, created: true };
+}
+
+async function cookieSession(): Promise<Session> {
   const jar = await cookies();
   const existing = jar.get(COOKIE)?.value;
   const store = getSaveStore();
@@ -42,8 +88,7 @@ export async function getSession(): Promise<Session> {
   }
 
   const playerId = crypto.randomUUID();
-  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
-  const state = newSave(seed, Date.now());
+  const state = freshSave();
   await store.save(playerId, state);
 
   jar.set(COOKIE, playerId, {
