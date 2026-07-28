@@ -27,13 +27,14 @@ export interface GridSource {
  * Kenney "Tiny Dungeon" 1.0, CC0.
  *
  * tilemap_packed.png is 192x176 = 12 columns x 11 rows of 16px cells = 132
- * tiles, matching Tiles/tile_0000..0131 in row-major order. The other sheet,
- * tilemap.png, carries 1px spacing; the packed one is used because zero spacing
- * means frame rects are pure arithmetic.
+ * tiles, read row-major from the top left. The pack also ships a 1px-spaced
+ * sheet and 132 individual tile PNGs; both were dropped, since zero spacing
+ * makes frame rects pure arithmetic and the other two carry identical pixels.
  *
- * Indices were read off the sheet by eye. There is a test asserting every ID
- * here resolves to a frame with a non-empty alpha channel, which catches an
- * index that points at blank space.
+ * Indices were read off the sheet by eye - Preview.png is kept alongside the
+ * art for exactly that job. A test asserts every ID resolves to a frame with a
+ * non-empty alpha channel, which catches an index pointing at blank space. It
+ * cannot catch an index pointing at the wrong creature.
  */
 export const KENNEY_TINY_DUNGEON: GridSource = {
   kind: 'grid',
