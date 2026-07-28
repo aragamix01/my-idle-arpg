@@ -59,6 +59,26 @@ test('the render loop actually advances', async ({ page }) => {
   expect(moved).toBe('moved');
 });
 
+test('draws atlas sprites rather than placeholders', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => '__renderStats' in globalThis, undefined, { timeout: 15_000 });
+
+  // A canvas of fallback circles is indistinguishable from a canvas of sprites
+  // through the DOM, so the renderer counts which it drew.
+  const stats = await page.evaluate(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    return (
+      globalThis as {
+        __renderStats?: { atlasLoaded: boolean; sprites: number; placeholders: number };
+      }
+    ).__renderStats;
+  });
+
+  expect(stats?.atlasLoaded, 'atlas failed to load').toBe(true);
+  expect(stats?.sprites ?? 0, 'no sprites drawn').toBeGreaterThan(0);
+  expect(stats?.placeholders ?? -1, 'some enemies fell back to placeholders').toBe(0);
+});
+
 test('every upgrade track is rendered', async ({ page }) => {
   await page.goto('/');
 

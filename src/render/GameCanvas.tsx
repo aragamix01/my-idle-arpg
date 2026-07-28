@@ -10,28 +10,32 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { Application, Container, Graphics, Text } from 'pixi.js';
+import { Application, Container, Graphics, Sprite, Text } from 'pixi.js';
 import { StageVisual } from './cosmetic';
+import { loadAtlas, type Atlas } from './atlas';
 
 interface Props {
   killsPerSecond: number;
   hitSize: number;
+  stage: number;
 }
 
 const FLOATER_POOL = 40;
+const MAX_SPRITES = 240;
+/** 16px source art needs scaling up; this keeps it on whole pixels. */
+const SPRITE_SCALE = 2;
 
-export function GameCanvas({ killsPerSecond, hitSize }: Props) {
+export function GameCanvas({ killsPerSecond, hitSize, stage }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const visualRef = useRef<StageVisual | null>(null);
 
   // Latest sim numbers, read by the ticker without re-running the mount effect.
   // Written in an effect rather than during render: React may render a
   // component without committing it, and the ticker would then be drawing from
   // numbers that were never real.
-  const optionsRef = useRef({ killsPerSecond, hitSize });
+  const optionsRef = useRef({ killsPerSecond, hitSize, stage });
   useEffect(() => {
-    optionsRef.current = { killsPerSecond, hitSize };
-  }, [killsPerSecond, hitSize]);
+    optionsRef.current = { killsPerSecond, hitSize, stage };
+  }, [killsPerSecond, hitSize, stage]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -45,8 +49,7 @@ export function GameCanvas({ killsPerSecond, hitSize }: Props) {
       await instance.init({
         background: '#22331f',
         resizeTo: host,
-        antialias: true,
-        // Capped: this is programmer art, not a reason to melt a laptop.
+        antialias: false,
         resolution: Math.min(globalThis.devicePixelRatio ?? 1, 2),
         autoDensity: true,
       });
@@ -57,13 +60,28 @@ export function GameCanvas({ killsPerSecond, hitSize }: Props) {
         instance.destroy(true, { children: true });
         return;
       }
+
+      // A missing or malformed atlas must not take the game down with it -
+      // placeholders are a worse experience, not a broken one.
+      let atlas: Atlas | null = null;
+      try {
+        atlas = await loadAtlas();
+      } catch (error) {
+        console.warn('atlas unavailable, falling back to placeholders', error);
+      }
+      if (disposed) {
+        instance.destroy(true, { children: true });
+        return;
+      }
+
       app = instance;
       host.appendChild(instance.canvas);
 
-      const width = instance.screen.width;
-      const height = instance.screen.height;
-      const visual = new StageVisual({ ...optionsRef.current, width, height });
-      visualRef.current = visual;
+      const visual = new StageVisual({
+        ...optionsRef.current,
+        width: instance.screen.width,
+        height: instance.screen.height,
+      });
 
       // A canvas offers nothing to assert against from the outside - no DOM, no
       // text, and toDataURL is empty without preserveDrawingBuffer. This handle
@@ -77,9 +95,30 @@ export function GameCanvas({ killsPerSecond, hitSize }: Props) {
       // cosmetic circle positions and nothing else.
       (globalThis as unknown as { __stageVisual?: StageVisual }).__stageVisual = visual;
 
-      const field = new Graphics();
+      // Whether art is reaching the screen is invisible from the DOM: a canvas
+      // full of fallback circles looks exactly like a canvas full of sprites.
+      // These counters are what let the smoke test tell the two apart.
+      const renderStats = { atlasLoaded: atlas !== null, sprites: 0, placeholders: 0 };
+      (globalThis as unknown as { __renderStats?: typeof renderStats }).__renderStats = renderStats;
+
+      const placeholders = new Graphics();
+      const spriteLayer = new Container();
       const floaterLayer = new Container();
-      instance.stage.addChild(field, floaterLayer);
+      instance.stage.addChild(placeholders, spriteLayer, floaterLayer);
+
+      const spritePool: Sprite[] = [];
+      for (let i = 0; i < MAX_SPRITES; i++) {
+        const sprite = new Sprite();
+        sprite.anchor.set(0.5);
+        sprite.visible = false;
+        spriteLayer.addChild(sprite);
+        spritePool.push(sprite);
+      }
+
+      const playerSprite = new Sprite();
+      playerSprite.anchor.set(0.5);
+      playerSprite.visible = false;
+      spriteLayer.addChild(playerSprite);
 
       const floaterPool: Text[] = [];
       for (let i = 0; i < FLOATER_POOL; i++) {
@@ -96,37 +135,71 @@ export function GameCanvas({ killsPerSecond, hitSize }: Props) {
         // Clamped: an alt-tabbed tab resumes with a huge delta and would
         // teleport every enemy onto the player.
         const dt = Math.min(ticker.deltaMS / 1000, 0.05);
-        visual.resize(instance.screen.width, instance.screen.height);
-        visual.setOptions({ ...optionsRef.current, width: instance.screen.width, height: instance.screen.height });
+        visual.setOptions({
+          ...optionsRef.current,
+          width: instance.screen.width,
+          height: instance.screen.height,
+        });
         visual.update(dt);
 
-        field.clear();
+        placeholders.clear();
+        let slot = 0;
+        let placeholderCount = 0;
+
         for (const enemy of visual.enemies) {
           if (!enemy.alive) continue;
-          field.circle(enemy.x, enemy.y, enemy.r).fill(0x1b1b22);
+          const texture = atlas?.get(enemy.sprite) ?? null;
+
+          if (texture && slot < spritePool.length) {
+            const sprite = spritePool[slot++];
+            sprite.visible = true;
+            sprite.texture = texture;
+            sprite.x = Math.round(enemy.x);
+            sprite.y = Math.round(enemy.y);
+            sprite.scale.set(enemy.facing * SPRITE_SCALE, SPRITE_SCALE);
+          } else {
+            // The fallback that makes partial art migrations survivable.
+            placeholders.circle(enemy.x, enemy.y, enemy.r).fill(0x1b1b22);
+            placeholderCount++;
+          }
         }
-        field.circle(visual.player.x, visual.player.y, 9).fill(0x8fd694);
-        field.circle(visual.player.x, visual.player.y, 13).stroke({ width: 2, color: 0xe8f5e9 });
+
+        for (let i = slot; i < spritePool.length; i++) spritePool[i].visible = false;
+        renderStats.sprites = slot;
+        renderStats.placeholders = placeholderCount;
+
+        const playerTexture = atlas?.get('player.knight') ?? null;
+        if (playerTexture) {
+          playerSprite.visible = true;
+          playerSprite.texture = playerTexture;
+          playerSprite.x = Math.round(visual.player.x);
+          playerSprite.y = Math.round(visual.player.y);
+          playerSprite.scale.set(SPRITE_SCALE * 1.35);
+        } else {
+          placeholders.circle(visual.player.x, visual.player.y, 9).fill(0x8fd694);
+          placeholders
+            .circle(visual.player.x, visual.player.y, 13)
+            .stroke({ width: 2, color: 0xe8f5e9 });
+        }
 
         for (let i = 0; i < floaterPool.length; i++) {
-          const slot = floaterPool[i];
+          const text = floaterPool[i];
           const floater = visual.floaters[i];
           if (!floater) {
-            slot.visible = false;
+            text.visible = false;
             continue;
           }
-          slot.visible = true;
-          slot.text = floater.text;
-          slot.x = floater.x;
-          slot.y = floater.y;
-          slot.alpha = Math.min(1, floater.life);
+          text.visible = true;
+          text.text = floater.text;
+          text.x = floater.x;
+          text.y = floater.y;
+          text.alpha = Math.min(1, floater.life);
         }
       });
     })();
 
     return () => {
       disposed = true;
-      visualRef.current = null;
       app?.destroy(true, { children: true });
     };
   }, []);

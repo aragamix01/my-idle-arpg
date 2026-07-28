@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "pnpm atlas && next dev",
+    "build": "pnpm atlas && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "balance": "tsx scripts/balance.ts"
+    "balance": "tsx scripts/balance.ts",
+    "atlas": "tsx scripts/atlas.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.3",
@@ -26,10 +27,12 @@
     "@playwright/test": "^1.62.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
+    "pngjs": "^7.0.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "typescript": "^5",

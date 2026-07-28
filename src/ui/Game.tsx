@@ -57,7 +57,11 @@ export function Game() {
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-100">
       <div className="absolute inset-0">
-        <GameCanvas killsPerSecond={rate} hitSize={hud.stats.damage} />
+        <GameCanvas
+          killsPerSecond={rate}
+          hitSize={hud.stats.damage}
+          stage={Math.max(1, hud.bestStage || 1)}
+        />
       </div>
 
       <div className="pointer-events-none relative z-10 flex min-h-screen flex-col justify-between p-6">

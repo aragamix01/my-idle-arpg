@@ -58,6 +58,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Raw art. Kenney's Tiled export includes sampleSheet.tsx, which is XML
+    // rather than JSX and fails every TypeScript parser that meets it.
+    "assets/**",
+    "public/atlas/**",
   ]),
 ]);
 

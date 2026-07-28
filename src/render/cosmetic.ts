@@ -9,12 +9,17 @@
  * its own frame loop. React never sees them - see src/ui/store.ts.
  */
 
+import { enemySpritesForStage, type SpriteId } from './sprites';
+
 export interface CosmeticEnemy {
   x: number;
   y: number;
   alive: boolean;
-  /** Radius, so a few sizes break up the visual monotony of one circle repeated. */
+  /** Radius. Drives display size, and is the placeholder circle's size. */
   r: number;
+  sprite: SpriteId;
+  /** Sprites face the player; -1 flips horizontally. */
+  facing: 1 | -1;
 }
 
 export interface Floater {
@@ -29,6 +34,8 @@ export interface VisualOptions {
   killsPerSecond: number;
   /** Typical hit for the damage numbers. Cosmetic - the real number lives in the sim. */
   hitSize: number;
+  /** Decides which creatures appear. Has no effect on outcomes. */
+  stage: number;
   width: number;
   height: number;
 }
@@ -57,13 +64,15 @@ export class StageVisual {
   private killCredit = 0;
   private orbitAngle = 0;
   private seed: number;
+  /** First fill places enemies on screen; every fill after walks them in. */
+  private seeded = false;
 
   constructor(options: VisualOptions) {
     this.options = options;
     this.seed = 0x1234_5678;
     this.player = { x: options.width / 2, y: options.height / 2 };
     for (let i = 0; i < MAX_ENEMIES; i++) {
-      this.enemies.push({ x: 0, y: 0, alive: false, r: 6 });
+      this.enemies.push({ x: 0, y: 0, alive: false, r: 6, sprite: 'enemy.slime', facing: 1 });
     }
   }
 
@@ -80,15 +89,43 @@ export class StageVisual {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
-  private spawn(enemy: CosmeticEnemy) {
+  private spawn(enemy: CosmeticEnemy, placeOnScreen = false) {
     const { width, height } = this.options;
-    // Ring outside the viewport, so enemies walk in rather than appearing.
     const angle = this.random() * Math.PI * 2;
-    const radius = Math.max(width, height) * 0.62;
-    enemy.x = width / 2 + Math.cos(angle) * radius;
-    enemy.y = height / 2 + Math.sin(angle) * radius;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+
+    if (placeOnScreen) {
+      // Seeding the first wave. Spawning everything off-screen leaves the
+      // player watching an empty field for the first several seconds.
+      let x: number;
+      let y: number;
+      do {
+        x = this.random() * width;
+        y = this.random() * height;
+      } while (Math.hypot(x - this.player.x, y - this.player.y) < 70);
+      enemy.x = x;
+      enemy.y = y;
+    } else {
+      // Just beyond the edge *in that direction*, not on a circle around the
+      // centre. A circle sized for the corners puts enemies approaching from
+      // top and bottom hundreds of pixels further out than the ones from the
+      // sides, and they trickle in for seconds.
+      const toEdge = Math.min(
+        Math.abs(cos) < 1e-6 ? Infinity : width / 2 / Math.abs(cos),
+        Math.abs(sin) < 1e-6 ? Infinity : height / 2 / Math.abs(sin),
+      );
+      const radius = toEdge + 24 + this.random() * 40;
+      enemy.x = width / 2 + cos * radius;
+      enemy.y = height / 2 + sin * radius;
+    }
+
     enemy.r = 5 + this.random() * 4;
     enemy.alive = true;
+
+    const roster = enemySpritesForStage(this.options.stage);
+    enemy.sprite = roster[Math.floor(this.random() * roster.length)] ?? 'enemy.slime';
+    enemy.facing = 1;
   }
 
   private kill(enemy: CosmeticEnemy) {
@@ -122,6 +159,9 @@ export class StageVisual {
       const distance = Math.hypot(dx, dy) || 1;
       enemy.x += (dx / distance) * ENEMY_SPEED * dt;
       enemy.y += (dy / distance) * ENEMY_SPEED * dt;
+      // Only flip on decisive horizontal movement; near-vertical approaches
+      // otherwise jitter left/right every frame.
+      if (Math.abs(dx) > 4) enemy.facing = dx < 0 ? -1 : 1;
     }
 
     // Keep the field populated. Density is pure spectacle; it has no effect on
@@ -130,10 +170,11 @@ export class StageVisual {
     for (const enemy of this.enemies) {
       if (living >= target) break;
       if (!enemy.alive) {
-        this.spawn(enemy);
+        this.spawn(enemy, !this.seeded);
         living++;
       }
     }
+    this.seeded = true;
 
     // Kills are paid out of a fractional budget, so a rate of 0.3/s produces one
     // kill every ~3s rather than rounding to zero and freezing the screen.
