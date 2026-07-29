@@ -100,6 +100,39 @@ test('every upgrade track is rendered', async ({ page }) => {
   await expect(page.getByText('NaN')).toHaveCount(0);
 });
 
+test('idle gold accrues even when the browser clock is wrong', async ({ page }) => {
+  // lastSeenAt is stamped by the server. Measuring against an unadjusted
+  // Date.now() made elapsed time negative on any browser running behind, which
+  // clamped to zero and pinned idle gold at 0.
+  await page.addInitScript(() => {
+    const skewMs = 10 * 60 * 1000;
+    const RealDate = Date;
+    const shifted = class extends RealDate {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      constructor(...args: any[]) {
+        if (args.length === 0) super(RealDate.now() - skewMs);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        else super(...(args as [any]));
+      }
+      static now() {
+        return RealDate.now() - skewMs;
+      }
+    };
+    globalThis.Date = shifted as DateConstructor;
+  });
+
+  await page.goto('/');
+
+  // Farm income comes from the best cleared stage, so there is nothing to
+  // accrue until stage 1 is beaten.
+  await page.getByRole('button', { name: /Attempt stage/ }).click();
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible();
+
+  const claim = page.getByRole('button', { name: /idle gold/ });
+  await expect(claim).toBeEnabled({ timeout: 15_000 });
+  await expect(claim).not.toHaveText(/Claim 0 idle gold/);
+});
+
 test('progress survives a reload', async ({ page }) => {
   await page.goto('/');
 

@@ -16,6 +16,24 @@ import { applyCommand, getHudSnapshot, type Command, type HudSnapshot, type Save
 /** HUD refresh rate. Sixty would be wasted work on numbers nobody can read that fast. */
 export const HUD_TICK_MS = 100;
 
+/**
+ * Difference between the server's clock and this browser's, in milliseconds.
+ *
+ * lastSeenAt is stamped by the server, so measuring elapsed time against
+ * Date.now() compares two different clocks. A browser running even slightly
+ * behind produces a negative elapsed time, which clamps to zero - idle gold
+ * then reads 0 and stays there until real time catches up. A browser running
+ * ahead is worse: it invents idle income the server will refuse to pay.
+ *
+ * Every response carries serverNowMs for exactly this reason.
+ */
+let clockOffsetMs = 0;
+
+/** Server time as best this client can estimate it. Never call Date.now() directly. */
+export function serverNow(): number {
+  return Date.now() + clockOffsetMs;
+}
+
 interface GameStore {
   state: SaveState | null;
   hud: HudSnapshot | null;
@@ -31,6 +49,11 @@ interface GameStore {
 }
 
 function adopt(response: GameStateResponse) {
+  // Resynchronise on every response. The round trip makes this an estimate
+  // biased by up to one latency, which is irrelevant against an eight-hour
+  // offline cap and much smaller than the skew it corrects.
+  clockOffsetMs = response.serverNowMs - Date.now();
+
   return {
     state: response.state,
     hud: response.hud,
@@ -65,11 +88,11 @@ export const useGameStore = create<GameStore>()((set, get) => ({
     // the UI responds now instead of after a round trip. If the prediction was
     // right - which it is unless the client is stale - the server's answer is
     // identical and the swap below is invisible.
-    const predicted = applyCommand(current, command, Date.now());
+    const predicted = applyCommand(current, command, serverNow());
     if (predicted.ok) {
       set({
         state: predicted.value.state,
-        hud: getHudSnapshot(predicted.value.state, Date.now()),
+        hud: getHudSnapshot(predicted.value.state, serverNow()),
         events: predicted.value.events,
       });
     }
@@ -103,6 +126,6 @@ export const useGameStore = create<GameStore>()((set, get) => ({
 
   refreshHud: () => {
     const state = get().state;
-    if (state) set({ hud: getHudSnapshot(state, Date.now()) });
+    if (state) set({ hud: getHudSnapshot(state, serverNow()) });
   },
 }));
