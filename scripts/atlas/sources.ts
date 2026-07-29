@@ -70,6 +70,26 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     'item.swarm_lens': 130,
     'item.bloodstone': 115,
     'item.deep_delvers_idol': 129,
+
+    // Currency. Tiny Dungeon has no purpose-drawn crafting icons, so these are
+    // the closest readable stand-ins from what the pack ships: potions for the
+    // ores, torches for the flames, chests and tomes for the rest. The colour
+    // pairings are deliberate - magic ore is the blue potion because magic
+    // items are blue, rare ore the orange gem because rares are yellow.
+    'currency.sacred_idol': 64,
+    'currency.dark_idol': 56,
+    'currency.magic_ore': 116,
+    'currency.rare_ore': 101,
+    'currency.angel_flame': 127,
+    'currency.angel_droplet': 113,
+    'currency.bishop_spirit': 65,
+    'currency.devil_spirit': 92,
+    'currency.dune_spirit': 125,
+    'currency.magic_ore_shard': 105,
+    'currency.rare_ore_shard': 107,
+    'currency.angel_flame_shard': 126,
+    'currency.angel_droplet_shard': 114,
+    'currency.dungeon_key': 90,
   },
 };
 

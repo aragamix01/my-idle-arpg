@@ -6,6 +6,7 @@
  * route handler (authoritative). The ESLint boundary rule enforces this.
  */
 
+import type { CurrencyPurse } from './content/currency';
 import type { ItemInstance } from './content/schema';
 
 export const STAT_KEYS = [
@@ -77,6 +78,13 @@ export interface SaveState {
   upgrades: UpgradeLevels;
   /** Rolled item instances. Bounded by INVENTORY_CAP. */
   items: ItemInstance[];
+  /**
+   * Crafting currency counts.
+   *
+   * Sparse and unbounded. Unlike items, a currency is a number rather than an
+   * object, so a hoarder costs the save blob a handful of integers.
+   */
+  currency: CurrencyPurse;
   /** Fixed-length; holds item uids. null = empty slot. */
   loadout: (string | null)[];
   /**

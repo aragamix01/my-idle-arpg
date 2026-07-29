@@ -2,9 +2,14 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { report, runLadder } from '../scripts/balance';
+// The one place a test reaches into the UI layer: "two affixes must not read as
+// the same line" is a claim about rendering, and asserting it against the raw
+// numbers instead would not catch the rounding that caused it.
+import { describeRolledAffix } from '../src/ui/format';
 import {
   AFFIXES,
   AFFIX_LIMITS,
+  affixRows,
   applyCommand,
   BASES,
   BASE_AFFIXES,
@@ -14,14 +19,20 @@ import {
   CommandSchema,
   computeOffline,
   createRng,
+  CURRENCIES,
+  currencyLegality,
   deriveStats,
+  DISSEMBLE_YIELD,
   DROPS_PER_CLEAR,
   effectiveHp,
   enemyCount,
   enemyHp,
   feedbackExponent,
+  FRAGMENTS_PER_CLEAR,
   getAffix,
   getBaseAffix,
+  getCurrency,
+  KEY_DROP_CHANCE,
   sideExponents,
   newSave,
   OFFLINE_CAP_SECONDS,
@@ -31,12 +42,14 @@ import {
   rerollCost,
   resolveStage,
   rollItem,
+  rollStageBossDrops,
   statsDps,
   UNIQUES,
   UPGRADE_TRACKS,
   upgradeCost,
   validateRegistry,
   type Command,
+  type CurrencyId,
   type SaveState,
 } from '../src/sim';
 
@@ -295,6 +308,7 @@ describe('content registry', () => {
         itemLevel: 45,
         affixes: [],
         rerolls: 0,
+        crafts: 0,
         uniqueId: unique.id,
       };
       const equipped: SaveState = {
@@ -322,6 +336,7 @@ describe('content registry', () => {
         itemLevel: 100,
         affixes: [{ affixId: affix.id, tier: top, value: affix.tiers[top].value }],
         rerolls: 0,
+        crafts: 0,
       };
       const equipped: SaveState = {
         ...base,
@@ -369,6 +384,23 @@ describe('item rolling', () => {
       );
       expect(prefixes).toHaveLength(limits.prefix);
       expect(suffixes).toHaveLength(limits.suffix);
+    }
+  });
+
+  it('never puts two affixes on an item that read as the same line', () => {
+    // Two defensive stats exist, so a third defensive affix has to share one -
+    // and Armoured plus Warded on the same rare rendered "+1% Toughness"
+    // twice, which reads as a duplicate-render bug rather than two mods.
+    // The affixes must differ in magnitude at every tier they share.
+    for (let uid = 1; uid < 600; uid++) {
+      for (const level of [1, 20, 50, 100]) {
+        const item = rollItem(17, uid, level);
+        const lines = [
+          ...(item.baseAffix ? [item.baseAffix] : []),
+          ...item.affixes,
+        ].map((rolled) => describeRolledAffix(rolled).text);
+        expect(new Set(lines).size, `${lines.join(' / ')}`).toBe(lines.length);
+      }
     }
   });
 
@@ -548,14 +580,345 @@ describe('inventory', () => {
     const save: SaveState = { ...newSave(2, T0), items: [item] };
     const equipped = play(save, [{ type: 'equipItem', slot: 1, itemId: item.uid }]);
 
-    const refused = applyCommand(equipped, { type: 'discardItem', uid: item.uid }, T0);
+    const refused = applyCommand(equipped, { type: 'dissembleItem', uid: item.uid }, T0);
     expect(refused.ok).toBe(false);
 
     const after = play(equipped, [
       { type: 'equipItem', slot: 1, itemId: null },
-      { type: 'discardItem', uid: item.uid },
+      { type: 'dissembleItem', uid: item.uid },
     ]);
     expect(after.items).toHaveLength(0);
+  });
+});
+
+describe('currency', () => {
+  /** A save holding one item and a stack of every currency. */
+  const withCurrency = (item: ReturnType<typeof rollItem>): SaveState => ({
+    ...newSave(5, T0),
+    gold: 1e12,
+    items: [item],
+    currency: Object.fromEntries(CURRENCIES.map((c) => [c.id, 20])),
+  });
+
+  const itemOfRarity = (rarity: string, seed = 5, level = 60) => {
+    for (let uid = 1; uid < 800; uid++) {
+      const item = rollItem(seed, uid, level);
+      if (item.rarity === rarity) return item;
+    }
+    throw new Error(`no ${rarity} rolled`);
+  };
+
+  const craft = (save: SaveState, currencyId: CurrencyId, uid: string) =>
+    applyCommand(save, { type: 'applyCurrency', currencyId, uid }, T0);
+
+  it('rerolls only the prefixes, leaving suffixes byte-identical', () => {
+    // The entire point of a targeted reroll. If the other side moves at all,
+    // this is a full reroll with extra steps.
+    const item = itemOfRarity('rare');
+    const save = withCurrency(item);
+    const suffixesBefore = item.affixes.filter((a) => getAffix(a.affixId)?.kind === 'suffix');
+
+    const result = craft(save, 'sacred-idol', item.uid);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const after = result.value.state.items[0];
+    expect(after.affixes.filter((a) => getAffix(a.affixId)?.kind === 'suffix')).toEqual(
+      suffixesBefore,
+    );
+    expect(after.affixes.filter((a) => getAffix(a.affixId)?.kind === 'prefix')).not.toEqual(
+      item.affixes.filter((a) => getAffix(a.affixId)?.kind === 'prefix'),
+    );
+  });
+
+  it('rerolls only the suffixes, leaving prefixes byte-identical', () => {
+    const item = itemOfRarity('rare');
+    const prefixesBefore = item.affixes.filter((a) => getAffix(a.affixId)?.kind === 'prefix');
+
+    const result = craft(withCurrency(item), 'dark-idol', item.uid);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.value.state.items[0].affixes.filter((a) => getAffix(a.affixId)?.kind === 'prefix'),
+    ).toEqual(prefixesBefore);
+  });
+
+  it('angel flame keeps the modifiers and changes only their tiers', () => {
+    const item = itemOfRarity('rare', 5, 120);
+    const result = craft(withCurrency(item), 'angel-flame', item.uid);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const after = result.value.state.items[0];
+    expect(after.affixes.map((a) => a.affixId)).toEqual(item.affixes.map((a) => a.affixId));
+    // The value must track the tier, or the panel shows a number the sim does
+    // not apply.
+    for (const rolled of after.affixes) {
+      const affix = getAffix(rolled.affixId)!;
+      expect(rolled.value).toBe(affix.tiers[rolled.tier].value);
+    }
+  });
+
+  it('ore raises rarity and keeps what was already rolled', () => {
+    // Losing the existing modifiers would make an ore a reroll in disguise.
+    const item = itemOfRarity('common');
+    const result = craft(withCurrency(item), 'magic-ore', item.uid);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const after = result.value.state.items[0];
+    expect(after.rarity).toBe('magic');
+    for (const before of item.affixes) expect(after.affixes).toContainEqual(before);
+    expect(after.affixes.length).toBe(item.affixes.length + 1);
+  });
+
+  it('refuses an ore on the wrong rarity, with the reason the UI shows', () => {
+    const rare = itemOfRarity('rare');
+    const result = craft(withCurrency(rare), 'magic-ore', rare.uid);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('common items only');
+    // Same string, same rules - the modal greys the option out with this.
+    expect(currencyLegality(rare, getCurrency('magic-ore')!, false)).toBe(result.error);
+  });
+
+  it('refuses any currency the player does not hold', () => {
+    const item = itemOfRarity('common');
+    const broke: SaveState = { ...withCurrency(item), currency: {} };
+    const result = craft(broke, 'magic-ore', item.uid);
+    expect(result.ok).toBe(false);
+  });
+
+  it('spends exactly one of the currency used', () => {
+    const item = itemOfRarity('rare');
+    const save = withCurrency(item);
+    const result = craft(save, 'angel-flame', item.uid);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.state.currency['angel-flame']).toBe(
+      (save.currency['angel-flame'] ?? 0) - 1,
+    );
+  });
+
+  it('applies one spirit and refuses a second, forever', () => {
+    const item = itemOfRarity('rare');
+    const first = craft(withCurrency(item), 'bishop-spirit', item.uid);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const spirited = first.value.state.items[0];
+    expect(spirited.spirit).toBe('bishop-spirit');
+    expect(spirited.spiritDelta).toBeDefined();
+
+    for (const id of ['bishop-spirit', 'devil-spirit', 'dune-spirit'] as CurrencyId[]) {
+      const second = craft(first.value.state, id, item.uid);
+      expect(second.ok, `${id} was allowed on a spirited item`).toBe(false);
+    }
+  });
+
+  it('gives a spirited item the affix count its delta claims', () => {
+    // affixRows is the single source of truth. If the rolled count and the
+    // displayed count come apart, the panel is lying about the item.
+    for (const id of ['bishop-spirit', 'devil-spirit', 'dune-spirit'] as CurrencyId[]) {
+      for (let seed = 1; seed <= 12; seed++) {
+        const item = itemOfRarity('rare', seed, 120);
+        const result = craft(withCurrency(item), id, item.uid);
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+
+        const after = result.value.state.items[0];
+        const rows = affixRows(after);
+        const prefixes = after.affixes.filter((a) => getAffix(a.affixId)?.kind === 'prefix');
+        const suffixes = after.affixes.filter((a) => getAffix(a.affixId)?.kind === 'suffix');
+        expect(prefixes, `${id} prefixes`).toHaveLength(rows.prefix);
+        expect(suffixes, `${id} suffixes`).toHaveLength(rows.suffix);
+      }
+    }
+  });
+
+  it('bishop and devil keep the total at four rows; dune can reach five', () => {
+    const total = (id: CurrencyId, seed: number) => {
+      const item = itemOfRarity('rare', seed, 120);
+      const result = craft(withCurrency(item), id, item.uid);
+      if (!result.ok) return 0;
+      const rows = affixRows(result.value.state.items[0]);
+      return rows.prefix + rows.suffix;
+    };
+
+    for (let seed = 1; seed <= 8; seed++) {
+      expect(total('bishop-spirit', seed)).toBe(4);
+      expect(total('devil-spirit', seed)).toBe(4);
+    }
+    // Dune is the only route to a fifth row - that is what makes it the
+    // rarest thing that drops, and what the craft ceiling budgets for.
+    const duneTotals = new Set(Array.from({ length: 24 }, (_, i) => total('dune-spirit', i + 1)));
+    expect(duneTotals).toContain(5);
+    expect(Math.max(...duneTotals)).toBe(5);
+  });
+
+  it('refuses a spirit on anything but a rare', () => {
+    for (const rarity of ['common', 'magic']) {
+      const item = itemOfRarity(rarity);
+      const result = craft(withCurrency(item), 'dune-spirit', item.uid);
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.error).toBe('rare items only');
+    }
+  });
+
+  it('keeps a spirit rows through a gold reroll', () => {
+    // Gold must not undo a permanent, one-shot decision.
+    const item = itemOfRarity('rare');
+    const spirited = craft(withCurrency(item), 'devil-spirit', item.uid);
+    expect(spirited.ok).toBe(true);
+    if (!spirited.ok) return;
+
+    const before = affixRows(spirited.value.state.items[0]);
+    const rerolled = applyCommand(spirited.value.state, { type: 'rerollItem', uid: item.uid }, T0);
+    expect(rerolled.ok).toBe(true);
+    if (!rerolled.ok) return;
+
+    const after = rerolled.value.state.items[0];
+    expect(after.spirit).toBe('devil-spirit');
+    expect(affixRows(after)).toEqual(before);
+    expect(after.affixes.filter((a) => getAffix(a.affixId)?.kind === 'prefix')).toHaveLength(
+      before.prefix,
+    );
+  });
+
+  it('angel droplet either transmutes or destroys, and never on an equipped item', () => {
+    const outcomes = { transmuted: 0, destroyed: 0 };
+
+    for (let seed = 1; seed <= 60; seed++) {
+      const item = itemOfRarity('common', seed);
+      const result = craft(withCurrency(item), 'angel-droplet', item.uid);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+
+      const state = result.value.state;
+      if (state.items.length === 0) outcomes.destroyed++;
+      else if (state.items[0].rarity === 'unique') outcomes.transmuted++;
+    }
+
+    // Roughly one in ten, so both branches must show up over sixty tries.
+    expect(outcomes.destroyed).toBeGreaterThan(0);
+    expect(outcomes.transmuted).toBeGreaterThan(0);
+    expect(outcomes.destroyed).toBeGreaterThan(outcomes.transmuted);
+
+    const equipped = itemOfRarity('common');
+    const worn: SaveState = { ...withCurrency(equipped), loadout: [equipped.uid, null, null, null] };
+    const refused = craft(worn, 'angel-droplet', equipped.uid);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.error).toBe('unequip it first');
+  });
+
+  it('refuses every currency on a unique', () => {
+    const unique = itemOfRarity('unique', 3);
+    for (const currency of CURRENCIES) {
+      if (currency.tier === 'fragment' || currency.tier === 'key') continue;
+      const result = craft(withCurrency(unique), currency.id, unique.uid);
+      expect(result.ok, `${currency.id} was allowed on a unique`).toBe(false);
+    }
+  });
+
+  it('combines ten fragments into one currency, and refuses nine', () => {
+    const base = newSave(1, T0);
+    const nine: SaveState = { ...base, currency: { 'magic-ore-shard': 9 } };
+    expect(applyCommand(nine, { type: 'combineFragments', currencyId: 'magic-ore-shard' }, T0).ok)
+      .toBe(false);
+
+    const ten: SaveState = { ...base, currency: { 'magic-ore-shard': 10 } };
+    const result = applyCommand(
+      ten,
+      { type: 'combineFragments', currencyId: 'magic-ore-shard' },
+      T0,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.state.currency['magic-ore-shard']).toBe(0);
+    expect(result.value.state.currency['magic-ore']).toBe(1);
+  });
+
+  it('dissembles into the fragment its rarity is worth', () => {
+    for (const rarity of ['common', 'magic', 'rare', 'unique'] as const) {
+      const item = itemOfRarity(rarity, rarity === 'unique' ? 3 : 5);
+      const save: SaveState = { ...newSave(5, T0), items: [item] };
+      const result = applyCommand(save, { type: 'dissembleItem', uid: item.uid }, T0);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.value.state.items).toHaveLength(0);
+      expect(result.value.state.currency[DISSEMBLE_YIELD[rarity]]).toBe(1);
+    }
+  });
+
+  it('is fully determined by seed, uid and craft count', () => {
+    // The property the whole optimistic-prediction model rests on. A craft the
+    // client and server disagreed about would show a player an item they do
+    // not own.
+    const run = () => {
+      const item = itemOfRarity('common');
+      let save = withCurrency(item);
+      for (const id of ['magic-ore', 'rare-ore', 'angel-flame', 'sacred-idol'] as CurrencyId[]) {
+        const result = craft(save, id, item.uid);
+        if (!result.ok) throw new Error(`${id}: ${result.error}`);
+        save = result.value.state;
+      }
+      return save.items[0];
+    };
+    expect(run()).toEqual(run());
+  });
+
+  it('a currency craft and a gold reroll draw different numbers', () => {
+    // Both used to key off `rerolls`. Sharing a stream would make "reroll,
+    // flame, reroll" reproduce the first reroll's result exactly.
+    const item = itemOfRarity('rare');
+    const save = withCurrency(item);
+
+    const viaGold = applyCommand(save, { type: 'rerollItem', uid: item.uid }, T0);
+    const viaFlame = craft(save, 'angel-flame', item.uid);
+    expect(viaGold.ok && viaFlame.ok).toBe(true);
+    if (!viaGold.ok || !viaFlame.ok) return;
+
+    const thenGold = applyCommand(viaFlame.value.state, { type: 'rerollItem', uid: item.uid }, T0);
+    expect(thenGold.ok).toBe(true);
+    if (!thenGold.ok) return;
+    expect(thenGold.value.state.items[0].affixes).not.toEqual(viaGold.value.state.items[0].affixes);
+  });
+});
+
+describe('boss drops', () => {
+  it('drops fragments within the configured range', () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      const purse = rollStageBossDrops(seed, seed * 3, 60);
+      const fragments = Object.entries(purse)
+        .filter(([id]) => getCurrency(id)?.tier === 'fragment')
+        .reduce((sum, [, count]) => sum + count, 0);
+      expect(fragments).toBeLessThanOrEqual(FRAGMENTS_PER_CLEAR.max);
+      expect(fragments).toBeGreaterThanOrEqual(FRAGMENTS_PER_CLEAR.min);
+    }
+  });
+
+  it('gates the better fragments behind stage', () => {
+    // Same rule as affix tiers: an early clear must not hand out the shards
+    // that build the best currency, or pushing deeper stops paying.
+    const early = new Set<string>();
+    for (let uid = 1; uid <= 300; uid++) {
+      for (const id of Object.keys(rollStageBossDrops(7, uid, 3))) early.add(id);
+    }
+    expect(early.has('magic-ore-shard')).toBe(true);
+    expect(early.has('rare-ore-shard')).toBe(false);
+    expect(early.has('angel-droplet-shard')).toBe(false);
+  });
+
+  it('drops keys at roughly the configured rate', () => {
+    const trials = 3000;
+    let keys = 0;
+    for (let uid = 1; uid <= trials; uid++) {
+      if (rollStageBossDrops(11, uid, 40)['dungeon-key']) keys++;
+    }
+    expect(keys / trials).toBeGreaterThan(KEY_DROP_CHANCE - 0.04);
+    expect(keys / trials).toBeLessThan(KEY_DROP_CHANCE + 0.04);
   });
 });
 
@@ -578,6 +941,7 @@ describe('power budget', () => {
       rarity: 'rare' as const,
       itemLevel: 100,
       rerolls: 0,
+      crafts: 0,
       affixes: [...prefixes, ...suffixes].map(topRoll),
       baseAffix: topRoll(implicit.id),
     }));
@@ -620,6 +984,86 @@ describe('power budget', () => {
     const offence = dpsRatio(offensive());
     const defence = ehpRatio(defensive());
     expect(Math.abs(Math.log(offence / defence))).toBeLessThan(0.15);
+  });
+
+  /**
+   * Every item carries a dune spirit's fifth row, filled with `extra`.
+   *
+   * The two sides take the extra row on different halves, because that is
+   * where each one's third-best affix lives: offence has three useful suffixes
+   * and only two useful prefixes, and defence is the mirror of that.
+   */
+  const withFifthRow = (save: SaveState, side: 'prefix' | 'suffix', extra: string): SaveState => ({
+    ...save,
+    items: save.items.map((item) => ({
+      ...item,
+      spirit: 'dune-spirit',
+      spiritDelta: { prefix: side === 'prefix' ? 1 : 0, suffix: side === 'suffix' ? 1 : 0 },
+      affixes: [...item.affixes, topRoll(extra)],
+    })),
+  });
+
+  const craftedOffence = () => withFifthRow(offensive(), 'suffix', 'of-ruin');
+  const craftedDefence = () => withFifthRow(defensive(), 'prefix', 'warded');
+
+  it('a fully crafted loadout is worth roughly 8x, the agreed ceiling', () => {
+    // The craft ceiling: everything the drop ceiling has, plus the fifth affix
+    // row only a dune spirit can grant. This is the number the whole currency
+    // system was budgeted against, and the one that decides whether the ladder
+    // still paces.
+    const total = dpsRatio(craftedOffence()) * ehpRatio(craftedDefence());
+    expect(total).toBeGreaterThan(6.5);
+    expect(total).toBeLessThan(9.5);
+  });
+
+  it('leaves crafting real headroom over dropping, but not a different game', () => {
+    // Both sides measured, not assumed. If crafting did not beat what drops,
+    // the currency would be decoration; if it beat it by too much, every
+    // dropped item would be litter and the ladder would need retuning around
+    // the crafted player instead of the real spread of players.
+    const dropped = dpsRatio(offensive()) * ehpRatio(defensive());
+    const crafted = dpsRatio(craftedOffence()) * ehpRatio(craftedDefence());
+    expect(crafted / dropped).toBeGreaterThan(1.2);
+    expect(crafted / dropped).toBeLessThan(1.9);
+  });
+
+  it('keeps offence and defence matched at the craft ceiling too', () => {
+    // The symmetry invariant does not stop applying because an item was
+    // crafted. A fifth row that only ever went on offence would be the
+    // stage-222 failure arriving by a third route.
+    const offence = dpsRatio(craftedOffence());
+    const defence = ehpRatio(craftedDefence());
+    expect(Math.abs(Math.log(offence / defence))).toBeLessThan(0.2);
+  });
+
+  it('does not let stacked uniques beat a crafted loadout on total power', () => {
+    // Four of the same unique is the cheapest possible "build": no crafting, no
+    // currency, no decisions. It is allowed to win on one axis - four
+    // Whetstones out-damage a crafted rare set, and that is the point of a
+    // chase item - but it must not win overall, or the entire currency system
+    // is dead content for anyone who optimises.
+    //
+    // It does not, because no unique carries defence: Bloodstone actively
+    // trades max HP away, and the rest are neutral.
+    const stacked = (id: string): SaveState => {
+      const items = [0, 1, 2, 3].map((i) => ({
+        uid: `u${i}`,
+        baseId: id,
+        rarity: 'unique' as const,
+        itemLevel: 100,
+        affixes: [],
+        rerolls: 0,
+        crafts: 0,
+        uniqueId: id,
+      }));
+      return { ...base, items, loadout: items.map((item) => item.uid) };
+    };
+
+    const bestUniqueTotal = Math.max(
+      ...UNIQUES.map((u) => dpsRatio(stacked(u.id)) * ehpRatio(stacked(u.id))),
+    );
+    const crafted = dpsRatio(craftedOffence()) * ehpRatio(craftedDefence());
+    expect(bestUniqueTotal).toBeLessThan(crafted);
   });
 
   it('gives the base implicit about a sixth of an item, not a third', () => {

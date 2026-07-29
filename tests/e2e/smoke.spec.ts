@@ -320,13 +320,18 @@ test('the inventory grid selects, filters and sorts', async ({ page }) => {
   await expect(panel.getByText('Equipped (1/4)')).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Unequip', exact: true })).toBeVisible();
 
-  // A filter matching nothing must empty the grid rather than be ignored. Two
-  // early clears essentially never produce a unique.
-  await panel.getByRole('button', { name: 'Unique', exact: true }).click();
-  await expect(tiles).toHaveCount(0);
-  await expect(panel.getByText(/Nothing matches this filter/)).toBeVisible();
-
-  await panel.getByRole('button', { name: 'Unique', exact: true }).click();
+  // Rarity filters must partition the inventory exactly: every item shown by
+  // one chip and no other. An earlier version asserted a Unique filter would
+  // empty the grid, which was a guess about drop rates rather than a rule -
+  // and one run duly rolled a unique inside two clears.
+  let partitioned = 0;
+  for (const rarity of ['Common', 'Magic', 'Rare', 'Unique']) {
+    const chip = panel.getByRole('button', { name: rarity, exact: true });
+    await chip.click();
+    partitioned += await tiles.count();
+    await chip.click();
+  }
+  expect(partitioned).toBe(total);
   await expect(tiles).toHaveCount(total);
 
   // Sorting reorders rather than dropping anything.
@@ -335,6 +340,141 @@ test('the inventory grid selects, filters and sorts', async ({ page }) => {
 
   await expect(panel.getByText('undefined')).toHaveCount(0);
   await expect(panel.getByText('NaN')).toHaveCount(0);
+});
+
+test('the craft modal explains what it refuses, and applies what it allows', async ({ page }) => {
+  await page.goto('/');
+
+  // Seed a stash and a mixed inventory through the API rather than by playing:
+  // fragments accumulate slowly by design, and this test is about the modal.
+  await page.evaluate(async () => {
+    for (let i = 0; i < 6; i++) {
+      await fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'attemptStage' }),
+      });
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
+        await fetch('/api/command', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'buyUpgrade', key, count: 'max' }),
+        });
+      }
+    }
+  });
+  await page.reload();
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+
+  // The stash lists every currency, including ones held at zero - an empty
+  // slot is how a player learns what exists.
+  await panel.getByRole('button', { name: 'Currency', exact: true }).click();
+  await expect(panel.getByRole('list', { name: 'Currency' }).getByText('Magic Ore')).toBeVisible();
+  await expect(panel.getByRole('list', { name: 'Spirits' }).getByText('Dune Spirit')).toBeVisible();
+
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
+  await tiles.first().click();
+
+  await panel.getByRole('button', { name: 'Craft…' }).click();
+  const craft = page.getByRole('dialog', { name: 'Craft' });
+  await expect(craft).toBeVisible();
+
+  // Gold reroll is one option among several, not the only way to change an item.
+  await expect(craft.getByText('Gold Reroll')).toBeVisible();
+
+  await craft.getByRole('button', { name: /Close craft/ }).click();
+  await expect(craft).toBeHidden();
+
+  await expect(panel.getByText('undefined')).toHaveCount(0);
+  await expect(panel.getByText('NaN')).toHaveCount(0);
+});
+
+test('dissembling a common yields a fragment without a confirmation', async ({ page }) => {
+  await page.goto('/');
+
+  await page.getByRole('button', { name: /Attempt stage/ }).click();
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+
+  // Filter to commons rather than trusting the first tile. Rarity is rolled,
+  // and an earlier version of this test passed alone and failed in the suite
+  // because that run happened to open on a rare - which asks to confirm.
+  await panel.getByRole('button', { name: 'Common', exact: true }).click();
+  const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
+  const before = await tiles.count();
+  expect(before).toBeGreaterThan(0);
+
+  await tiles.first().click();
+  await panel.getByRole('button', { name: 'Dissemble' }).click();
+
+  // Straight through: confirming every common would train the reflex that
+  // makes the dialog useless on the one item where it matters.
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  await expect(tiles).toHaveCount(before - 1);
+
+  await panel.getByRole('button', { name: 'Currency', exact: true }).click();
+  await expect(panel.getByRole('list', { name: 'Fragments' }).getByText(/[1-9]\d*\/10/)).toBeVisible();
+});
+
+test('fragments combine into ore, and the ore upgrades a common', async ({ page }) => {
+  await page.goto('/');
+
+  // Enough clears that ten Magic Ore Shards have accumulated. Fragments are a
+  // slow trickle by design, so this is the shortest honest route to a craft.
+  await page.evaluate(async () => {
+    for (let i = 0; i < 25; i++) {
+      await fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'attemptStage' }),
+      });
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
+        await fetch('/api/command', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'buyUpgrade', key, count: 'max' }),
+        });
+      }
+    }
+  });
+  await page.reload();
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await panel.getByRole('button', { name: 'Currency', exact: true }).click();
+
+  const stash = panel.getByRole('list', { name: 'Currency' });
+  const fragments = panel.getByRole('list', { name: 'Fragments' });
+
+  await expect(stash.getByText('Magic Ore')).toBeVisible();
+  await expect(stash.getByText('x0')).not.toHaveCount(0);
+
+  // Combine: ten shards become one ore.
+  await fragments.getByRole('button', { name: /^Combine/ }).first().click();
+  await expect(stash.getByText('Magic Ore').locator('..')).toContainText('x1');
+
+  // Arm it, which switches to the inventory, then click a common.
+  await stash.getByRole('button', { name: /Magic Ore/ }).click();
+  await expect(panel.getByText(/Magic Ore armed/)).toBeVisible();
+
+  await panel.getByRole('button', { name: 'Common', exact: true }).click();
+  const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
+  const commonsBefore = await tiles.count();
+  expect(commonsBefore).toBeGreaterThan(0);
+
+  await tiles.first().click();
+
+  // One fewer common, because it became a magic. The arming clears itself, so
+  // the next click inspects rather than crafting again.
+  await expect(tiles).toHaveCount(commonsBefore - 1);
+  await expect(panel.getByText(/armed/)).toHaveCount(0);
+  await expect(page.getByText(/used Magic Ore/)).toBeVisible();
 });
 
 test('progress survives a reload', async ({ page }) => {

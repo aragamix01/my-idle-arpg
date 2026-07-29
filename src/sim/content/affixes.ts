@@ -72,6 +72,32 @@ export const PREFIXES: AffixDefinition[] = [
     effect: { kind: 'statMod', stat: 'area', op: 'add' },
     tiers: tiers([0.3, 0.5, 0.65, 0.8]),
   },
+  {
+    /**
+     * The third defensive affix, and the reason spirits are not offence-only.
+     *
+     * With just Vital and Armoured, both defensive mods fit inside a rare's two
+     * prefix rows - so the extra row a dune spirit grants could raise offence
+     * and could not raise defence, at any roll. That is the offence-outruns-
+     * defence failure again, arriving structurally rather than through tuning,
+     * and the craft-ceiling symmetry test caught it.
+     *
+     * There are only two defensive *stats* - maxHp and toughness - so a third
+     * defensive affix necessarily shares one of them. That is fine, and common
+     * in the genre, but the two must not be interchangeable: an item carrying
+     * Armoured and Warded at the same magnitude renders two identical lines and
+     * reads as a rendering bug. Warded is deliberately the stronger of the pair
+     * so the two are always visibly different.
+     */
+    id: 'warded',
+    kind: 'prefix',
+    nameFragment: 'Warded',
+    effect: { kind: 'statMod', stat: 'toughness', op: 'mul' },
+    // No value here may equal one of Armoured's, at any tier - not just at the
+    // same tier. Armoured T2 and Warded T4 both landing on 1.02 rendered the
+    // same line as surely as two identical affixes would.
+    tiers: tiers([1.022, 1.029, 1.036, 1.043]),
+  },
 ];
 
 export const SUFFIXES: AffixDefinition[] = [

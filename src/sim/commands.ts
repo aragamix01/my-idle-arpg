@@ -20,9 +20,24 @@ import {
   remainingLevels,
   rerollCost,
 } from './curves';
-import { CONTENT_VERSION } from './content';
+import {
+  CONTENT_VERSION,
+  CurrencyIdSchema,
+  DISSEMBLE_YIELD,
+  getCurrency,
+  type CurrencyId,
+  type CurrencyPurse,
+} from './content';
 import { computeOffline } from './offline';
-import { rerollAffixes, rollDropCount, rollItem, itemName } from './items';
+import {
+  applyCurrencyToItem,
+  currencyLegality,
+  itemName,
+  rerollAffixes,
+  rollDropCount,
+  rollItem,
+  rollStageBossDrops,
+} from './items';
 import { findItem } from './stats';
 import {
   ITEM_SLOTS,
@@ -63,7 +78,21 @@ export const CommandSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ type: z.literal('rerollItem'), uid: z.string().min(1) }).strict(),
-  z.object({ type: z.literal('discardItem'), uid: z.string().min(1) }).strict(),
+  /**
+   * Every currency goes through one command.
+   *
+   * The action union already discriminates, so eleven commands would be eleven
+   * copies of the same ownership and legality checks.
+   */
+  z
+    .object({
+      type: z.literal('applyCurrency'),
+      currencyId: CurrencyIdSchema,
+      uid: z.string().min(1),
+    })
+    .strict(),
+  z.object({ type: z.literal('combineFragments'), currencyId: CurrencyIdSchema }).strict(),
+  z.object({ type: z.literal('dissembleItem'), uid: z.string().min(1) }).strict(),
   z.object({ type: z.literal('claimOffline') }).strict(),
 ]);
 
@@ -76,7 +105,12 @@ export type SimEvent =
   /** Carries how many drops were lost, so the message can say what it cost. */
   | { type: 'inventoryFull'; lost: number }
   | { type: 'itemRerolled'; uid: string; cost: number }
-  | { type: 'itemDiscarded'; uid: string }
+  | { type: 'currencyDropped'; currencyId: string; name: string; count: number }
+  | { type: 'currencyUsed'; currencyId: string; name: string; uid: string }
+  | { type: 'itemTransmuted'; uid: string; name: string }
+  | { type: 'itemDestroyed'; uid: string }
+  | { type: 'fragmentsCombined'; currencyId: string; name: string }
+  | { type: 'itemDissembled'; uid: string; yielded: string }
   | { type: 'upgradeBought'; key: string; level: number; cost: number; count: number }
   | { type: 'offlineClaimed'; gold: number; seconds: number; capped: boolean };
 
@@ -89,6 +123,15 @@ function emptyUpgrades(): UpgradeLevels {
   return Object.fromEntries(UPGRADE_KEYS.map((k) => [k, 0])) as UpgradeLevels;
 }
 
+/** Add counts into a purse, returning a new one. Never mutates the argument. */
+function credit(purse: CurrencyPurse, gains: CurrencyPurse): CurrencyPurse {
+  const next = { ...purse };
+  for (const [id, count] of Object.entries(gains) as [CurrencyId, number][]) {
+    next[id] = (next[id] ?? 0) + count;
+  }
+  return next;
+}
+
 export function newSave(seed: number, nowMs: number): SaveState {
   return {
     contentVersion: CONTENT_VERSION,
@@ -98,6 +141,7 @@ export function newSave(seed: number, nowMs: number): SaveState {
     currentStage: 1,
     upgrades: emptyUpgrades(),
     items: [],
+    currency: {},
     loadout: Array<string | null>(ITEM_SLOTS).fill(null),
     nextItemId: 1,
     lastSeenAt: nowMs,
@@ -114,6 +158,7 @@ export function applyCommand(
     ...state,
     upgrades: { ...state.upgrades },
     items: [...state.items],
+    currency: { ...state.currency },
     loadout: [...state.loadout],
   };
 
@@ -138,8 +183,22 @@ export function applyCommand(
 
         // Every clear drops one to three. Rarity and count are what vary, not
         // whether anything falls.
-        const drops = rollDropCount(next.seed, next.nextItemId);
+        const firstUid = next.nextItemId;
+        const drops = rollDropCount(next.seed, firstUid);
         let lost = 0;
+
+        // Boss drops are rolled off the same clear-seeded stream, before the
+        // item loop advances the uid counter past it.
+        const bossDrops = rollStageBossDrops(next.seed, firstUid, stage);
+        next.currency = credit(next.currency, bossDrops);
+        for (const [id, count] of Object.entries(bossDrops) as [CurrencyId, number][]) {
+          events.push({
+            type: 'currencyDropped',
+            currencyId: id,
+            name: getCurrency(id)?.name ?? id,
+            count,
+          });
+        }
 
         for (let i = 0; i < drops; i++) {
           // A full inventory swallows the rest of the wave rather than
@@ -250,14 +309,84 @@ export function applyCommand(
       break;
     }
 
-    case 'discardItem': {
-      if (!findItem(next, command.uid)) return err(`not owned: ${command.uid}`);
+    case 'applyCurrency': {
+      const currency = getCurrency(command.currencyId);
+      if (!currency) return err(`unknown currency: ${command.currencyId}`);
+
+      const held = next.currency[command.currencyId] ?? 0;
+      if (held < 1) return err(`you have no ${currency.name}`);
+
+      const index = next.items.findIndex((item) => item.uid === command.uid);
+      if (index === -1) return err(`not owned: ${command.uid}`);
+
+      const item = next.items[index];
+      // The exact string the craft modal greys the option out with. One rule
+      // set, so the UI cannot promise something the server then refuses.
+      const illegal = currencyLegality(item, currency, next.loadout.includes(item.uid));
+      if (illegal) return err(illegal);
+
+      const result = applyCurrencyToItem(next.seed, item, currency);
+      next.currency = { ...next.currency, [command.currencyId]: held - 1 };
+      events.push({
+        type: 'currencyUsed',
+        currencyId: currency.id,
+        name: currency.name,
+        uid: item.uid,
+      });
+
+      if (result.item === null) {
+        // A gamble that failed. Nothing to unequip - legality already refused
+        // this on an equipped item.
+        next.items = next.items.filter((_, i) => i !== index);
+        events.push({ type: 'itemDestroyed', uid: item.uid });
+        break;
+      }
+
+      const crafted = result.item;
+      next.items = next.items.map((current, i) => (i === index ? crafted : current));
+      if (result.transmuted) {
+        events.push({ type: 'itemTransmuted', uid: crafted.uid, name: itemName(crafted) });
+      }
+      break;
+    }
+
+    case 'combineFragments': {
+      const currency = getCurrency(command.currencyId);
+      if (!currency) return err(`unknown currency: ${command.currencyId}`);
+      if (currency.action.kind !== 'combine') return err(`${currency.name} does not combine`);
+
+      const { into, count } = currency.action;
+      const held = next.currency[command.currencyId] ?? 0;
+      if (held < count) return err(`need ${count} ${currency.name}, have ${held}`);
+
+      next.currency = {
+        ...next.currency,
+        [command.currencyId]: held - count,
+        [into]: (next.currency[into] ?? 0) + 1,
+      };
+      events.push({
+        type: 'fragmentsCombined',
+        currencyId: into,
+        name: getCurrency(into)?.name ?? into,
+      });
+      break;
+    }
+
+    case 'dissembleItem': {
+      const item = findItem(next, command.uid);
+      if (!item) return err(`not owned: ${command.uid}`);
       // Refuse rather than silently unequipping. Destroying the item you are
       // currently wearing is the single most expensive misclick available, and
       // an unequip step is a cheap confirmation that costs nothing to undo.
       if (next.loadout.includes(command.uid)) return err('unequip it first');
-      next.items = next.items.filter((item) => item.uid !== command.uid);
-      events.push({ type: 'itemDiscarded', uid: command.uid });
+
+      // Dissembling replaced discarding outright. An item you do not want is
+      // now raw material for one you do, which makes a full inventory a
+      // decision about what to melt down rather than what to throw away.
+      const yielded = DISSEMBLE_YIELD[item.rarity];
+      next.items = next.items.filter((current) => current.uid !== command.uid);
+      next.currency = credit(next.currency, { [yielded]: 1 });
+      events.push({ type: 'itemDissembled', uid: command.uid, yielded });
       break;
     }
 

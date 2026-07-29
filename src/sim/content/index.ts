@@ -12,16 +12,19 @@
 
 import { AFFIXES, IMPLICIT_AFFIXES } from './affixes';
 import { BASE_AFFIXES, BASES } from './bases';
+import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
 import { UNIQUES } from './uniques';
 import { EffectSchema, UniqueSchema } from './schema';
 
 /** 2: artifacts became rolled item instances with prefixes and suffixes. */
 /** 3: bases carry implicits, drops come in threes, and "artifact" became "item". */
-export const CONTENT_VERSION = 3;
+/** 4: crafting currency, fragments, spirits, and dissembling. */
+export const CONTENT_VERSION = 4;
 
 export * from './schema';
 export * from './affixes';
 export * from './bases';
+export * from './currency';
 export * from './uniques';
 
 /**
@@ -71,6 +74,54 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     // A base with no implicit is strictly worse than every other base, which
     // makes it dead content rather than a choice.
     if (!BASE_AFFIXES[base.id]) errors.push(`${base.id}: no implicit affix`);
+  }
+
+  // Two affixes on the same stat must never share a value at any tier, or an
+  // item carrying both renders the identical line twice and reads as a bug.
+  // The roll-sampling test catches this too, but only for combinations it
+  // happens to roll; this catches it the moment a table is edited.
+  const byStat = new Map<string, { id: string; value: number }[]>();
+  for (const affix of [...AFFIXES, ...IMPLICIT_AFFIXES]) {
+    if (affix.effect.kind !== 'statMod') continue;
+    const key = `${affix.effect.stat}:${affix.effect.op}`;
+    const seen = byStat.get(key) ?? [];
+    for (const tier of affix.tiers) {
+      const clash = seen.find((other) => other.value === tier.value);
+      if (clash) errors.push(`${affix.id} and ${clash.id} both grant ${tier.value} ${key}`);
+      seen.push({ id: affix.id, value: tier.value });
+    }
+    byStat.set(key, seen);
+  }
+
+  const seenCurrency = new Set<string>();
+  for (const currency of CURRENCIES) {
+    if (seenCurrency.has(currency.id)) errors.push(`duplicate currency id: ${currency.id}`);
+    seenCurrency.add(currency.id);
+
+    const action = currency.action;
+    // A combine pointing at a missing currency, or at itself, would be a
+    // fragment that either vanishes or duplicates forever.
+    if (action.kind === 'combine') {
+      if (!CURRENCIES.some((c) => c.id === action.into)) {
+        errors.push(`${currency.id}: combines into unknown ${action.into}`);
+      }
+      if (action.into === currency.id) errors.push(`${currency.id}: combines into itself`);
+      if (action.count < 2) errors.push(`${currency.id}: combine count must exceed one`);
+    }
+    // An upgrade that does not raise rarity is a reroll wearing a disguise.
+    if (action.kind === 'upgradeRarity' && RARITY_RANK[action.to] <= RARITY_RANK[action.from]) {
+      errors.push(`${currency.id}: ${action.from} -> ${action.to} does not raise rarity`);
+    }
+    if (action.kind === 'gamble' && (action.successChance <= 0 || action.successChance >= 1)) {
+      errors.push(`${currency.id}: a gamble needs odds strictly between 0 and 1`);
+    }
+  }
+
+  // Every dissemble yield must exist, or destroying an item pays nothing.
+  for (const [rarity, id] of Object.entries(DISSEMBLE_YIELD)) {
+    if (!CURRENCIES.some((c) => c.id === id)) {
+      errors.push(`dissembling ${rarity} yields unknown currency ${id}`);
+    }
   }
 
   const seenUnique = new Set<string>();

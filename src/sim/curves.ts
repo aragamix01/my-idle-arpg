@@ -303,6 +303,24 @@ export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: numb
 export const DROPS_PER_CLEAR = { min: 1, max: 3 } as const;
 
 /**
+ * Fragments a stage boss drops, inclusive of zero.
+ *
+ * Ten fragments make one currency, so this averages 1.5 per clear - roughly a
+ * currency every seven stages early on, before dungeons exist. Fragments are
+ * the slow, guaranteed trickle; dungeons are the fast, gated source.
+ */
+export const FRAGMENTS_PER_CLEAR = { min: 0, max: 3 } as const;
+
+/**
+ * Chance a stage boss drops a dungeon key.
+ *
+ * One key per five clears. A dungeon is a single boss fight, so this is the
+ * dial that decides how much of the loot economy runs through dungeons rather
+ * than through the ladder itself.
+ */
+export const KEY_DROP_CHANCE = 0.2;
+
+/**
  * Gold to reroll an item's modifiers.
  *
  * Priced off `goldPerKill` at the item's own level, so a stage-80 item costs

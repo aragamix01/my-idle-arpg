@@ -146,8 +146,30 @@ export const ItemInstanceSchema = z
      * wiped. Everything reading it must tolerate absence.
      */
     baseAffix: RolledAffixSchema.optional(),
-    /** Prior rerolls. Feeds both the cost curve and the roll seed. */
+    /**
+     * Prior *gold* rerolls. Feeds the gold cost curve only.
+     *
+     * Separate from `crafts` on purpose: spending currency must not silently
+     * inflate the price of a gold reroll, or the two systems tax each other.
+     */
     rerolls: z.number().int().min(0),
+    /**
+     * Every modifying operation ever applied, gold or currency. Part of the
+     * roll seed, so two different crafts never draw the same numbers.
+     */
+    crafts: z.number().int().min(0),
+    /**
+     * The one spirit applied to this item, if any. Permanent and exclusive.
+     */
+    spirit: z.string().optional(),
+    /**
+     * The affix rows that spirit traded, stored rather than recomputed.
+     *
+     * Dune's trade is random, so recomputing it from the spirit id alone would
+     * give a different answer every call - and the panel and the sim would
+     * disagree about how many modifiers the item has.
+     */
+    spiritDelta: z.object({ prefix: z.number().int(), suffix: z.number().int() }).strict().optional(),
     /** Set only on uniques, naming the authored entry in the unique registry. */
     uniqueId: z.string().optional(),
   })

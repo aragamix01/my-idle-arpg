@@ -12,7 +12,7 @@ import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from
 import { computeOffline } from './offline';
 import { deriveStats } from './stats';
 import { INVENTORY_CAP, UPGRADE_KEYS, type SaveState, type Stats, type UpgradeKey } from './types';
-import type { ItemInstance } from './content';
+import type { CurrencyPurse, ItemInstance } from './content';
 
 export interface UpgradeView {
   key: UpgradeKey;
@@ -34,6 +34,7 @@ export interface HudSnapshot {
   offlineCapReached: boolean;
   loadout: (string | null)[];
   items: ItemInstance[];
+  currency: CurrencyPurse;
   /** Cap included so the panel can show capacity without importing curves. */
   inventoryCap: number;
 }
@@ -69,6 +70,7 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
     items: save.items,
+    currency: save.currency,
     inventoryCap: INVENTORY_CAP,
   };
 }

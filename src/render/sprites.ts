@@ -38,6 +38,22 @@ export const SPRITE_IDS = [
   'item.swarm_lens',
   'item.bloodstone',
   'item.deep_delvers_idol',
+
+  // Currency - must stay in step with src/sim/content/currency.ts.
+  'currency.sacred_idol',
+  'currency.dark_idol',
+  'currency.magic_ore',
+  'currency.rare_ore',
+  'currency.angel_flame',
+  'currency.angel_droplet',
+  'currency.bishop_spirit',
+  'currency.devil_spirit',
+  'currency.dune_spirit',
+  'currency.magic_ore_shard',
+  'currency.rare_ore_shard',
+  'currency.angel_flame_shard',
+  'currency.angel_droplet_shard',
+  'currency.dungeon_key',
 ] as const;
 
 export type SpriteId = (typeof SPRITE_IDS)[number];

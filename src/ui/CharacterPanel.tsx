@@ -13,22 +13,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ITEM_SLOTS,
+  affixRows,
   effectiveHp,
   enemyCount,
+  getCurrency,
   itemEffects,
   itemName,
   itemPower,
   itemSprite,
   killsPerSecond,
-  rerollCost,
   statsDps,
   critFactor,
+  type CurrencyId,
   type HudSnapshot,
   type ItemInstance,
   type Rarity,
   type SaveState,
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
+import { CraftModal } from './CraftModal';
+import { CurrencyStash } from './CurrencyStash';
 import {
   compact,
   describeEffect,
@@ -37,7 +41,7 @@ import {
   statEntries,
 } from './format';
 
-type Tab = 'character' | 'inventory';
+type Tab = 'character' | 'inventory' | 'currency';
 type SortKey = 'newest' | 'rarity' | 'itemLevel' | 'power';
 
 const SORTS: { key: SortKey; label: string }[] = [
@@ -57,7 +61,9 @@ interface Props {
   busy: boolean;
   onEquip: (slot: number, itemId: string | null) => void;
   onReroll: (uid: string) => void;
-  onDiscard: (uid: string) => void;
+  onDissemble: (uid: string) => void;
+  onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
+  onCombine: (currencyId: CurrencyId) => void;
   onClose: () => void;
 }
 
@@ -67,10 +73,19 @@ export function CharacterPanel({
   busy,
   onEquip,
   onReroll,
-  onDiscard,
+  onDissemble,
+  onApplyCurrency,
+  onCombine,
   onClose,
 }: Props) {
   const [tab, setTab] = useState<Tab>('character');
+  /**
+   * The currency the stash armed, if any.
+   *
+   * Lives here rather than in the stash because arming is a cross-tab gesture:
+   * you pick in Currency and spend in Inventory.
+   */
+  const [armed, setArmed] = useState<CurrencyId | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -101,6 +116,9 @@ export function CharacterPanel({
           <TabButton active={tab === 'inventory'} onClick={() => setTab('inventory')}>
             Inventory ({hud.items.length}/{hud.inventoryCap})
           </TabButton>
+          <TabButton active={tab === 'currency'} onClick={() => setTab('currency')}>
+            Currency
+          </TabButton>
           <button
             type="button"
             onClick={onClose}
@@ -112,15 +130,33 @@ export function CharacterPanel({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {tab === 'character' ? (
-            <CharacterTab state={state} hud={hud} />
-          ) : (
+          {tab === 'character' && <CharacterTab state={state} hud={hud} />}
+          {tab === 'inventory' && (
             <InventoryTab
               hud={hud}
               busy={busy}
+              armed={armed}
               onEquip={onEquip}
               onReroll={onReroll}
-              onDiscard={onDiscard}
+              onDissemble={onDissemble}
+              onApplyCurrency={(currencyId, uid) => {
+                onApplyCurrency(currencyId, uid);
+                // Disarm after one use. Leaving it armed turns the next
+                // inspecting click into an accidental craft.
+                setArmed(null);
+              }}
+            />
+          )}
+          {tab === 'currency' && (
+            <CurrencyStash
+              purse={hud.currency}
+              armed={armed}
+              busy={busy}
+              onArm={(currencyId) => {
+                setArmed(currencyId);
+                if (currencyId) setTab('inventory');
+              }}
+              onCombine={onCombine}
             />
           )}
         </div>
@@ -197,20 +233,27 @@ function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
 function InventoryTab({
   hud,
   busy,
+  armed,
   onEquip,
   onReroll,
-  onDiscard,
+  onDissemble,
+  onApplyCurrency,
 }: {
   hud: HudSnapshot;
   busy: boolean;
+  armed: CurrencyId | null;
   onEquip: (slot: number, itemId: string | null) => void;
   onReroll: (uid: string) => void;
-  onDiscard: (uid: string) => void;
+  onDissemble: (uid: string) => void;
+  onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>('newest');
   const [rarityFilter, setRarityFilter] = useState<Rarity[]>([]);
   const [equippedOnly, setEquippedOnly] = useState(false);
+  const [crafting, setCrafting] = useState<string | null>(null);
+  /** Uid awaiting a dissemble confirmation, for rares and uniques. */
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const byUid = useMemo(() => new Map(hud.items.map((item) => [item.uid, item])), [hud.items]);
 
@@ -255,6 +298,26 @@ function InventoryTab({
     if (free === -1) return;
     onEquip(free, uid);
   };
+
+  /**
+   * A grid click means "use the armed currency" when one is armed, and
+   * "inspect" otherwise. The armed banner above the grid is what makes the
+   * mode visible - a silent mode switch here would be a trap.
+   */
+  const onTileClick = (uid: string) => {
+    if (armed) return onApplyCurrency(armed, uid);
+    setSelected(uid);
+  };
+
+  /** Rares and uniques are worth a confirmation; commons and magics are not. */
+  const requestDissemble = (item: ItemInstance) => {
+    if (item.rarity === 'rare' || item.rarity === 'unique') return setConfirming(item.uid);
+    onDissemble(item.uid);
+    setSelected(null);
+  };
+
+  const craftingItem = crafting ? byUid.get(crafting) : undefined;
+  const confirmingItem = confirming ? byUid.get(confirming) : undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -349,12 +412,19 @@ function InventoryTab({
         </span>
       </div>
 
+      {armed && (
+        <p className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+          {getCurrency(armed)?.name} armed — click an item to use it.
+        </p>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
         <ItemGrid
           items={visible}
           loadout={hud.loadout}
           selected={selected}
-          onSelect={setSelected}
+          armed={armed !== null}
+          onSelect={onTileClick}
           empty={hud.items.length === 0}
         />
 
@@ -362,16 +432,98 @@ function InventoryTab({
           item={selectedItem}
           equipped={selectedItem ? hud.loadout.includes(selectedItem.uid) : false}
           slotsFull={!hud.loadout.includes(null)}
-          gold={hud.gold}
           busy={busy}
           onEquip={() => selectedItem && equip(selectedItem.uid)}
-          onReroll={() => selectedItem && onReroll(selectedItem.uid)}
-          onDiscard={() => {
-            if (!selectedItem) return;
-            onDiscard(selectedItem.uid);
+          onCraft={() => selectedItem && setCrafting(selectedItem.uid)}
+          onDissemble={() => selectedItem && requestDissemble(selectedItem)}
+        />
+      </div>
+
+      {craftingItem && (
+        <CraftModal
+          item={craftingItem}
+          purse={hud.currency}
+          gold={hud.gold}
+          equipped={hud.loadout.includes(craftingItem.uid)}
+          busy={busy}
+          onApply={(currencyId) => {
+            onApplyCurrency(currencyId, craftingItem.uid);
+            setCrafting(null);
+          }}
+          onReroll={() => {
+            onReroll(craftingItem.uid);
+            setCrafting(null);
+          }}
+          onClose={() => setCrafting(null)}
+        />
+      )}
+
+      {confirmingItem && (
+        <ConfirmDissemble
+          item={confirmingItem}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => {
+            onDissemble(confirmingItem.uid);
+            setConfirming(null);
             setSelected(null);
           }}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Confirmation for dissembling a rare or unique.
+ *
+ * Only for those two. Confirming every common would train the reflex that makes
+ * the dialog useless on the one item where it matters.
+ */
+function ConfirmDissemble({
+  item,
+  onCancel,
+  onConfirm,
+}: {
+  item: ItemInstance;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const style = RARITY_STYLE[item.rarity];
+  return (
+    <div
+      className="pointer-events-auto fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+      onClick={onCancel}
+      role="presentation"
+    >
+      <div
+        className="w-full max-w-sm rounded-lg border border-red-900/70 bg-neutral-950 p-4 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Confirm dissemble"
+      >
+        <p className="text-sm text-neutral-200">
+          Dissemble <span className={style.text}>{itemName(item)}</span>?
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">
+          The item is destroyed. This cannot be undone.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded border border-red-900/70 bg-red-950/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-950/70"
+          >
+            Dissemble
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -381,12 +533,14 @@ function ItemGrid({
   items,
   loadout,
   selected,
+  armed,
   onSelect,
   empty,
 }: {
   items: ItemInstance[];
   loadout: (string | null)[];
   selected: string | null;
+  armed: boolean;
   onSelect: (uid: string) => void;
   empty: boolean;
 }) {
@@ -420,9 +574,11 @@ function ItemGrid({
               onClick={() => onSelect(item.uid)}
               title={`${itemName(item)} — iLvl ${item.itemLevel}`}
               aria-pressed={selected === item.uid}
-              className={`relative grid aspect-square w-full place-items-center rounded border bg-neutral-900/70 hover:bg-neutral-800 ${
+              className={`relative grid aspect-square w-full place-items-center rounded border bg-neutral-900/70 ${
                 style.border
-              } ${selected === item.uid ? 'ring-2 ring-neutral-100' : ''}`}
+              } ${armed ? 'cursor-crosshair hover:bg-emerald-900/40' : 'hover:bg-neutral-800'} ${
+                selected === item.uid ? 'ring-2 ring-neutral-100' : ''
+              }`}
             >
               <AtlasSprite id={itemSprite(item)} scale={2} />
               {/* A dot rather than a word: at this tile size there is no room
@@ -442,20 +598,18 @@ function ItemDetail({
   item,
   equipped,
   slotsFull,
-  gold,
   busy,
   onEquip,
-  onReroll,
-  onDiscard,
+  onCraft,
+  onDissemble,
 }: {
   item: ItemInstance | undefined;
   equipped: boolean;
   slotsFull: boolean;
-  gold: number;
   busy: boolean;
   onEquip: () => void;
-  onReroll: () => void;
-  onDiscard: () => void;
+  onCraft: () => void;
+  onDissemble: () => void;
 }) {
   if (!item) {
     return (
@@ -467,8 +621,9 @@ function ItemDetail({
 
   const style = RARITY_STYLE[item.rarity];
   const isUnique = item.rarity === 'unique';
-  const cost = isUnique ? Infinity : rerollCost(item.rarity, item.itemLevel, item.rerolls);
   const implicit = item.baseAffix ? describeRolledAffix(item.baseAffix) : null;
+  const spirit = item.spirit ? getCurrency(item.spirit) : undefined;
+  const rows = affixRows(item);
 
   return (
     <aside className={`flex flex-col gap-3 rounded border ${style.border} bg-neutral-900/70 p-3`}>
@@ -480,6 +635,13 @@ function ItemDetail({
             {style.label} · iLvl {item.itemLevel}
             {item.rerolls > 0 ? ` · ${item.rerolls} rerolls` : ''}
           </p>
+          {/* A spirit is permanent and one-shot, so the item has to say so
+              plainly - a player must never spend a second one to find out. */}
+          {spirit && (
+            <p className="text-[10px] text-fuchsia-300">
+              {spirit.name} · {rows.prefix}p/{rows.suffix}s · 1/1
+            </p>
+          )}
         </div>
       </div>
 
@@ -518,27 +680,27 @@ function ItemDetail({
           {equipped ? 'Unequip' : slotsFull ? 'Slots full' : 'Equip'}
         </button>
 
-        {/* Uniques have no affixes to reroll - that is what makes them unique. */}
+        {/* One button for every way of changing an item - gold and currency
+            alike. Uniques are authored, so there is nothing to change. */}
         {!isUnique && (
           <button
             type="button"
-            disabled={busy || gold < cost}
-            onClick={onReroll}
-            title="Rerolls every modifier except the implicit. There is no way to keep one."
+            disabled={busy}
+            onClick={onCraft}
             className="rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
           >
-            Reroll {compact(cost)}g
+            Craft…
           </button>
         )}
 
         <button
           type="button"
           disabled={busy || equipped}
-          onClick={onDiscard}
-          title={equipped ? 'Unequip it first' : undefined}
+          onClick={onDissemble}
+          title={equipped ? 'Unequip it first' : 'Destroys the item for a fragment'}
           className="rounded border border-red-900/70 px-2.5 py-1 text-xs text-red-400 hover:bg-red-950/40 disabled:opacity-40"
         >
-          Discard
+          Dissemble
         </button>
       </div>
     </aside>

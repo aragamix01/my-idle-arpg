@@ -18,6 +18,9 @@ export const ITEMS_VERSION = 2;
 /** First version where the field is `items` and bases carry implicits. */
 export const IMPLICITS_VERSION = 3;
 
+/** First version with a currency purse and per-item craft counters. */
+export const CURRENCY_VERSION = 4;
+
 export interface MigrationResult {
   state: SaveState;
   /** True when anything was reset, so the caller can tell the player. */
@@ -59,6 +62,23 @@ export function migrateSave(state: SaveState): MigrationResult {
 
   if (!Array.isArray(next.items)) {
     next.items = [];
+    migrated = true;
+  }
+
+  if (next.currency === undefined || next.currency === null) {
+    // v3 → v4 adds the purse and a per-item craft counter. Additive only;
+    // nothing an existing save holds becomes unreadable.
+    next.currency = {};
+    migrated = true;
+  }
+
+  if (next.items.some((item) => typeof item.crafts !== 'number')) {
+    // Seeding crafts from rerolls keeps each item's roll stream continuous:
+    // starting everyone at zero would make the next gold reroll reproduce a
+    // result the player has already seen.
+    next.items = next.items.map((item) =>
+      typeof item.crafts === 'number' ? item : { ...item, crafts: item.rerolls ?? 0 },
+    );
     migrated = true;
   }
 

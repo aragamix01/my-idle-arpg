@@ -19,8 +19,16 @@ import {
 } from './content/schema';
 import { availableTiers, getAffix, PREFIXES, SUFFIXES } from './content/affixes';
 import { BASES, getBase, getBaseAffix } from './content/bases';
+import {
+  FRAGMENT_GATES,
+  type AffixSide,
+  type CurrencyAction,
+  type CurrencyDefinition,
+  type CurrencyPurse,
+  type SpiritDelta,
+} from './content/currency';
 import { getUnique, uniquesFor } from './content/uniques';
-import { DROPS_PER_CLEAR } from './curves';
+import { DROPS_PER_CLEAR, FRAGMENTS_PER_CLEAR, KEY_DROP_CHANCE } from './curves';
 import { createRng, type Rng } from './rng';
 
 /** Arbitrary large odd multiplier, so reroll streams never collide with drops. */
@@ -29,9 +37,18 @@ const REROLL_STREAM = 0x9e3779b1;
 /** Likewise for the per-clear drop-count stream. */
 const DROP_COUNT_STREAM = 0x85eb_ca6b;
 
-/** The RNG stream for an item's current roll. */
-function rollStream(accountSeed: number, uid: number, rerolls: number): Rng {
-  return createRng(accountSeed).fork(uid * 7919 + rerolls * REROLL_STREAM);
+/** And for the boss's fragment and key rolls. */
+const BOSS_DROP_STREAM = 0xc2b2_ae35;
+
+/**
+ * The RNG stream for an item's current roll.
+ *
+ * Keyed on `crafts` rather than `rerolls`, so a currency application and a gold
+ * reroll draw different numbers - two operations sharing a stream would make
+ * "reroll, then flame, then reroll" reproduce the first reroll's result.
+ */
+function rollStream(accountSeed: number, uid: number, crafts: number): Rng {
+  return createRng(accountSeed).fork(uid * 7919 + crafts * REROLL_STREAM);
 }
 
 function weightedRarity(rng: Rng): Rarity {
@@ -70,12 +87,43 @@ function rollAffixes(
   return rolled;
 }
 
-function rollAffixesForRarity(rarity: Rarity, itemLevel: number, rng: Rng): RolledAffix[] {
-  const limits = AFFIX_LIMITS[rarity];
+/**
+ * How many prefix and suffix rows an item has.
+ *
+ * The single source of truth. Rarity sets the base counts and a spirit's stored
+ * delta adjusts them, so rolling, displaying and testing all agree - and dune's
+ * fifth row is not a special case anyone has to remember.
+ */
+export function affixRows(item: ItemInstance): { prefix: number; suffix: number } {
+  const limits = AFFIX_LIMITS[item.rarity];
+  const delta = item.spiritDelta ?? { prefix: 0, suffix: 0 };
+  return {
+    // Clamped at zero and at the pool size: a row count larger than the pool
+    // would silently roll fewer affixes than it claims.
+    prefix: Math.max(0, Math.min(PREFIXES.length, limits.prefix + delta.prefix)),
+    suffix: Math.max(0, Math.min(SUFFIXES.length, limits.suffix + delta.suffix)),
+  };
+}
+
+function rollAffixesForRows(
+  rows: { prefix: number; suffix: number },
+  itemLevel: number,
+  rng: Rng,
+): RolledAffix[] {
   return [
-    ...rollAffixes(PREFIXES, limits.prefix, itemLevel, rng),
-    ...rollAffixes(SUFFIXES, limits.suffix, itemLevel, rng),
+    ...rollAffixes(PREFIXES, rows.prefix, itemLevel, rng),
+    ...rollAffixes(SUFFIXES, rows.suffix, itemLevel, rng),
   ];
+}
+
+function rollAffixesForRarity(rarity: Rarity, itemLevel: number, rng: Rng): RolledAffix[] {
+  return rollAffixesForRows(AFFIX_LIMITS[rarity], itemLevel, rng);
+}
+
+/** Which side of the pool an affix id belongs to. */
+function sideOf(affixId: string): AffixSide | null {
+  const affix = getAffix(affixId);
+  return affix ? affix.kind : null;
 }
 
 /**
@@ -117,6 +165,7 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
         itemLevel,
         affixes: [],
         rerolls: 0,
+        crafts: 0,
         uniqueId: unique.id,
       };
     }
@@ -131,6 +180,7 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
     affixes: rollAffixesForRarity(rarity, itemLevel, rng),
     baseAffix: rollBaseAffix(base.id, itemLevel, rng),
     rerolls: 0,
+    crafts: 0,
   };
 }
 
@@ -149,6 +199,41 @@ export function rollDropCount(accountSeed: number, firstUid: number): number {
 }
 
 /**
+ * What a stage boss drops besides items: fragments, and sometimes a key.
+ *
+ * Fragments come from stage bosses and currency comes from dungeons, so
+ * neither activity is strictly dominated by the other. Rolled from the same
+ * clear-seeded stream as the drop count.
+ */
+export function rollStageBossDrops(
+  accountSeed: number,
+  firstUid: number,
+  stage: number,
+): CurrencyPurse {
+  const rng = createRng(accountSeed).fork(firstUid * BOSS_DROP_STREAM);
+  const purse: CurrencyPurse = {};
+
+  const eligible = FRAGMENT_GATES.filter((gate) => stage >= gate.minStage);
+  const fragments = rng.int(FRAGMENTS_PER_CLEAR.max - FRAGMENTS_PER_CLEAR.min + 1) +
+    FRAGMENTS_PER_CLEAR.min;
+
+  for (let i = 0; i < fragments && eligible.length > 0; i++) {
+    const total = eligible.reduce((sum, gate) => sum + gate.weight, 0);
+    let roll = rng.next() * total;
+    for (const gate of eligible) {
+      roll -= gate.weight;
+      if (roll <= 0) {
+        purse[gate.id] = (purse[gate.id] ?? 0) + 1;
+        break;
+      }
+    }
+  }
+
+  if (rng.next() < KEY_DROP_CHANCE) purse['dungeon-key'] = 1;
+  return purse;
+}
+
+/**
  * Reroll an item's affixes in place.
  *
  * Rarity, base, item level and the base implicit survive - only the rolled
@@ -162,13 +247,228 @@ export function rollDropCount(accountSeed: number, firstUid: number): number {
  */
 export function rerollAffixes(accountSeed: number, item: ItemInstance): ItemInstance {
   if (item.rarity === 'unique') return item;
-  const rerolls = item.rerolls + 1;
-  const rng = rollStream(accountSeed, Number(item.uid), rerolls);
+  const crafts = item.crafts + 1;
+  const rng = rollStream(accountSeed, Number(item.uid), crafts);
   return {
     ...item,
-    affixes: rollAffixesForRarity(item.rarity, item.itemLevel, rng),
-    rerolls,
+    // affixRows, not the rarity limits: a spirited item must keep the rows its
+    // spirit gave it. Rerolling one back to 2/2 would make gold a way to undo
+    // a permanent, one-shot change.
+    affixes: rollAffixesForRows(affixRows(item), item.itemLevel, rng),
+    rerolls: item.rerolls + 1,
+    crafts,
   };
+}
+
+// --- Currency -------------------------------------------------------------
+
+/**
+ * Why this currency cannot be used on this item, or null when it can.
+ *
+ * One function, two callers: applyCommand refuses with this string, and the
+ * craft modal greys the option out and shows it. That is deliberate - a player
+ * learns the rules from the same sentence the server enforces, and the two
+ * cannot drift into disagreeing about what is allowed.
+ */
+export function currencyLegality(
+  item: ItemInstance,
+  currency: CurrencyDefinition,
+  equipped: boolean,
+): string | null {
+  const action = currency.action;
+
+  if (action.kind === 'combine') return 'combine this in the stash, not on an item';
+  if (action.kind === 'inert') return `${currency.name} is not used on items`;
+
+  // Uniques are authored, not rolled. Nothing here has anything to act on.
+  if (item.rarity === 'unique') return 'uniques cannot be modified';
+
+  switch (action.kind) {
+    case 'rerollAffixes': {
+      const rows = affixRows(item);
+      if (rows[action.only] === 0) return `this item has no ${action.only}es`;
+      return null;
+    }
+
+    case 'rerollTiers':
+      if (item.affixes.length === 0) return 'this item has no modifiers';
+      return null;
+
+    case 'upgradeRarity':
+      if (item.rarity !== action.from) return `${action.from} items only`;
+      return null;
+
+    case 'gamble':
+      if (item.rarity !== action.from) return `${action.from} items only`;
+      // The only operation that can destroy the item you are wearing.
+      if (equipped) return 'unequip it first';
+      return null;
+
+    case 'spirit':
+      if (item.rarity !== 'rare') return 'rare items only';
+      if (item.spirit) return 'this item already has a spirit';
+      return null;
+  }
+}
+
+/** The row trade a spirit performs, rolled once and then stored. */
+function rollSpiritDelta(
+  action: Extract<CurrencyAction, { kind: 'spirit' }>,
+  item: ItemInstance,
+  rng: Rng,
+): SpiritDelta {
+  const pick = (side: AffixSide | 'either'): AffixSide =>
+    side === 'either' ? (rng.next() < 0.5 ? 'prefix' : 'suffix') : side;
+
+  const delta: SpiritDelta = { prefix: 0, suffix: 0 };
+
+  // Dune may take nothing, which is the only route to a fifth row.
+  const removes = action.mayRemoveNone ? rng.next() < 0.5 : true;
+  if (removes) {
+    const rows = affixRows(item);
+    let from = pick(action.remove);
+    // Never remove from an empty side - it would spend the spirit for a pure
+    // gain, which is not what "trades a row" means.
+    if (rows[from] === 0) from = from === 'prefix' ? 'suffix' : 'prefix';
+    if (rows[from] > 0) delta[from] -= 1;
+  }
+
+  delta[pick(action.add)] += 1;
+  return delta;
+}
+
+export interface CraftResult {
+  /** The item after crafting, or null when the item was destroyed. */
+  item: ItemInstance | null;
+  /** True only for a gamble that succeeded. */
+  transmuted: boolean;
+}
+
+/**
+ * Apply a currency to an item.
+ *
+ * Pure, and seeded from (account seed, uid, crafts) like every other roll, so
+ * the client's optimistic prediction and the server's authoritative re-run
+ * reach the same item. Callers must check `currencyLegality` first; this
+ * assumes the operation is already known to be legal.
+ */
+export function applyCurrencyToItem(
+  accountSeed: number,
+  item: ItemInstance,
+  currency: CurrencyDefinition,
+): CraftResult {
+  const crafts = item.crafts + 1;
+  const rng = rollStream(accountSeed, Number(item.uid), crafts);
+  const action = currency.action;
+  const next: ItemInstance = { ...item, crafts };
+
+  switch (action.kind) {
+    case 'rerollAffixes': {
+      // Keep the other side byte-identical. This is the whole point of the
+      // idols: a targeted reroll a player can repeat without losing the half
+      // that already landed well.
+      const kept = item.affixes.filter((a) => sideOf(a.affixId) !== action.only);
+      const pool = action.only === 'prefix' ? PREFIXES : SUFFIXES;
+      const count = affixRows(item)[action.only];
+      next.affixes = [...kept, ...rollAffixes(pool, count, item.itemLevel, rng)];
+      return { item: next, transmuted: false };
+    }
+
+    case 'rerollTiers': {
+      // Same modifiers, new magnitudes. An item whose affixes are right but
+      // whose numbers are not is exactly what this exists for.
+      next.affixes = item.affixes.map((rolled) => {
+        const affix = getAffix(rolled.affixId);
+        if (!affix) return rolled;
+        const tiers = availableTiers(affix, item.itemLevel);
+        const tier = tiers[rng.int(tiers.length)];
+        return { affixId: rolled.affixId, tier, value: affix.tiers[tier].value };
+      });
+      return { item: next, transmuted: false };
+    }
+
+    case 'upgradeRarity': {
+      // Existing modifiers survive; only the newly granted rows are rolled.
+      // Losing what you had would make the ore a reroll with extra steps.
+      const before = affixRows(item);
+      next.rarity = action.to;
+      const after = affixRows(next);
+      const added = [
+        ...rollAffixes(
+          PREFIXES.filter((a) => !item.affixes.some((r) => r.affixId === a.id)),
+          Math.max(0, after.prefix - before.prefix),
+          item.itemLevel,
+          rng,
+        ),
+        ...rollAffixes(
+          SUFFIXES.filter((a) => !item.affixes.some((r) => r.affixId === a.id)),
+          Math.max(0, after.suffix - before.suffix),
+          item.itemLevel,
+          rng,
+        ),
+      ];
+      next.affixes = [...item.affixes, ...added];
+      return { item: next, transmuted: false };
+    }
+
+    case 'gamble': {
+      if (rng.next() >= action.successChance) return { item: null, transmuted: false };
+      const eligible = uniquesFor(item.itemLevel);
+      // No unique exists this early. Refunding the item rather than eating it
+      // keeps the failure honest: the droplet did not fail, it had nothing to
+      // turn the item into.
+      if (eligible.length === 0) return { item: next, transmuted: false };
+      const unique = eligible[rng.int(eligible.length)];
+      return {
+        item: {
+          ...next,
+          baseId: unique.id,
+          rarity: 'unique',
+          uniqueId: unique.id,
+          affixes: [],
+          baseAffix: undefined,
+          spirit: undefined,
+          spiritDelta: undefined,
+        },
+        transmuted: true,
+      };
+    }
+
+    case 'spirit': {
+      const delta = rollSpiritDelta(action, item, rng);
+      next.spirit = currency.id;
+      next.spiritDelta = delta;
+
+      const rows = affixRows(next);
+      // Trim the removed side down, then roll the added side up. Trimming from
+      // the end drops the most recently rolled affix, which is arbitrary but
+      // consistent - and the player chose a permanent trade, not which mod.
+      const trim = (side: AffixSide) => {
+        const own = next.affixes.filter((a) => sideOf(a.affixId) === side);
+        return own.slice(0, rows[side]);
+      };
+      const prefixes = trim('prefix');
+      const suffixes = trim('suffix');
+
+      const grow = (side: AffixSide, current: RolledAffix[]) => {
+        const pool = (side === 'prefix' ? PREFIXES : SUFFIXES).filter(
+          (a) => !current.some((r) => r.affixId === a.id),
+        );
+        return rollAffixes(pool, rows[side] - current.length, item.itemLevel, rng);
+      };
+
+      next.affixes = [
+        ...prefixes,
+        ...grow('prefix', prefixes),
+        ...suffixes,
+        ...grow('suffix', suffixes),
+      ];
+      return { item: next, transmuted: false };
+    }
+
+    default:
+      return { item: next, transmuted: false };
+  }
 }
 
 /** The concrete Effect a rolled affix contributes. */

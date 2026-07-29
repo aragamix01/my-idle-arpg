@@ -10,6 +10,7 @@ import {
   affixEffect,
   displayTier,
   getAffix,
+  type CurrencyTier,
   type Effect,
   type Rarity,
   type RolledAffix,
@@ -96,7 +97,11 @@ export function describeEffect(effect: Effect): string {
     // area - and must not read as a bonus.
     const delta = (effect.value - 1) * 100;
     const sign = delta >= 0 ? '+' : '';
-    return `${sign}${delta.toFixed(0)}% ${label}${suffix}`;
+    // Toughness mods live in the 1.5-4% range, where whole percents collapse
+    // distinct tiers onto the same number and two different affixes render as
+    // the same line. One decimal below 10% is enough to keep them apart.
+    const digits = Math.abs(delta) < 10 ? 1 : 0;
+    return `${sign}${delta.toFixed(digits)}% ${label}${suffix}`;
   }
 
   const sign = effect.value >= 0 ? '+' : '';
@@ -122,6 +127,21 @@ export function describeRolledAffix(rolled: RolledAffix): { text: string; tier: 
     tier: `T${displayTier(affix, rolled.tier)}`,
   };
 }
+
+/**
+ * Colour per currency tier.
+ *
+ * Tiers mean different things to a player: basics are the working stock,
+ * fragments are progress toward one, spirits are the once-per-item decision,
+ * and the key is not a crafting item at all. Colour is how that reads without
+ * a legend.
+ */
+export const CURRENCY_TIER_STYLE: Record<CurrencyTier, { border: string; text: string }> = {
+  basic: { border: 'border-neutral-700', text: 'text-neutral-200' },
+  spirit: { border: 'border-fuchsia-500/70', text: 'text-fuchsia-300' },
+  fragment: { border: 'border-neutral-800', text: 'text-neutral-400' },
+  key: { border: 'border-amber-500/70', text: 'text-amber-300' },
+};
 
 /** Ordered stat list for the character sheet. */
 export function statEntries(stats: Stats): { key: StatKey; label: string; value: string }[] {

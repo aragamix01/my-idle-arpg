@@ -20,6 +20,7 @@ import {
   STAGE_TIME_LIMIT_SECONDS,
   UPGRADE_TRACKS,
   type UpgradeKey,
+  type SimEvent,
   type UpgradeView,
 } from '@/sim';
 import type { AttemptRequest } from '@/render/GameCanvas';
@@ -137,13 +138,9 @@ export function Game() {
           )}
 
           <ul className="flex flex-wrap gap-2 text-xs text-neutral-400">
-            {/* Five, not three. A clear now emits one stageCleared plus up to
-                three itemDropped, and at three slots the clear message - the
-                one thing the player was waiting for - got pushed off the end
-                by its own loot. */}
-            {events.slice(-5).map((event, i) => (
+            {summarise(events).map((line, i) => (
               <li key={i} className="rounded bg-neutral-900/80 px-2 py-1">
-                {describe(event)}
+                {line}
               </li>
             ))}
           </ul>
@@ -210,7 +207,9 @@ export function Game() {
           busy={pending}
           onEquip={(slot, itemId) => void send({ type: 'equipItem', slot, itemId })}
           onReroll={(uid) => void send({ type: 'rerollItem', uid })}
-          onDiscard={(uid) => void send({ type: 'discardItem', uid })}
+          onDissemble={(uid) => void send({ type: 'dissembleItem', uid })}
+          onApplyCurrency={(currencyId, uid) => void send({ type: 'applyCurrency', currencyId, uid })}
+          onCombine={(currencyId) => void send({ type: 'combineFragments', currencyId })}
           onClose={() => setPanelOpen(false)}
         />
       )}
@@ -323,6 +322,36 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Collapse a command's events into a few readable lines.
+ *
+ * A single clear can now emit a stageCleared, three itemDropped and several
+ * currencyDropped. Rendering the last N verbatim pushed the clear message -
+ * the one thing the player was waiting for - off the end, buried by its own
+ * loot. Widening the window only moved the point at which that happens.
+ *
+ * So loot is summarised rather than enumerated: counts are what a player reads
+ * anyway, and the detail is in the inventory.
+ */
+function summarise(events: SimEvent[]): string[] {
+  const rest: string[] = [];
+  let items = 0;
+  let currency = 0;
+
+  for (const event of events) {
+    if (event.type === 'itemDropped') items++;
+    else if (event.type === 'currencyDropped') currency += event.count;
+    else rest.push(describe(event as { type: string } & Record<string, unknown>));
+  }
+
+  const loot: string[] = [];
+  if (items > 0) loot.push(`${items} item${items === 1 ? '' : 's'}`);
+  if (currency > 0) loot.push(`${currency} currency`);
+
+  // The outcome line first, so it survives whatever else happened.
+  return [...rest.slice(-3), ...(loot.length > 0 ? [`found ${loot.join(', ')}`] : [])];
+}
+
 function describe(event: { type: string } & Record<string, unknown>): string {
   switch (event.type) {
     case 'stageCleared':
@@ -335,8 +364,18 @@ function describe(event: { type: string } & Record<string, unknown>): string {
       return `inventory full — lost ${event.lost} drop${Number(event.lost) === 1 ? '' : 's'}`;
     case 'itemRerolled':
       return `rerolled for ${Math.round(Number(event.cost))}g`;
-    case 'itemDiscarded':
-      return 'discarded an item';
+    case 'currencyDropped':
+      return `found ${event.name}${Number(event.count) > 1 ? ` x${event.count}` : ''}`;
+    case 'currencyUsed':
+      return `used ${event.name}`;
+    case 'itemTransmuted':
+      return `transmuted into ${event.name}`;
+    case 'itemDestroyed':
+      return 'the item was destroyed';
+    case 'fragmentsCombined':
+      return `combined into ${event.name}`;
+    case 'itemDissembled':
+      return 'dissembled an item';
     case 'upgradeBought':
       return Number(event.count) > 1
         ? `${event.key} +${event.count} → ${event.level}`

@@ -64,7 +64,9 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     kind: 'suffix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'attackSpeed', op: 'mul' },
-    tiers: tiers([1.01, 1.015, 1.02, 1.025]),
+    // 1.025 would collide with of-Haste's weakest tier and render as the same
+    // line on an item carrying both.
+    tiers: tiers([1.01, 1.015, 1.019, 1.023]),
   },
   purse: {
     id: 'implicit-gold-find',
@@ -92,7 +94,8 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     kind: 'prefix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'area', op: 'add' },
-    tiers: tiers([0.1, 0.17, 0.25, 0.3]),
+    // Likewise 0.3 would collide with Sweeping's weakest tier.
+    tiers: tiers([0.1, 0.16, 0.22, 0.28]),
   },
   charm: {
     id: 'implicit-max-hp',

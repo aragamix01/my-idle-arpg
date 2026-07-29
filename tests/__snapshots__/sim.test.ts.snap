@@ -119,6 +119,34 @@ exports[`content registry > matches its snapshot 1`] = `
       "effect": {
         "kind": "statMod",
         "op": "mul",
+        "stat": "toughness",
+      },
+      "id": "warded",
+      "kind": "prefix",
+      "nameFragment": "Warded",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1.022,
+        },
+        {
+          "minStage": 15,
+          "value": 1.029,
+        },
+        {
+          "minStage": 40,
+          "value": 1.036,
+        },
+        {
+          "minStage": 80,
+          "value": 1.043,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "mul",
         "stat": "attackSpeed",
       },
       "id": "of-haste",

@@ -16,10 +16,17 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
-  ITEM_SLOTS,
+  applyCurrencyToItem,
+  availableTiers,
+  CURRENCIES,
+  currencyLegality,
+  DISSEMBLE_YIELD,
   farmRate,
+  getAffix,
+  getCurrency,
   INVENTORY_CAP,
   isUpgradeMaxed,
+  ITEM_SLOTS,
   itemPower,
   newSave,
   rerollAffixes,
@@ -27,9 +34,11 @@ import {
   resolveStage,
   rollDropCount,
   rollItem,
+  rollStageBossDrops,
   STAGE_TIME_LIMIT_SECONDS,
   upgradeCost,
   UPGRADE_KEYS,
+  type CurrencyId,
   type SaveState,
   type UpgradeKey,
 } from '../src/sim';
@@ -133,22 +142,172 @@ function diagnose(save: SaveState, stage: number): string {
  */
 function takeDrop(save: SaveState, stage: number): SaveState {
   let owned = [...save.items];
-  let uid = save.nextItemId;
-  const drops = rollDropCount(save.seed, uid);
+  const firstUid = save.nextItemId;
+  let uid = firstUid;
+  const drops = rollDropCount(save.seed, firstUid);
+  const currency = { ...save.currency };
+
+  // Fragments and keys come off the same clear-seeded stream the real command
+  // uses, so the harness sees the crafting income a real player sees.
+  for (const [id, count] of Object.entries(rollStageBossDrops(save.seed, firstUid, stage)) as [
+    CurrencyId,
+    number,
+  ][]) {
+    currency[id] = (currency[id] ?? 0) + count;
+  }
 
   for (let i = 0; i < drops; i++) {
     if (owned.length >= INVENTORY_CAP) {
+      // Dissemble rather than delete: the weakest spare is now raw material,
+      // and an agent that threw it away would model a player who ignores half
+      // the crafting economy.
       const spare = owned
         .filter((item) => !save.loadout.includes(item.uid))
         .sort((a, b) => itemPower(a) - itemPower(b))[0];
       if (!spare) break;
       owned = owned.filter((item) => item.uid !== spare.uid);
+      const yielded = DISSEMBLE_YIELD[spare.rarity];
+      currency[yielded] = (currency[yielded] ?? 0) + 1;
     }
     owned.push(rollItem(save.seed, uid, stage));
     uid++;
   }
 
-  return { ...save, items: owned, nextItemId: uid };
+  return { ...save, items: owned, currency, nextItemId: uid };
+}
+
+/** Spend ten fragments whenever ten have accumulated. */
+function combineAll(save: SaveState): SaveState {
+  const currency = { ...save.currency };
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const definition of CURRENCIES) {
+      const action = definition.action;
+      if (action.kind !== 'combine') continue;
+      const held = currency[definition.id] ?? 0;
+      if (held < action.count) continue;
+      currency[definition.id] = held - action.count;
+      currency[action.into] = (currency[action.into] ?? 0) + 1;
+      changed = true;
+    }
+  }
+
+  return { ...save, currency };
+}
+
+/**
+ * How far an item's rolled affixes are from their best possible tiers, 0..1.
+ *
+ * The decision input for the currencies that reroll magnitudes. Zero means
+ * every modifier is already top tier and there is nothing to gain.
+ */
+function tierHeadroom(item: SaveState['items'][number]): number {
+  if (item.affixes.length === 0) return 0;
+  const shortfall = item.affixes.reduce((sum, rolled) => {
+    const affix = getAffix(rolled.affixId);
+    if (!affix) return sum;
+    const best = availableTiers(affix, item.itemLevel).at(-1) ?? 0;
+    return sum + (best - rolled.tier) / Math.max(1, best);
+  }, 0);
+  return shortfall / item.affixes.length;
+}
+
+/**
+ * Spend crafting currency on the loadout.
+ *
+ * **The agent must decide before it sees the result.** Every roll here is a
+ * pure function of (seed, uid, crafts), so an agent could apply a currency,
+ * measure the outcome, and keep only the good ones - and would then model a
+ * player with perfect foresight, overstating crafting by an unknowable margin.
+ * Every rule below is a heuristic on the item's *current* state, and whatever
+ * comes back is kept. That is the same rule the gold reroll already follows:
+ * "the result is kept whatever it is".
+ *
+ * It will not gamble. An Angel Droplet destroys the item nine times in ten, and
+ * an agent with no way to value a one-in-ten unique would just feed it commons.
+ */
+function spendCurrency(save: SaveState, stage: number): SaveState {
+  let current = combineAll(save);
+
+  const spend = (id: CurrencyId, item: SaveState['items'][number]): boolean => {
+    const definition = getCurrency(id);
+    if (!definition) return false;
+    if ((current.currency[id] ?? 0) < 1) return false;
+    if (currencyLegality(item, definition, true)) return false;
+
+    const result = applyCurrencyToItem(current.seed, item, definition);
+    current = {
+      ...current,
+      currency: { ...current.currency, [id]: (current.currency[id] ?? 0) - 1 },
+      items: result.item
+        ? current.items.map((c) => (c.uid === item.uid ? result.item! : c))
+        : current.items.filter((c) => c.uid !== item.uid),
+    };
+    return true;
+  };
+
+  for (let pass = 0; pass < 8; pass++) {
+    /**
+     * Craft the best *craftable* items, equipped or not.
+     *
+     * Not just the loadout. Crafting only what is equipped is a trap the first
+     * cut fell into: uniques cannot be crafted, the agent equipped four of
+     * them because an uncrafted rare loses to a unique, and then nothing was
+     * ever a legal craft target - it finished the ladder holding 19 unspent
+     * Rare Ore. A rare has to be allowed to become better than a unique before
+     * it will ever be equipped, which means crafting it on the bench first.
+     */
+    const candidates = current.items
+      .filter((item) => item.rarity !== 'unique')
+      .sort(
+        (a, b) => b.itemLevel - a.itemLevel || itemPower(b) - itemPower(a),
+      )
+      .slice(0, ITEM_SLOTS * 2);
+    let acted = false;
+
+    for (const item of candidates) {
+      // Rarity upgrades are the one unambiguous win: existing modifiers
+      // survive and a new row is added. Always worth taking.
+      if (item.rarity === 'common' && spend('magic-ore', item)) {
+        acted = true;
+        continue;
+      }
+      if (item.rarity === 'magic' && spend('rare-ore', item)) {
+        acted = true;
+        continue;
+      }
+
+      // A spirit is permanent and one-shot, so spend it on something already
+      // worth keeping rather than the first rare that comes along.
+      if (
+        item.rarity === 'rare' &&
+        !item.spirit &&
+        item.uid === candidates[0]?.uid &&
+        (spend('dune-spirit', item) || spend('bishop-spirit', item) || spend('devil-spirit', item))
+      ) {
+        acted = true;
+        continue;
+      }
+
+      // Flames fix magnitudes, idols fix modifiers. Both only when there is
+      // measurable room - an item already at top tier has nothing to gain and
+      // spending on it would model a player burning currency for nothing.
+      if (tierHeadroom(item) > 0.25 && spend('angel-flame', item)) {
+        acted = true;
+        continue;
+      }
+      if (tierHeadroom(item) > 0.4 && (spend('sacred-idol', item) || spend('dark-idol', item))) {
+        acted = true;
+      }
+    }
+
+    if (!acted) break;
+    current = improveLoadout(current, stage);
+  }
+
+  return improveLoadout(current, stage);
 }
 
 /**
@@ -213,7 +372,14 @@ function maybeReroll(save: SaveState, stage: number): SaveState {
   return improveLoadout(next, stage);
 }
 
-export function runLadder(): { rows: Row[]; wall: number | null; diagnosis: string; stallReason: string } {
+export function runLadder(): {
+  rows: Row[];
+  wall: number | null;
+  diagnosis: string;
+  stallReason: string;
+  /** Final agent state, so a probe can ask what it actually did with its loot. */
+  finalSave: SaveState;
+} {
   let save = newSave(SEED, 0);
   let elapsed = 0;
   const rows: Row[] = [];
@@ -234,6 +400,7 @@ export function runLadder(): { rows: Row[]; wall: number | null; diagnosis: stri
         save = { ...save, bestStage: stage, currentStage: stage + 1 };
         save = takeDrop(save, stage);
         save = improveLoadout(save, stage);
+        save = spendCurrency(save, stage);
         break;
       }
 
@@ -274,7 +441,7 @@ export function runLadder(): { rows: Row[]; wall: number | null; diagnosis: stri
       }
     }
 
-    if (stalled) return { rows, wall: stage, diagnosis: diagnose(save, stage), stallReason };
+    if (stalled) return { rows, wall: stage, diagnosis: diagnose(save, stage), stallReason, finalSave: save };
 
     rows.push({
       stage,
@@ -287,7 +454,7 @@ export function runLadder(): { rows: Row[]; wall: number | null; diagnosis: stri
     });
   }
 
-  return { rows, wall: null, diagnosis: '', stallReason: '' };
+  return { rows, wall: null, diagnosis: '', stallReason: '', finalSave: save };
 }
 
 function fmtDuration(seconds: number): string {
