@@ -31,33 +31,41 @@ export async function POST(request: Request) {
     );
   }
 
-  const { playerId, state } = await getSession();
-  // Server time, never the client's. Otherwise claimOffline is a free money
-  // button for anyone willing to change their system clock.
-  const now = Date.now();
+  try {
+    const { playerId, state } = await getSession();
+    // Server time, never the client's. Otherwise claimOffline is a free money
+    // button for anyone willing to change their system clock.
+    const now = Date.now();
 
-  const result = applyCommand(state, parsed.data, now);
-  if (!result.ok) {
-    // A rejected command is not a server fault - it usually means the client's
-    // optimistic copy drifted. Send the real state back so it can resync.
-    return NextResponse.json<ApiError & GameStateResponse>(
-      {
-        error: result.error,
-        state,
-        hud: getHudSnapshot(state, now),
-        events: [],
-        serverNowMs: now,
-      },
-      { status: 409 },
-    );
+    const result = applyCommand(state, parsed.data, now);
+    if (!result.ok) {
+      // A rejected command is not a server fault - it usually means the client's
+      // optimistic copy drifted. Send the real state back so it can resync.
+      return NextResponse.json<ApiError & GameStateResponse>(
+        {
+          error: result.error,
+          state,
+          hud: getHudSnapshot(state, now),
+          events: [],
+          serverNowMs: now,
+        },
+        { status: 409 },
+      );
+    }
+
+    await getSaveStore().save(playerId, result.value.state);
+
+    return NextResponse.json<GameStateResponse>({
+      state: result.value.state,
+      hud: getHudSnapshot(result.value.state, now),
+      events: result.value.events,
+      serverNowMs: now,
+    });
+  } catch (error) {
+    // Same reasoning as /api/state: an uncaught throw becomes an empty 500 and
+    // the diagnosis goes with it.
+    const message = error instanceof Error ? error.message : 'unknown error';
+    console.error('[api/command]', error);
+    return NextResponse.json<ApiError>({ error: message }, { status: 500 });
   }
-
-  await getSaveStore().save(playerId, result.value.state);
-
-  return NextResponse.json<GameStateResponse>({
-    state: result.value.state,
-    hud: getHudSnapshot(result.value.state, now),
-    events: result.value.events,
-    serverNowMs: now,
-  });
 }
