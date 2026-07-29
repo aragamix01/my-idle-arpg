@@ -232,42 +232,42 @@ exports[`content registry > matches its snapshot 1`] = `
     {
       "id": "whetstone",
       "name": "Whetstone",
-      "sprite": "artifact.whetstone",
+      "sprite": "item.whetstone",
     },
     {
       "id": "glove",
       "name": "Glove",
-      "sprite": "artifact.quickdraw_glove",
+      "sprite": "item.quickdraw_glove",
     },
     {
       "id": "purse",
       "name": "Purse",
-      "sprite": "artifact.coin_purse",
+      "sprite": "item.coin_purse",
     },
     {
       "id": "sigil",
       "name": "Sigil",
-      "sprite": "artifact.executioners_mark",
+      "sprite": "item.executioners_mark",
     },
     {
       "id": "blade",
       "name": "Blade",
-      "sprite": "artifact.giant_slayer",
+      "sprite": "item.giant_slayer",
     },
     {
       "id": "lens",
       "name": "Lens",
-      "sprite": "artifact.swarm_lens",
+      "sprite": "item.swarm_lens",
     },
     {
       "id": "charm",
       "name": "Charm",
-      "sprite": "artifact.bloodstone",
+      "sprite": "item.bloodstone",
     },
     {
       "id": "idol",
       "name": "Idol",
-      "sprite": "artifact.deep_delvers_idol",
+      "sprite": "item.deep_delvers_idol",
     },
   ],
   "uniques": [
@@ -283,7 +283,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "whetstone",
       "name": "The Whetstone",
-      "sprite": "artifact.whetstone",
+      "sprite": "item.whetstone",
     },
     {
       "dropStage": 1,
@@ -297,7 +297,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "quickdraw-glove",
       "name": "Quickdraw Glove",
-      "sprite": "artifact.quickdraw_glove",
+      "sprite": "item.quickdraw_glove",
     },
     {
       "dropStage": 3,
@@ -309,7 +309,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "coin-purse",
       "name": "Bottomless Purse",
-      "sprite": "artifact.coin_purse",
+      "sprite": "item.coin_purse",
     },
     {
       "dropStage": 8,
@@ -326,7 +326,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "executioners-mark",
       "name": "Executioner's Mark",
-      "sprite": "artifact.executioners_mark",
+      "sprite": "item.executioners_mark",
     },
     {
       "dropStage": 12,
@@ -349,7 +349,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "giant-slayer",
       "name": "Giant Slayer",
-      "sprite": "artifact.giant_slayer",
+      "sprite": "item.giant_slayer",
     },
     {
       "dropStage": 20,
@@ -369,7 +369,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "swarm-lens",
       "name": "Swarm Lens",
-      "sprite": "artifact.swarm_lens",
+      "sprite": "item.swarm_lens",
     },
     {
       "dropStage": 25,
@@ -395,7 +395,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "bloodstone",
       "name": "Bloodstone",
-      "sprite": "artifact.bloodstone",
+      "sprite": "item.bloodstone",
     },
     {
       "dropStage": 40,
@@ -419,7 +419,7 @@ exports[`content registry > matches its snapshot 1`] = `
       ],
       "id": "deep-delvers-idol",
       "name": "Deep Delver's Idol",
-      "sprite": "artifact.deep_delvers_idol",
+      "sprite": "item.deep_delvers_idol",
     },
   ],
 }

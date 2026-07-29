@@ -1,9 +1,10 @@
 /**
  * Uniques.
  *
- * The eight originally hand-authored artifacts, now the only items with fixed
+ * The eight originally hand-authored items, now the only ones with fixed
  * effects. They never roll and never reroll - a unique that could be rerolled
- * would just be a rare with a fancier name.
+ * would just be a rare with a fancier name. They carry no base implicit
+ * either: a unique's whole identity is its authored effect list.
  *
  * These are also where conditional effects live. Rolled affixes are
  * unconditional by design (a condition on a random mod is very hard to price),
@@ -17,28 +18,28 @@ export const UNIQUES = [
   {
     id: 'whetstone',
     name: 'The Whetstone',
-    sprite: 'artifact.whetstone',
+    sprite: 'item.whetstone',
     dropStage: 1,
     effects: [{ kind: 'statMod', stat: 'damage', op: 'mul', value: 1.35 }],
   },
   {
     id: 'quickdraw-glove',
     name: 'Quickdraw Glove',
-    sprite: 'artifact.quickdraw_glove',
+    sprite: 'item.quickdraw_glove',
     dropStage: 1,
     effects: [{ kind: 'statMod', stat: 'attackSpeed', op: 'mul', value: 1.3 }],
   },
   {
     id: 'coin-purse',
     name: 'Bottomless Purse',
-    sprite: 'artifact.coin_purse',
+    sprite: 'item.coin_purse',
     dropStage: 3,
     effects: [{ kind: 'goldOnKill', multiplier: 0.6 }],
   },
   {
     id: 'executioners-mark',
     name: "Executioner's Mark",
-    sprite: 'artifact.executioners_mark',
+    sprite: 'item.executioners_mark',
     dropStage: 8,
     effects: [
       { kind: 'statMod', stat: 'damage', op: 'mul', value: 1.9, when: { enemyHpBelow: 0.3 } },
@@ -47,7 +48,7 @@ export const UNIQUES = [
   {
     id: 'giant-slayer',
     name: 'Giant Slayer',
-    sprite: 'artifact.giant_slayer',
+    sprite: 'item.giant_slayer',
     dropStage: 12,
     effects: [
       { kind: 'statMod', stat: 'damage', op: 'mul', value: 1.7, when: { isBoss: true } },
@@ -57,7 +58,7 @@ export const UNIQUES = [
   {
     id: 'swarm-lens',
     name: 'Swarm Lens',
-    sprite: 'artifact.swarm_lens',
+    sprite: 'item.swarm_lens',
     dropStage: 20,
     effects: [
       { kind: 'statMod', stat: 'area', op: 'add', value: 4 },
@@ -67,7 +68,7 @@ export const UNIQUES = [
   {
     id: 'bloodstone',
     name: 'Bloodstone',
-    sprite: 'artifact.bloodstone',
+    sprite: 'item.bloodstone',
     dropStage: 25,
     effects: [
       { kind: 'statMod', stat: 'critChance', op: 'add', value: 0.18 },
@@ -78,7 +79,7 @@ export const UNIQUES = [
   {
     id: 'deep-delvers-idol',
     name: "Deep Delver's Idol",
-    sprite: 'artifact.deep_delvers_idol',
+    sprite: 'item.deep_delvers_idol',
     dropStage: 40,
     effects: [
       { kind: 'statMod', stat: 'goldFind', op: 'mul', value: 2, when: { stageAtLeast: 40 } },

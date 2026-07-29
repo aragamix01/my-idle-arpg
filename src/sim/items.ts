@@ -18,12 +18,16 @@ import {
   type RolledAffix,
 } from './content/schema';
 import { availableTiers, getAffix, PREFIXES, SUFFIXES } from './content/affixes';
-import { BASES, getBase } from './content/bases';
+import { BASES, getBase, getBaseAffix } from './content/bases';
 import { getUnique, uniquesFor } from './content/uniques';
+import { DROPS_PER_CLEAR } from './curves';
 import { createRng, type Rng } from './rng';
 
 /** Arbitrary large odd multiplier, so reroll streams never collide with drops. */
 const REROLL_STREAM = 0x9e3779b1;
+
+/** Likewise for the per-clear drop-count stream. */
+const DROP_COUNT_STREAM = 0x85eb_ca6b;
 
 /** The RNG stream for an item's current roll. */
 function rollStream(accountSeed: number, uid: number, rerolls: number): Rng {
@@ -75,6 +79,21 @@ function rollAffixesForRarity(rarity: Rarity, itemLevel: number, rng: Rng): Roll
 }
 
 /**
+ * Roll a base's implicit.
+ *
+ * Which affix it is was decided by the base type; only the tier is random.
+ * That is the whole point - the implicit is the part of an item you can choose
+ * by picking a base, while the rest is a lottery.
+ */
+function rollBaseAffix(baseId: string, itemLevel: number, rng: Rng): RolledAffix | undefined {
+  const affix = getBaseAffix(baseId);
+  if (!affix) return undefined;
+  const tiers = availableTiers(affix, itemLevel);
+  const tier = tiers[rng.int(tiers.length)];
+  return { affixId: affix.id, tier, value: affix.tiers[tier].value };
+}
+
+/**
  * Roll a fresh drop.
  *
  * `uid` is taken from the save's monotonic counter, so the same account
@@ -110,16 +129,36 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
     rarity,
     itemLevel,
     affixes: rollAffixesForRarity(rarity, itemLevel, rng),
+    baseAffix: rollBaseAffix(base.id, itemLevel, rng),
     rerolls: 0,
   };
 }
 
 /**
+ * How many items a clear drops.
+ *
+ * Seeded off the uid the first of them will take, so the count and the items
+ * themselves come from the same reproducible sequence - the server must reach
+ * the same number the client optimistically showed, or one side hands out an
+ * item the other never rolled.
+ */
+export function rollDropCount(accountSeed: number, firstUid: number): number {
+  const rng = createRng(accountSeed).fork(firstUid * DROP_COUNT_STREAM);
+  const span = DROPS_PER_CLEAR.max - DROPS_PER_CLEAR.min + 1;
+  return DROPS_PER_CLEAR.min + rng.int(span);
+}
+
+/**
  * Reroll an item's affixes in place.
  *
- * Rarity, base and item level survive - only the modifiers change. There is no
- * way to keep one affix and reroll the rest: a bad outcome means rerolling
- * again or finding a better item, which is what makes each roll a decision.
+ * Rarity, base, item level and the base implicit survive - only the rolled
+ * modifiers change. There is no way to keep one affix and reroll the rest: a
+ * bad outcome means rerolling again or finding a better item, which is what
+ * makes each roll a decision.
+ *
+ * The implicit surviving is not an oversight. It is the guaranteed half of an
+ * item, and a reroll that could improve it would collapse base choice back into
+ * "reroll until the implicit is good", which is exactly what it exists to avoid.
  */
 export function rerollAffixes(accountSeed: number, item: ItemInstance): ItemInstance {
   if (item.rarity === 'unique') return item;
@@ -142,10 +181,11 @@ export function affixEffect(rolled: RolledAffix): Effect | null {
     : { kind: 'statMod', stat: template.stat, op: template.op, value: rolled.value };
 }
 
-/** Everything an item contributes, whether rolled or authored. */
+/** Everything an item contributes: implicit, rolled affixes, or authored effects. */
 export function itemEffects(item: ItemInstance): Effect[] {
   if (item.uniqueId) return [...(getUnique(item.uniqueId)?.effects ?? [])];
-  return item.affixes.map(affixEffect).filter((e): e is Effect => e !== null);
+  const rolled = [...(item.baseAffix ? [item.baseAffix] : []), ...item.affixes];
+  return rolled.map(affixEffect).filter((e): e is Effect => e !== null);
 }
 
 /** Display name: "Brutal Whetstone of Haste". Uniques use their authored name. */
@@ -164,8 +204,8 @@ export function itemName(item: ItemInstance): string {
 }
 
 export function itemSprite(item: ItemInstance): string {
-  if (item.uniqueId) return getUnique(item.uniqueId)?.sprite ?? 'artifact.whetstone';
-  return getBase(item.baseId)?.sprite ?? 'artifact.whetstone';
+  if (item.uniqueId) return getUnique(item.uniqueId)?.sprite ?? 'item.whetstone';
+  return getBase(item.baseId)?.sprite ?? 'item.whetstone';
 }
 
 /**

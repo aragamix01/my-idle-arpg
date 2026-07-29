@@ -19,4 +19,4 @@ are cheaper to discover now than after the art is wired in.
 
 Then add a source entry in `scripts/atlas/sources.ts` and drop the files under
 `assets/source/`. Nothing in `src/` changes: game code references logical sprite
-IDs (`enemy.slime`, `artifact.bloodstone`) and never a filename or tile index.
+IDs (`enemy.slime`, `item.bloodstone`) and never a filename or tile index.

@@ -138,6 +138,14 @@ export const ItemInstanceSchema = z
     /** Stage it dropped at. Caps which affix tiers it may ever roll. */
     itemLevel: z.number().int().min(1),
     affixes: z.array(RolledAffixSchema),
+    /**
+     * The base type's implicit, rolled once at drop and never rerollable.
+     *
+     * Optional for two reasons: uniques have none, and items that dropped
+     * before implicits existed keep working without one rather than being
+     * wiped. Everything reading it must tolerate absence.
+     */
+    baseAffix: RolledAffixSchema.optional(),
     /** Prior rerolls. Feeds both the cost curve and the roll seed. */
     rerolls: z.number().int().min(0),
     /** Set only on uniques, naming the authored entry in the unique registry. */

@@ -23,6 +23,7 @@ import {
   type UpgradeView,
 } from '@/sim';
 import type { AttemptRequest } from '@/render/GameCanvas';
+import { AtlasSprite } from './atlasSprite';
 import { CharacterPanel } from './CharacterPanel';
 import { compact } from './format';
 import { HUD_TICK_MS, useGameStore } from './store';
@@ -108,14 +109,24 @@ export function Game() {
           <Stat label="best" value={String(hud.bestStage)} />
           <Stat label="damage" value={compact(hud.stats.damage)} />
           <Stat label="kills/s" value={compact(rate)} />
-          <button
-            type="button"
-            onClick={() => setPanelOpen(true)}
-            className="rounded border border-neutral-700 bg-neutral-900/80 px-3 py-1.5 text-xs hover:bg-neutral-800"
-          >
-            Character{hud.artifactsOwned.length > 0 ? ` · ${hud.artifactsOwned.length}` : ''}
-          </button>
         </header>
+
+        {/* Deliberately not in the stat strip. It is the only control up here,
+            and reading as one more number is how it went unnoticed. */}
+        <button
+          type="button"
+          onClick={() => setPanelOpen(true)}
+          aria-label="Character"
+          className="pointer-events-auto absolute right-6 top-6 flex items-center gap-2 rounded-lg border border-amber-500/50 bg-neutral-900/90 px-3 py-2 text-sm font-medium text-amber-100 shadow-lg transition hover:border-amber-400 hover:bg-neutral-800"
+        >
+          <AtlasSprite id="player.knight" scale={2} />
+          <span>Character</span>
+          {hud.items.length > 0 && (
+            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+              {hud.items.length}
+            </span>
+          )}
+        </button>
 
         <footer className="pointer-events-auto flex flex-col gap-3">
           {error && (
@@ -126,7 +137,11 @@ export function Game() {
           )}
 
           <ul className="flex flex-wrap gap-2 text-xs text-neutral-400">
-            {events.slice(-3).map((event, i) => (
+            {/* Five, not three. A clear now emits one stageCleared plus up to
+                three itemDropped, and at three slots the clear message - the
+                one thing the player was waiting for - got pushed off the end
+                by its own loot. */}
+            {events.slice(-5).map((event, i) => (
               <li key={i} className="rounded bg-neutral-900/80 px-2 py-1">
                 {describe(event)}
               </li>
@@ -193,7 +208,7 @@ export function Game() {
           state={state}
           hud={hud}
           busy={pending}
-          onEquip={(slot, artifactId) => void send({ type: 'equipArtifact', slot, artifactId })}
+          onEquip={(slot, itemId) => void send({ type: 'equipItem', slot, itemId })}
           onReroll={(uid) => void send({ type: 'rerollItem', uid })}
           onDiscard={(uid) => void send({ type: 'discardItem', uid })}
           onClose={() => setPanelOpen(false)}
@@ -314,10 +329,10 @@ function describe(event: { type: string } & Record<string, unknown>): string {
       return `cleared stage ${event.stage} in ${Number(event.seconds).toFixed(1)}s`;
     case 'stageFailed':
       return `stage ${event.stage} failed (${event.reason})`;
-    case 'artifactDropped':
+    case 'itemDropped':
       return `found ${event.name} (${event.rarity})`;
     case 'inventoryFull':
-      return 'inventory full — discard something';
+      return `inventory full — lost ${event.lost} drop${Number(event.lost) === 1 ? '' : 's'}`;
     case 'itemRerolled':
       return `rerolled for ${Math.round(Number(event.cost))}g`;
     case 'itemDiscarded':

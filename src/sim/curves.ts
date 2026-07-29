@@ -293,6 +293,16 @@ export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: numb
 // --- Items ----------------------------------------------------------------
 
 /**
+ * Items per stage clear, inclusive.
+ *
+ * Three times the old rate. The point is not raw power - the ceiling is set by
+ * affix tiers, not by how many items you see - but throughput: a player needs
+ * enough bases passing through their hands that picking one to craft is a
+ * choice rather than a matter of using whatever dropped.
+ */
+export const DROPS_PER_CLEAR = { min: 1, max: 3 } as const;
+
+/**
  * Gold to reroll an item's modifiers.
  *
  * Priced off `goldPerKill` at the item's own level, so a stage-80 item costs

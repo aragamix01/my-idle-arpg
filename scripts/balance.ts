@@ -16,7 +16,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
-  ARTIFACT_SLOTS,
+  ITEM_SLOTS,
   farmRate,
   INVENTORY_CAP,
   isUpgradeMaxed,
@@ -25,6 +25,7 @@ import {
   rerollAffixes,
   rerollCost,
   resolveStage,
+  rollDropCount,
   rollItem,
   STAGE_TIME_LIMIT_SECONDS,
   upgradeCost,
@@ -119,26 +120,35 @@ function diagnose(save: SaveState, stage: number): string {
 }
 
 /**
- * Take the guaranteed drop, discarding the weakest unequipped item when full.
+ * Take a clear's drops, discarding the weakest unequipped item when full.
  *
  * Modelled directly rather than through applyCommand because the harness also
  * wants the timing figures resolveStage returns, and calling both would roll
- * the stage twice.
+ * the stage twice. It does share rollDropCount, so it sees the same number of
+ * items a real clear hands out.
+ *
+ * The agent never lets its inventory block a drop - it always makes room. A
+ * player who hoards until full is strictly worse off, and modelling the worse
+ * player would make the ladder look harder than it is.
  */
 function takeDrop(save: SaveState, stage: number): SaveState {
-  let owned = [...save.artifactsOwned];
-  const uid = save.nextItemId;
+  let owned = [...save.items];
+  let uid = save.nextItemId;
+  const drops = rollDropCount(save.seed, uid);
 
-  if (owned.length >= INVENTORY_CAP) {
-    const spare = owned
-      .filter((item) => !save.loadout.includes(item.uid))
-      .sort((a, b) => itemPower(a) - itemPower(b))[0];
-    if (!spare) return { ...save, nextItemId: uid };
-    owned = owned.filter((item) => item.uid !== spare.uid);
+  for (let i = 0; i < drops; i++) {
+    if (owned.length >= INVENTORY_CAP) {
+      const spare = owned
+        .filter((item) => !save.loadout.includes(item.uid))
+        .sort((a, b) => itemPower(a) - itemPower(b))[0];
+      if (!spare) break;
+      owned = owned.filter((item) => item.uid !== spare.uid);
+    }
+    owned.push(rollItem(save.seed, uid, stage));
+    uid++;
   }
 
-  owned.push(rollItem(save.seed, uid, stage));
-  return { ...save, artifactsOwned: owned, nextItemId: uid + 1 };
+  return { ...save, items: owned, nextItemId: uid };
 }
 
 /**
@@ -150,12 +160,12 @@ function takeDrop(save: SaveState, stage: number): SaveState {
 function improveLoadout(save: SaveState, stage: number): SaveState {
   let current = save;
 
-  for (let pass = 0; pass < ARTIFACT_SLOTS * 2; pass++) {
+  for (let pass = 0; pass < ITEM_SLOTS * 2; pass++) {
     const baseline = value(current, stage);
     let best: { save: SaveState; gain: number } | null = null;
 
-    for (let slot = 0; slot < ARTIFACT_SLOTS; slot++) {
-      for (const item of current.artifactsOwned) {
+    for (let slot = 0; slot < ITEM_SLOTS; slot++) {
+      for (const item of current.items) {
         if (current.loadout.includes(item.uid)) continue;
         const loadout = [...current.loadout];
         loadout[slot] = item.uid;
@@ -182,7 +192,7 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
  * never touches the system.
  */
 function maybeReroll(save: SaveState, stage: number): SaveState {
-  const equipped = save.artifactsOwned.filter(
+  const equipped = save.items.filter(
     (item) => save.loadout.includes(item.uid) && item.rarity !== 'unique',
   );
   if (equipped.length === 0) return save;
@@ -196,7 +206,7 @@ function maybeReroll(save: SaveState, stage: number): SaveState {
   const next: SaveState = {
     ...save,
     gold: save.gold - cost,
-    artifactsOwned: save.artifactsOwned.map((item) => (item.uid === weakest.uid ? rerolled : item)),
+    items: save.items.map((item) => (item.uid === weakest.uid ? rerolled : item)),
   };
   // The result is kept whatever it is - that is what "cannot remove if it
   // broke" means. Re-equipping afterwards may drop it for something better.

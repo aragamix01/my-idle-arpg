@@ -30,6 +30,7 @@
  * the ladder it was balanced against.
  */
 
+import { BASE_AFFIXES } from './bases';
 import type { AffixDefinition } from './schema';
 
 /**
@@ -104,9 +105,22 @@ export const SUFFIXES: AffixDefinition[] = [
   },
 ];
 
+/** The rollable pool. Implicits are deliberately not in here - they never roll. */
 export const AFFIXES: AffixDefinition[] = [...PREFIXES, ...SUFFIXES];
 
-const byId = new Map(AFFIXES.map((a) => [a.id, a]));
+/** Base implicits, as a flat list for validation. */
+export const IMPLICIT_AFFIXES: AffixDefinition[] = Object.values(BASE_AFFIXES);
+
+/**
+ * One resolver for every affix, rolled or implicit.
+ *
+ * Implicits share the AffixDefinition shape so the display path, the tier
+ * machinery and the effect templates all work on them unchanged - only the
+ * roll and reroll paths know the difference. Their `kind` and `nameFragment`
+ * are inert: an implicit is neither prefix nor suffix for row-counting, and it
+ * does not compose the item's name.
+ */
+const byId = new Map([...AFFIXES, ...IMPLICIT_AFFIXES].map((a) => [a.id, a]));
 
 export function getAffix(id: string): AffixDefinition | undefined {
   return byId.get(id);

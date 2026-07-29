@@ -1,9 +1,9 @@
 /**
  * Effect interpreter + derived stats.
  *
- * One interpreter, N items — rather than N bespoke closures. Every artifact is
- * data that flows through here, so the balance harness can reason about the
- * whole item pool without executing arbitrary code.
+ * One interpreter, N items — rather than N bespoke closures. Every item is data
+ * that flows through here, so the balance harness can reason about the whole
+ * item pool without executing arbitrary code.
  */
 
 import type { Effect, ItemInstance } from './content';
@@ -62,7 +62,7 @@ function conditionHolds(effect: Effect, ctx: EffectContext): boolean {
 
 /** Find an owned item by uid. */
 export function findItem(save: SaveState, uid: string): ItemInstance | undefined {
-  return save.artifactsOwned.find((item) => item.uid === uid);
+  return save.items.find((item) => item.uid === uid);
 }
 
 /** Effects from currently equipped items only — owned-but-unequipped do nothing. */

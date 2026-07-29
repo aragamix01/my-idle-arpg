@@ -77,13 +77,13 @@ function describeCondition(when: Effect['when']): string {
 }
 
 /**
- * Render an artifact effect as a sentence.
+ * Render an item effect as a sentence.
  *
  * This is the return on choosing data over closures for content: an effect
  * that is a discriminated union can be displayed, diffed and validated. A
  * closure could only be run.
  */
-export function describeArtifactEffect(effect: Effect): string {
+export function describeEffect(effect: Effect): string {
   const suffix = describeCondition(effect.when);
 
   if (effect.kind === 'goldOnKill') {
@@ -118,7 +118,7 @@ export function describeRolledAffix(rolled: RolledAffix): { text: string; tier: 
 
   const effect = affixEffect(rolled);
   return {
-    text: effect ? describeArtifactEffect(effect) : 'unknown modifier',
+    text: effect ? describeEffect(effect) : 'unknown modifier',
     tier: `T${displayTier(affix, rolled.tier)}`,
   };
 }

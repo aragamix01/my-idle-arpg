@@ -22,10 +22,10 @@ import {
 } from './curves';
 import { CONTENT_VERSION } from './content';
 import { computeOffline } from './offline';
-import { rerollAffixes, rollItem, itemName } from './items';
+import { rerollAffixes, rollDropCount, rollItem, itemName } from './items';
 import { findItem } from './stats';
 import {
-  ARTIFACT_SLOTS,
+  ITEM_SLOTS,
   INVENTORY_CAP,
   UPGRADE_KEYS,
   err,
@@ -56,10 +56,10 @@ export const CommandSchema = z.discriminatedUnion('type', [
     .strict(),
   z
     .object({
-      type: z.literal('equipArtifact'),
-      slot: z.number().int().min(0).max(ARTIFACT_SLOTS - 1),
+      type: z.literal('equipItem'),
+      slot: z.number().int().min(0).max(ITEM_SLOTS - 1),
       /** Item uid, or null to clear the slot. */
-      artifactId: z.string().nullable(),
+      itemId: z.string().nullable(),
     })
     .strict(),
   z.object({ type: z.literal('rerollItem'), uid: z.string().min(1) }).strict(),
@@ -72,8 +72,9 @@ export type Command = z.infer<typeof CommandSchema>;
 export type SimEvent =
   | { type: 'stageCleared'; stage: number; seconds: number; gold: number }
   | { type: 'stageFailed'; stage: number; reason: 'died' | 'timeout'; gold: number }
-  | { type: 'artifactDropped'; artifactId: string; name: string; rarity: string }
-  | { type: 'inventoryFull' }
+  | { type: 'itemDropped'; itemId: string; name: string; rarity: string }
+  /** Carries how many drops were lost, so the message can say what it cost. */
+  | { type: 'inventoryFull'; lost: number }
   | { type: 'itemRerolled'; uid: string; cost: number }
   | { type: 'itemDiscarded'; uid: string }
   | { type: 'upgradeBought'; key: string; level: number; cost: number; count: number }
@@ -96,8 +97,8 @@ export function newSave(seed: number, nowMs: number): SaveState {
     bestStage: 0,
     currentStage: 1,
     upgrades: emptyUpgrades(),
-    artifactsOwned: [],
-    loadout: Array<string | null>(ARTIFACT_SLOTS).fill(null),
+    items: [],
+    loadout: Array<string | null>(ITEM_SLOTS).fill(null),
     nextItemId: 1,
     lastSeenAt: nowMs,
   };
@@ -112,7 +113,7 @@ export function applyCommand(
   const next: SaveState = {
     ...state,
     upgrades: { ...state.upgrades },
-    artifactsOwned: [...state.artifactsOwned],
+    items: [...state.items],
     loadout: [...state.loadout],
   };
 
@@ -135,21 +136,35 @@ export function applyCommand(
           gold: Math.floor(outcome.goldEarned),
         });
 
-        // Every clear drops. Rarity is what varies, not whether anything falls.
-        if (next.artifactsOwned.length >= INVENTORY_CAP) {
-          events.push({ type: 'inventoryFull' });
-        } else {
+        // Every clear drops one to three. Rarity and count are what vary, not
+        // whether anything falls.
+        const drops = rollDropCount(next.seed, next.nextItemId);
+        let lost = 0;
+
+        for (let i = 0; i < drops; i++) {
+          // A full inventory swallows the rest of the wave rather than
+          // discarding silently. The uid counter still advances for the ones
+          // that fell on the floor: reusing a uid later would make the
+          // replacement item roll identically to the one that was lost.
           const uid = next.nextItemId;
           next.nextItemId = uid + 1;
+
+          if (next.items.length >= INVENTORY_CAP) {
+            lost++;
+            continue;
+          }
+
           const item = rollItem(next.seed, uid, stage);
-          next.artifactsOwned.push(item);
+          next.items.push(item);
           events.push({
-            type: 'artifactDropped',
-            artifactId: item.uid,
+            type: 'itemDropped',
+            itemId: item.uid,
             name: itemName(item),
             rarity: item.rarity,
           });
         }
+
+        if (lost > 0) events.push({ type: 'inventoryFull', lost });
       } else {
         events.push({
           type: 'stageFailed',
@@ -201,22 +216,22 @@ export function applyCommand(
       break;
     }
 
-    case 'equipArtifact': {
-      const { slot, artifactId } = command;
-      if (artifactId !== null) {
-        if (!findItem(next, artifactId)) return err(`not owned: ${artifactId}`);
-        const existing = next.loadout.indexOf(artifactId);
+    case 'equipItem': {
+      const { slot, itemId } = command;
+      if (itemId !== null) {
+        if (!findItem(next, itemId)) return err(`not owned: ${itemId}`);
+        const existing = next.loadout.indexOf(itemId);
         if (existing !== -1 && existing !== slot) next.loadout[existing] = null;
       }
-      next.loadout[slot] = artifactId;
+      next.loadout[slot] = itemId;
       break;
     }
 
     case 'rerollItem': {
-      const index = next.artifactsOwned.findIndex((item) => item.uid === command.uid);
+      const index = next.items.findIndex((item) => item.uid === command.uid);
       if (index === -1) return err(`not owned: ${command.uid}`);
 
-      const item = next.artifactsOwned[index];
+      const item = next.items[index];
       if (item.rarity === 'unique') return err('uniques cannot be rerolled');
 
       const cost = rerollCost(item.rarity, item.itemLevel, item.rerolls);
@@ -225,9 +240,10 @@ export function applyCommand(
       }
 
       next.gold -= cost;
-      // Replaces every affix. There is deliberately no way to keep one and
-      // reroll the rest - that choice is what gives each roll weight.
-      next.artifactsOwned = next.artifactsOwned.map((current, i) =>
+      // Replaces every rolled affix, and leaves the base implicit alone. There
+      // is deliberately no way to keep one and reroll the rest - that choice is
+      // what gives each roll weight.
+      next.items = next.items.map((current, i) =>
         i === index ? rerollAffixes(next.seed, current) : current,
       );
       events.push({ type: 'itemRerolled', uid: command.uid, cost });
@@ -236,9 +252,11 @@ export function applyCommand(
 
     case 'discardItem': {
       if (!findItem(next, command.uid)) return err(`not owned: ${command.uid}`);
-      // Unequip first, or the loadout would point at an item that is gone.
-      next.loadout = next.loadout.map((uid) => (uid === command.uid ? null : uid));
-      next.artifactsOwned = next.artifactsOwned.filter((item) => item.uid !== command.uid);
+      // Refuse rather than silently unequipping. Destroying the item you are
+      // currently wearing is the single most expensive misclick available, and
+      // an unequip step is a cheap confirmation that costs nothing to undo.
+      if (next.loadout.includes(command.uid)) return err('unequip it first');
+      next.items = next.items.filter((item) => item.uid !== command.uid);
       events.push({ type: 'itemDiscarded', uid: command.uid });
       break;
     }

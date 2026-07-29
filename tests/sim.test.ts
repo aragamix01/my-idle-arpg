@@ -7,6 +7,7 @@ import {
   AFFIX_LIMITS,
   applyCommand,
   BASES,
+  BASE_AFFIXES,
   BULK_PURCHASE_LIMIT,
   bulkUpgradeCost,
   CLEAR_TIME_BAND_SECONDS,
@@ -14,10 +15,13 @@ import {
   computeOffline,
   createRng,
   deriveStats,
+  DROPS_PER_CLEAR,
   effectiveHp,
   enemyCount,
   enemyHp,
   feedbackExponent,
+  getAffix,
+  getBaseAffix,
   sideExponents,
   newSave,
   OFFLINE_CAP_SECONDS,
@@ -74,7 +78,7 @@ describe('determinism', () => {
       for (let i = 0; i < 12; i++) {
         state = play(state, [{ type: 'attemptStage' }]);
       }
-      return state.artifactsOwned
+      return state.items
         .map((item) => `${item.rarity}:${item.baseId}:${item.affixes.map((a) => `${a.affixId}@${a.tier}`).join('+')}`)
         .join(',');
     };
@@ -145,7 +149,7 @@ describe('command validation', () => {
   it('rejects equipping an artifact the player does not own', () => {
     const result = applyCommand(
       newSave(1, T0),
-      { type: 'equipArtifact', slot: 0, artifactId: 'bloodstone' },
+      { type: 'equipItem', slot: 0, itemId: 'bloodstone' },
       T0,
     );
     expect(result.ok).toBe(false);
@@ -250,16 +254,16 @@ describe('command validation', () => {
 
   it('rejects malformed command payloads at the schema boundary', () => {
     expect(CommandSchema.safeParse({ type: 'buyUpgrade', key: 'nonsense' }).success).toBe(false);
-    expect(CommandSchema.safeParse({ type: 'equipArtifact', slot: 99, artifactId: null }).success).toBe(false);
+    expect(CommandSchema.safeParse({ type: 'equipItem', slot: 99, itemId: null }).success).toBe(false);
     expect(CommandSchema.safeParse({ type: 'attemptStage', extra: 1 }).success).toBe(false);
   });
 
   it('does not let an item occupy two slots', () => {
     const item = rollItem(1, 1, 10);
-    let save: SaveState = { ...newSave(1, T0), artifactsOwned: [item] };
+    let save: SaveState = { ...newSave(1, T0), items: [item] };
     save = play(save, [
-      { type: 'equipArtifact', slot: 0, artifactId: item.uid },
-      { type: 'equipArtifact', slot: 2, artifactId: item.uid },
+      { type: 'equipItem', slot: 0, itemId: item.uid },
+      { type: 'equipItem', slot: 2, itemId: item.uid },
     ]);
     expect(save.loadout.filter((uid) => uid === item.uid)).toHaveLength(1);
     expect(save.loadout[2]).toBe(item.uid);
@@ -295,7 +299,7 @@ describe('content registry', () => {
       };
       const equipped: SaveState = {
         ...base,
-        artifactsOwned: [item],
+        items: [item],
         loadout: [item.uid, null, null, null],
       };
       const outcome = resolveStage(equipped, 45);
@@ -321,7 +325,7 @@ describe('content registry', () => {
       };
       const equipped: SaveState = {
         ...base,
-        artifactsOwned: [item],
+        items: [item],
         loadout: [item.uid, null, null, null],
       };
       const outcome = resolveStage(equipped, 45);
@@ -377,6 +381,31 @@ describe('item rolling', () => {
     }
   });
 
+  it('gives every non-unique its base implicit, within the item level gates', () => {
+    for (let uid = 1; uid < 400; uid++) {
+      const item = rollItem(21, uid, 20);
+      if (item.rarity === 'unique') continue;
+
+      const implicit = getBaseAffix(item.baseId)!;
+      expect(item.baseAffix, `${item.baseId} rolled without an implicit`).toBeDefined();
+      expect(item.baseAffix!.affixId).toBe(implicit.id);
+      // Same gate rule as rolled affixes: a stage-20 item cannot carry a
+      // tier that unlocks at 40.
+      expect(implicit.tiers[item.baseAffix!.tier].minStage).toBeLessThanOrEqual(20);
+    }
+  });
+
+  it('lets the base implicit reach every tier its level allows', () => {
+    // A base whose implicit always rolls the same tier is a fixed bonus wearing
+    // a tier badge, and picking between two of the same base stops mattering.
+    const tiers = new Set(
+      Array.from({ length: 600 }, (_, i) => rollItem(31, i + 1, 200))
+        .filter((item) => item.baseId === 'whetstone' && item.baseAffix)
+        .map((item) => item.baseAffix!.tier),
+    );
+    expect(tiers.size).toBeGreaterThan(1);
+  });
+
   it('gives uniques fixed effects and no affixes', () => {
     const uniques = Array.from({ length: 600 }, (_, i) => rollItem(3, i + 1, 60)).filter(
       (item) => item.rarity === 'unique',
@@ -393,7 +422,7 @@ describe('rerolling', () => {
   const richSave = (item: ReturnType<typeof rollItem>): SaveState => ({
     ...newSave(5, T0),
     gold: 1e12,
-    artifactsOwned: [item],
+    items: [item],
   });
 
   const rollableItem = () => {
@@ -413,12 +442,29 @@ describe('rerolling', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const after = result.value.state.artifactsOwned[0];
+    const after = result.value.state.items[0];
     expect(after.rarity).toBe(item.rarity);
     expect(after.baseId).toBe(item.baseId);
     expect(after.itemLevel).toBe(item.itemLevel);
     expect(after.rerolls).toBe(1);
     expect(result.value.state.gold).toBe(save.gold - cost);
+  });
+
+  it('leaves the base implicit untouched', () => {
+    // The implicit is the guaranteed half of an item. A reroll that could
+    // improve it would collapse base choice into "reroll until it is good",
+    // which is exactly what it exists to prevent.
+    const item = rollableItem();
+    expect(item.baseAffix).toBeDefined();
+
+    let save = richSave(item);
+    for (let i = 0; i < 5; i++) {
+      const result = applyCommand(save, { type: 'rerollItem', uid: item.uid }, T0);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      save = result.value.state;
+      expect(save.items[0].baseAffix).toEqual(item.baseAffix);
+    }
   });
 
   it('gets more expensive each time', () => {
@@ -431,7 +477,7 @@ describe('rerolling', () => {
 
   it('refuses a reroll that cannot be afforded', () => {
     const item = rollableItem();
-    const save: SaveState = { ...newSave(5, T0), gold: 0, artifactsOwned: [item] };
+    const save: SaveState = { ...newSave(5, T0), gold: 0, items: [item] };
     expect(applyCommand(save, { type: 'rerollItem', uid: item.uid }, T0).ok).toBe(false);
   });
 
@@ -451,27 +497,65 @@ describe('inventory', () => {
       ...newSave(1, T0),
       bestStage: 0,
       currentStage: 1,
-      artifactsOwned: Array.from({ length: INVENTORY_CAP }, (_, i) => rollItem(1, i + 1, 5)),
+      items: Array.from({ length: INVENTORY_CAP }, (_, i) => rollItem(1, i + 1, 5)),
       nextItemId: INVENTORY_CAP + 1,
     };
     const result = applyCommand(full, { type: 'attemptStage' }, T0);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.value.state.artifactsOwned).toHaveLength(INVENTORY_CAP);
-    expect(result.value.events.map((e) => e.type)).toContain('inventoryFull');
+    expect(result.value.state.items).toHaveLength(INVENTORY_CAP);
+    const full_ = result.value.events.find((e) => e.type === 'inventoryFull');
+    expect(full_).toBeDefined();
+    // The event has to say how much was lost, or a player who cleared with one
+    // free slot and a three-item drop has no way to know two vanished.
+    expect(full_ && full_.type === 'inventoryFull' && full_.lost).toBeGreaterThan(0);
   });
 
-  it('unequips an item when it is discarded', () => {
-    // A loadout pointing at a discarded item would silently apply nothing.
+  it('advances the uid counter for drops the inventory could not take', () => {
+    // Reusing a uid after a lost drop would make the replacement item roll
+    // identically to the one that fell on the floor.
+    const full: SaveState = {
+      ...newSave(1, T0),
+      items: Array.from({ length: INVENTORY_CAP }, (_, i) => rollItem(1, i + 1, 5)),
+      nextItemId: INVENTORY_CAP + 1,
+    };
+    const result = applyCommand(full, { type: 'attemptStage' }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.state.nextItemId).toBeGreaterThan(full.nextItemId);
+  });
+
+  it('drops between one and three items on a clear', () => {
+    const counts = new Set<number>();
+    for (let seed = 1; seed <= 40; seed++) {
+      const result = applyCommand(newSave(seed, T0), { type: 'attemptStage' }, T0);
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      const dropped = result.value.events.filter((e) => e.type === 'itemDropped').length;
+      expect(dropped).toBeGreaterThanOrEqual(DROPS_PER_CLEAR.min);
+      expect(dropped).toBeLessThanOrEqual(DROPS_PER_CLEAR.max);
+      counts.add(dropped);
+    }
+    // A range that only ever produces one value is not a range.
+    expect(counts.size).toBeGreaterThan(1);
+  });
+
+  it('refuses to discard an equipped item', () => {
+    // Destroying what you are currently wearing is the most expensive misclick
+    // available, and an unequip step costs nothing to undo.
     const item = rollItem(2, 1, 10);
-    let save: SaveState = { ...newSave(2, T0), artifactsOwned: [item] };
-    save = play(save, [
-      { type: 'equipArtifact', slot: 1, artifactId: item.uid },
+    const save: SaveState = { ...newSave(2, T0), items: [item] };
+    const equipped = play(save, [{ type: 'equipItem', slot: 1, itemId: item.uid }]);
+
+    const refused = applyCommand(equipped, { type: 'discardItem', uid: item.uid }, T0);
+    expect(refused.ok).toBe(false);
+
+    const after = play(equipped, [
+      { type: 'equipItem', slot: 1, itemId: null },
       { type: 'discardItem', uid: item.uid },
     ]);
-    expect(save.artifactsOwned).toHaveLength(0);
-    expect(save.loadout.every((uid) => uid === null)).toBe(true);
+    expect(after.items).toHaveLength(0);
   });
 });
 
@@ -479,70 +563,128 @@ describe('power budget', () => {
   const CTX = { stage: 100, isBoss: false, enemyHpFraction: 1 };
   const base: SaveState = { ...newSave(1, T0), bestStage: 100, currentStage: 100 };
 
-  /** Four rares, every affix at its best tier. */
-  const loadoutOf = (prefixes: string[], suffixes: string[]): SaveState => {
+  const topRoll = (id: string) => {
+    const affix = getAffix(id)!;
+    const top = affix.tiers.length - 1;
+    return { affixId: id, tier: top, value: affix.tiers[top].value };
+  };
+
+  /** Four rares on the same base, every affix and implicit at its best tier. */
+  const loadoutOf = (baseId: string, prefixes: string[], suffixes: string[]): SaveState => {
+    const implicit = BASE_AFFIXES[baseId];
     const items = [0, 1, 2, 3].map((i) => ({
       uid: `best-${i}`,
-      baseId: 'whetstone',
+      baseId,
       rarity: 'rare' as const,
       itemLevel: 100,
       rerolls: 0,
-      affixes: [...prefixes, ...suffixes].map((id) => {
-        const affix = AFFIXES.find((a) => a.id === id)!;
-        const top = affix.tiers.length - 1;
-        return { affixId: id, tier: top, value: affix.tiers[top].value };
-      }),
+      affixes: [...prefixes, ...suffixes].map(topRoll),
+      baseAffix: topRoll(implicit.id),
     }));
-    return { ...base, artifactsOwned: items, loadout: items.map((i) => i.uid) };
+    return { ...base, items, loadout: items.map((i) => i.uid) };
   };
 
-  it('a best-in-slot loadout is worth roughly 4x total power', () => {
-    // The decision that forced the harness to model equipping. Measured as
-    // offence x defence, because that is what "total power" means for a build
-    // that has to both kill and survive.
-    const offensive = loadoutOf(['brutal', 'sweeping'], ['of-haste', 'of-precision']);
-    const defensive = loadoutOf(['vital', 'armoured'], ['of-ruin', 'of-avarice']);
+  // The best offensive and defensive builds a player could assemble from drops
+  // alone: best affixes, best tiers, and the base whose implicit matches.
+  const offensive = () => loadoutOf('whetstone', ['brutal', 'sweeping'], ['of-haste', 'of-precision']);
+  const defensive = () => loadoutOf('charm', ['vital', 'armoured'], ['of-ruin', 'of-avarice']);
 
-    const dpsRatio = statsDps(deriveStats(offensive, CTX)) / statsDps(deriveStats(base, CTX));
-    const ehpRatio = effectiveHp(deriveStats(defensive, CTX)) / effectiveHp(deriveStats(base, CTX));
+  const dpsRatio = (save: SaveState) =>
+    statsDps(deriveStats(save, CTX)) / statsDps(deriveStats(base, CTX));
+  const ehpRatio = (save: SaveState) =>
+    effectiveHp(deriveStats(save, CTX)) / effectiveHp(deriveStats(base, CTX));
 
-    expect(dpsRatio * ehpRatio).toBeGreaterThan(3.5);
-    expect(dpsRatio * ehpRatio).toBeLessThan(4.8);
+  it('a best-in-slot loadout from drops alone is worth roughly 5.7x total power', () => {
+    // Measured as offence x defence, because that is what "total power" means
+    // for a build that has to both kill and survive.
+    //
+    // This is the DROP ceiling. The agreed overall ceiling is ~8x, and the
+    // headroom between the two is what the extra affix row spirits grant is
+    // allowed to occupy - it is not spare budget for bigger affixes.
+    const total = dpsRatio(offensive()) * ehpRatio(defensive());
+    expect(total).toBeGreaterThan(5.0);
+    expect(total).toBeLessThan(6.5);
   });
 
   it('does not put the whole budget on damage', () => {
     // Clear time holds steady only while offence and defence grow together.
     // The first cut of the affix pool loaded everything onto DPS and the
     // harness caught it: stage 222 resolved in 11.9s against a 20s floor.
-    const offensive = loadoutOf(['brutal', 'sweeping'], ['of-haste', 'of-precision']);
-    const dpsRatio = statsDps(deriveStats(offensive, CTX)) / statsDps(deriveStats(base, CTX));
-    expect(dpsRatio).toBeLessThan(2.5);
+    expect(dpsRatio(offensive())).toBeLessThan(2.6);
+  });
+
+  it('grows offence and defence at matching rates', () => {
+    // The absolute ceiling above cannot tell 2.4/2.4 from 3.4/1.7 - both are
+    // 5.7x. This is the check that actually encodes the invariant, and it is
+    // the one to read first when clear times move.
+    const offence = dpsRatio(offensive());
+    const defence = ehpRatio(defensive());
+    expect(Math.abs(Math.log(offence / defence))).toBeLessThan(0.15);
+  });
+
+  it('gives the base implicit about a sixth of an item, not a third', () => {
+    // Implicits are guaranteed, so an oversized one makes the rolled half
+    // decorative. A first pass at 1.075/item put the drop ceiling at 8.8x on
+    // its own - the entire budget, spent before currency existed.
+    const withImplicit = dpsRatio(offensive());
+    const withoutImplicit = dpsRatio({
+      ...offensive(),
+      items: offensive().items.map((item) => ({ ...item, baseAffix: undefined })),
+    });
+    const contribution = withImplicit / withoutImplicit;
+    expect(contribution).toBeGreaterThan(1.1);
+    expect(contribution).toBeLessThan(1.25);
   });
 });
 
 describe('migration', () => {
-  it('clears artifacts from an older save and keeps everything else', () => {
+  const progress = { gold: 12345, bestStage: 40, currentStage: 41 };
+
+  it('clears v1 artifacts, which were bare ids, and keeps everything else', () => {
     const legacy = {
       ...newSave(1, T0),
+      ...progress,
       contentVersion: 1,
-      gold: 12345,
-      bestStage: 40,
-      currentStage: 41,
       upgrades: { ...newSave(1, T0).upgrades, damage: 30 },
-      // The old shape: plain ids, which the new code cannot read.
-      artifactsOwned: ['whetstone', 'bloodstone'] as unknown as SaveState['artifactsOwned'],
+      // The v1 shape: plain ids under the old field name, which no amount of
+      // renaming makes readable.
+      artifactsOwned: ['whetstone', 'bloodstone'],
       loadout: ['whetstone', null, null, null],
-    } as SaveState;
+    } as unknown as SaveState;
 
     const { state, migrated } = migrateSave(legacy);
 
     expect(migrated).toBe(true);
-    expect(state.artifactsOwned).toEqual([]);
+    expect(state.items).toEqual([]);
     expect(state.loadout).toEqual([null, null, null, null]);
     expect(state.nextItemId).toBe(1);
     expect(state.gold).toBe(12345);
     expect(state.bestStage).toBe(40);
     expect(state.upgrades.damage).toBe(30);
+  });
+
+  it('carries v2 items across without destroying them', () => {
+    // v2 shipped a wipe. Wiping again one release later would teach players
+    // that progress here is disposable, so v2 -> v3 is a rename plus an added
+    // optional field and nothing else.
+    const rolled = [rollItem(9, 1, 30), rollItem(9, 2, 30)];
+    const v2 = {
+      ...newSave(9, T0),
+      ...progress,
+      contentVersion: 2,
+      artifactsOwned: rolled,
+      loadout: [rolled[0].uid, null, null, null],
+      nextItemId: 3,
+    } as unknown as SaveState;
+
+    const { state, migrated } = migrateSave(v2);
+
+    expect(migrated).toBe(true);
+    expect(state.items).toEqual(rolled);
+    expect(state.loadout[0]).toBe(rolled[0].uid);
+    expect(state.nextItemId).toBe(3);
+    expect(state.gold).toBe(12345);
+    expect((state as unknown as Record<string, unknown>).artifactsOwned).toBeUndefined();
   });
 
   it('leaves a current save alone', () => {

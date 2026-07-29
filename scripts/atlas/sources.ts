@@ -62,14 +62,14 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     // duplicate-tile test would reject sharing it.
     'weapon.sword': 104,
 
-    'artifact.whetstone': 102,
-    'artifact.quickdraw_glove': 103,
-    'artifact.coin_purse': 89,
-    'artifact.executioners_mark': 119,
-    'artifact.giant_slayer': 106,
-    'artifact.swarm_lens': 130,
-    'artifact.bloodstone': 115,
-    'artifact.deep_delvers_idol': 129,
+    'item.whetstone': 102,
+    'item.quickdraw_glove': 103,
+    'item.coin_purse': 89,
+    'item.executioners_mark': 119,
+    'item.giant_slayer': 106,
+    'item.swarm_lens': 130,
+    'item.bloodstone': 115,
+    'item.deep_delvers_idol': 129,
   },
 };
 

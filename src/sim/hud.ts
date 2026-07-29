@@ -33,7 +33,7 @@ export interface HudSnapshot {
   pendingOfflineGold: number;
   offlineCapReached: boolean;
   loadout: (string | null)[];
-  artifactsOwned: ItemInstance[];
+  items: ItemInstance[];
   /** Cap included so the panel can show capacity without importing curves. */
   inventoryCap: number;
 }
@@ -68,7 +68,7 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     pendingOfflineGold: offline.goldEarned,
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
-    artifactsOwned: save.artifactsOwned,
+    items: save.items,
     inventoryCap: INVENTORY_CAP,
   };
 }

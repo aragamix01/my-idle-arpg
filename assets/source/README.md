@@ -13,7 +13,7 @@ nothing but frames.
 
 Nothing in this folder is loaded at runtime. `pnpm atlas` packs it into
 `public/atlas/`, and the game only ever references logical sprite IDs
-(`enemy.skeleton`, `artifact.bloodstone`) which resolve through the sprite map.
+(`enemy.skeleton`, `item.bloodstone`) which resolve through the sprite map.
 That indirection is what lets the art source change without touching game code.
 
 ## Layout

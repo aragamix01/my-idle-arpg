@@ -287,6 +287,56 @@ test('the character panel shows every stat and the empty inventory', async ({ pa
   await expect(panel).toBeHidden();
 });
 
+test('the inventory grid selects, filters and sorts', async ({ page }) => {
+  await page.goto('/');
+
+  // Two clears, which is what a fresh save can manage before it needs
+  // upgrades. Even at the minimum of one drop each that is enough items for
+  // the grid to be a grid.
+  for (const stage of [1, 2]) {
+    await page.getByRole('button', { name: /Attempt stage/ }).click();
+    await expect(page.getByText(new RegExp(`cleared stage ${stage}`))).toBeVisible({
+      timeout: REPLAY_TIMEOUT,
+    });
+  }
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+
+  const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
+  const total = await tiles.count();
+  expect(total).toBeGreaterThanOrEqual(2);
+
+  // Nothing is selected until the player picks something - the detail pane is
+  // the only place affixes are readable, so this is the core interaction.
+  await expect(panel.getByText(/Select an item to inspect/)).toBeVisible();
+  await tiles.first().click();
+  await expect(panel.getByText(/Select an item to inspect/)).toHaveCount(0);
+
+  // Equipping from the detail pane must reach the sim, not just the pane.
+  await expect(panel.getByText('Equipped (0/4)')).toBeVisible();
+  await panel.getByRole('button', { name: 'Equip', exact: true }).click();
+  await expect(panel.getByText('Equipped (1/4)')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Unequip', exact: true })).toBeVisible();
+
+  // A filter matching nothing must empty the grid rather than be ignored. Two
+  // early clears essentially never produce a unique.
+  await panel.getByRole('button', { name: 'Unique', exact: true }).click();
+  await expect(tiles).toHaveCount(0);
+  await expect(panel.getByText(/Nothing matches this filter/)).toBeVisible();
+
+  await panel.getByRole('button', { name: 'Unique', exact: true }).click();
+  await expect(tiles).toHaveCount(total);
+
+  // Sorting reorders rather than dropping anything.
+  await panel.getByLabel('Sort').selectOption('rarity');
+  await expect(tiles).toHaveCount(total);
+
+  await expect(panel.getByText('undefined')).toHaveCount(0);
+  await expect(panel.getByText('NaN')).toHaveCount(0);
+});
+
 test('progress survives a reload', async ({ page }) => {
   await page.goto('/');
 

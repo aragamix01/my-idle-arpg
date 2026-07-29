@@ -8,7 +8,7 @@
  * CSS background: the whole sheet scaled up, offset so the wanted cell lands in
  * the box.
  *
- * The manifest is fetched once per page and shared, so twenty artifact icons
+ * The manifest is fetched once per page and shared, so twenty item icons
  * cost one request between them.
  */
 

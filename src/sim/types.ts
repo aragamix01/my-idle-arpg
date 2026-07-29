@@ -42,18 +42,20 @@ export const UPGRADE_KEYS = [
 export type UpgradeKey = (typeof UPGRADE_KEYS)[number];
 export type UpgradeLevels = Record<UpgradeKey, number>;
 
-/** Number of artifact slots the player can equip at once. */
-export const ARTIFACT_SLOTS = 4;
+/** Number of item slots the player can equip at once. */
+export const ITEM_SLOTS = 4;
 
 /**
  * Inventory size.
  *
- * Every clear now drops an item, so without a cap the save blob grows without
- * bound - and it is read and written on every single command. A full inventory
- * refuses new drops rather than discarding silently, because deciding what to
- * throw away is the interesting part.
+ * Every clear drops one to three items, so without a cap the save blob grows
+ * without bound - and it is read and written on every single command. At 100
+ * items the blob is roughly 20KB, which is the reason this is not higher.
+ *
+ * A full inventory refuses new drops rather than discarding silently, because
+ * deciding what to throw away is the interesting part.
  */
-export const INVENTORY_CAP = 40;
+export const INVENTORY_CAP = 100;
 
 /**
  * Authoritative player state. The server owns this; the client holds a cache
@@ -74,7 +76,7 @@ export interface SaveState {
   currentStage: number;
   upgrades: UpgradeLevels;
   /** Rolled item instances. Bounded by INVENTORY_CAP. */
-  artifactsOwned: ItemInstance[];
+  items: ItemInstance[];
   /** Fixed-length; holds item uids. null = empty slot. */
   loadout: (string | null)[];
   /**

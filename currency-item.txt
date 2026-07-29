@@ -1,0 +1,52 @@
+#Phase1
+Crafting item & new gameplay dungeon
+- Each stage can drop multiple items random between 1 to 3
+- increase inventory item to 100 with sorting and filtering / also improve ui i don't need to scroll so far
+- add a new currency that drop from new mechanic
+currency
+	basic
+	- sacred idol -> next reroll will roll only prefix
+	- dark idol -> next reroll will roll only suffix
+	- magic ore -> upgrade common item to magic item and add suffix
+	- rare ore -> upgrade magic to rare item and add 1 prefix/ 1 suffix
+	- angel flame -> reroll tier of each prefix/suffix not change the stats just roll number tier
+	- angel droplet -> randomly upgrade common item to unique item or destroy it? (success rate around 10%)
+
+	spirit
+	> spirit currency are can use one on item not valid with other spirit that applied before. if use bishop spirit it mean item have 1 prefix with 3 suffix
+	- bishop spirit -> can use only on rare item. remove 1 prefix and add suffix row can use once per item. mark spirit modifier 1/1 can not use with all spirit item
+	- devil spirit -> can use only on rare item. remove 1 suffix and add prefix row can use once per item. mark spirit modifier 1/1 can not use with all spirit item
+	- dune spirit -> can use only on rare item. remove (0 - 1) suffix or prefix and + 1 prefix or suffix row. can use once per item. mark spirit modifier 1/1 can not use with all spirit item
+
+	flagment
+	> fragment are not drop from boss dungeon but drop from stage boss randomly 0-3 flagment
+	> fragment also can obtain from dissemble item also change discard to dissemble (common item -> magic ore flagment, magic item -> rare ore flagment, rare item -> angel flame flagment, unique item -> angel droplet flagment)
+	- magic ore flagment -> collect this 10ea to combie to magic ore
+	- rare ore flagment -> collect this 10ea to combine to rare ore
+	- angel flame flagment -> collect this 10ea to combine to angel flame
+	- angel droplet flagment -> collect this 10ea to combine to angel droplet
+
+- new mechanic from above is dungeon fighting. it a boss fight with guarantee drop item above with scaling boss stats random drop from 1 to 2 currency
+- spirit currency are much rarer compare to other currency
+- dungeon have boss with scaling power and need key to attempt
+- key drop from normal wave boss random drop around 20% (u decide)
+- new currency can see in inventory (fix slot like currency stash tab on POE) and can click to activate and use gold to reroll
+- create new reroll modal with list of currency that can click to activate after user click reroll in inventory
+- move character button away from other stats and make it easy to see with new style button and add some icon
+- make unable to discard equip item / add confirmation of dissemble rare/unique item
+- add base affix of each item that can not roll with gold
+- rename artifact to item (if it still artifact)
+
+
+
+#Phase2
+New uniqe item
+- new unique items think the naming for me below are base affix and it special mechanic
+	- area + (0.25 - 2) / while equip this add 1-3 slot of equip item
+	- attack + (2% - 10%) / while equip this u have no crit chance but attack * (150% - 300%)
+	- attack + (2% - 10%) / while equip this area is 0 and attack speed * (150% - 300%)
+	- crit rate - (30% - 50%) / while equip this crit damage multiple (3 - 5) times
+	- gold drop - (30% - 60%) / while equip this item key drop from stage boss are twice
+	- gold drop - (30% - 60%) / whike equip this item each currency drop from dungeon boss are twice
+	- equip item slot - (1-2) / effect of other equip item is * (200% - 500%)
+- if u have any idea just add it. one rule unique item may have downside stats then have fantasy stats following

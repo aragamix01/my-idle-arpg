@@ -10,13 +10,14 @@
  * needs a matching step in src/sim/migrate.ts.
  */
 
-import { AFFIXES } from './affixes';
-import { BASES } from './bases';
+import { AFFIXES, IMPLICIT_AFFIXES } from './affixes';
+import { BASE_AFFIXES, BASES } from './bases';
 import { UNIQUES } from './uniques';
 import { EffectSchema, UniqueSchema } from './schema';
 
 /** 2: artifacts became rolled item instances with prefixes and suffixes. */
-export const CONTENT_VERSION = 2;
+/** 3: bases carry implicits, drops come in threes, and "artifact" became "item". */
+export const CONTENT_VERSION = 3;
 
 export * from './schema';
 export * from './affixes';
@@ -34,7 +35,9 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
   const errors: string[] = [];
 
   const seenAffix = new Set<string>();
-  for (const affix of AFFIXES) {
+  // Implicits go through the identical checks - they share the definition
+  // shape precisely so they cannot drift into a second, unvalidated format.
+  for (const affix of [...AFFIXES, ...IMPLICIT_AFFIXES]) {
     if (seenAffix.has(affix.id)) errors.push(`duplicate affix id: ${affix.id}`);
     seenAffix.add(affix.id);
 
@@ -65,6 +68,9 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
   for (const base of BASES) {
     if (seenBase.has(base.id)) errors.push(`duplicate base id: ${base.id}`);
     seenBase.add(base.id);
+    // A base with no implicit is strictly worse than every other base, which
+    // makes it dead content rather than a choice.
+    if (!BASE_AFFIXES[base.id]) errors.push(`${base.id}: no implicit affix`);
   }
 
   const seenUnique = new Set<string>();

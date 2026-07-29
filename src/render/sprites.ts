@@ -29,15 +29,15 @@ export const SPRITE_IDS = [
   'player.knight',
   'weapon.sword',
 
-  // Artifacts - must stay in step with src/sim/content/artifacts.ts.
-  'artifact.whetstone',
-  'artifact.quickdraw_glove',
-  'artifact.coin_purse',
-  'artifact.executioners_mark',
-  'artifact.giant_slayer',
-  'artifact.swarm_lens',
-  'artifact.bloodstone',
-  'artifact.deep_delvers_idol',
+  // Items - must stay in step with src/sim/content/bases.ts and uniques.ts.
+  'item.whetstone',
+  'item.quickdraw_glove',
+  'item.coin_purse',
+  'item.executioners_mark',
+  'item.giant_slayer',
+  'item.swarm_lens',
+  'item.bloodstone',
+  'item.deep_delvers_idol',
 ] as const;
 
 export type SpriteId = (typeof SPRITE_IDS)[number];
