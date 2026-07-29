@@ -42,6 +42,43 @@ export interface VisualOptions {
   height: number;
 }
 
+/**
+ * A stage attempt being replayed.
+ *
+ * resolveStage already decided every number here before the first frame drew.
+ * This walks the clock through that verdict - it cannot change the outcome, and
+ * the player watching has no influence over it. That is the price of the same
+ * rules running offline on a server with nobody watching at all.
+ */
+export interface AttemptPlayback {
+  active: boolean;
+  phase: 'trash' | 'boss' | 'finished';
+  /** Seconds into the attempt. */
+  elapsed: number;
+  /** Total the replay will run for - the truncated survival time on a failure. */
+  duration: number;
+  trashSeconds: number;
+  bossSeconds: number;
+  /** 1 at full health, 0 at empty. Clamped, so a lethal run bottoms out at 0. */
+  playerHp: number;
+  /** 1 when the boss spawns, 0 when it dies. Meaningless before the boss phase. */
+  bossHp: number;
+  stage: number;
+  cleared: boolean;
+  failure: 'none' | 'died' | 'timeout';
+}
+
+/** What the replay needs from resolveStage. Structural, so the sim stays unimported here. */
+export interface AttemptOutcome {
+  cleared: boolean;
+  failure: 'none' | 'died' | 'timeout';
+  seconds: number;
+  trashPhaseSeconds: number;
+  bossPhaseSeconds: number;
+  trashDamageFraction: number;
+  bossDamageFraction: number;
+}
+
 /** A sword sweep. Purely presentational - it never decides who dies. */
 export interface Swing {
   active: boolean;
@@ -79,13 +116,44 @@ const MAX_VISUAL_SWINGS_PER_SECOND = 7;
 /** Fraction of the interval the blade is mid-sweep; the rest is wind-up. */
 const SWING_DUTY = 0.55;
 
+/**
+ * How many simulated seconds a replay plays per real second.
+ *
+ * Attempts run 20-75 simulated seconds and the balance harness needs anywhere
+ * from 3 to 40 of them per stage. Played at 1x that is half an hour of watching
+ * to clear one stage, which is not a game.
+ *
+ * Only the playback is compressed. Elapsed time, the countdown, and the health
+ * bars are all reported in simulated seconds, so the numbers on screen stay the
+ * ones the sim actually produced.
+ */
+export const PLAYBACK_SPEED = 6;
+
 export class StageVisual {
   readonly enemies: CosmeticEnemy[] = [];
   readonly floaters: Floater[] = [];
   player = { x: 0, y: 0 };
   readonly swing: Swing = { active: false, aim: 0, progress: 0 };
 
+  readonly attempt: AttemptPlayback = {
+    active: false,
+    phase: 'finished',
+    elapsed: 0,
+    duration: 0,
+    trashSeconds: 0,
+    bossSeconds: 0,
+    playerHp: 1,
+    bossHp: 1,
+    stage: 1,
+    cleared: false,
+    failure: 'none',
+  };
+
+  /** The boss, alive only during the boss phase. */
+  boss = { x: 0, y: 0, alive: false };
+
   private swingClock = 0;
+  private outcome: AttemptOutcome | null = null;
 
   private options: VisualOptions;
   private killCredit = 0;
@@ -105,6 +173,103 @@ export class StageVisual {
 
   setOptions(options: VisualOptions) {
     this.options = options;
+  }
+
+  /** Begin replaying a resolved attempt. Ignored while one is already running. */
+  startAttempt(outcome: AttemptOutcome, stage: number) {
+    if (this.attempt.active) return;
+
+    // A failure ends when the player died, not when the fight would have. The
+    // boss slice of the replay shrinks to whatever was survived.
+    const duration = outcome.cleared
+      ? outcome.trashPhaseSeconds + outcome.bossPhaseSeconds
+      : Math.max(0.6, outcome.seconds);
+
+    this.outcome = outcome;
+    Object.assign(this.attempt, {
+      active: true,
+      phase: 'trash' as const,
+      elapsed: 0,
+      duration,
+      trashSeconds: Math.min(outcome.trashPhaseSeconds, duration),
+      bossSeconds: Math.max(0, duration - Math.min(outcome.trashPhaseSeconds, duration)),
+      playerHp: 1,
+      bossHp: 1,
+      stage,
+      cleared: outcome.cleared,
+      failure: outcome.failure,
+    });
+    this.boss.alive = false;
+  }
+
+  /** Clear a finished replay so the idle view resumes. */
+  endAttempt() {
+    this.attempt.active = false;
+    this.attempt.phase = 'finished';
+    this.boss.alive = false;
+    this.outcome = null;
+  }
+
+  private updateAttempt(dt: number) {
+    const a = this.attempt;
+    if (!a.active || !this.outcome) return;
+
+    // elapsed is in simulated seconds; dt is real. This is the only place the
+    // two are related.
+    a.elapsed = Math.min(a.duration, a.elapsed + dt * PLAYBACK_SPEED);
+    const inBoss = a.elapsed >= a.trashSeconds && a.bossSeconds > 0;
+    a.phase = inBoss ? 'boss' : 'trash';
+
+    // Health drains at each phase's own rate rather than an average, which is
+    // what makes a boss-phase death look like a boss-phase death.
+    const trashProgress = a.trashSeconds > 0 ? Math.min(1, a.elapsed / a.trashSeconds) : 1;
+    const bossProgress =
+      a.bossSeconds > 0 ? Math.min(1, Math.max(0, a.elapsed - a.trashSeconds) / a.bossSeconds) : 0;
+
+    const taken =
+      this.outcome.trashDamageFraction * trashProgress +
+      this.outcome.bossDamageFraction * bossProgress;
+    a.playerHp = Math.max(0, 1 - taken);
+    a.bossHp = inBoss ? Math.max(0, 1 - bossProgress) : 1;
+
+    if (inBoss && !this.boss.alive) {
+      this.boss.alive = true;
+      this.boss.x = this.options.width / 2;
+      this.boss.y = this.options.height * 0.32;
+    }
+    if (!inBoss) this.boss.alive = false;
+
+    if (a.elapsed >= a.duration) {
+      a.phase = 'finished';
+      a.active = false;
+      this.boss.alive = false;
+    }
+  }
+
+  /** Seconds remaining before the stage timer expires. */
+  timeRemaining(limitSeconds: number): number {
+    return Math.max(0, limitSeconds - this.attempt.elapsed);
+  }
+
+  /**
+   * Kills per second for the current mode.
+   *
+   * Idle farming uses the sim's rate directly. An attempt has to clear a finite
+   * wave in exactly trashPhaseSeconds, so the rate is derived from what is
+   * actually on screen - otherwise the field empties early and the player
+   * watches nothing, or is still full when the boss arrives.
+   */
+  private effectiveKillRate(living: number): number {
+    const a = this.attempt;
+    if (!a.active) return this.options.killsPerSecond;
+    // The boss phase is a duel; remaining stragglers stop dying so the boss is
+    // unambiguously the thing being fought.
+    if (a.phase !== 'trash') return 0;
+    // trashSeconds is simulated; the caller multiplies by a real dt. Without
+    // the speed factor the wave would only be a sixth cleared when the boss
+    // arrives.
+    const remaining = Math.max(0.2, a.trashSeconds - a.elapsed);
+    return (living / remaining) * PLAYBACK_SPEED;
   }
 
   /** Local PRNG so the visual never reaches for Math.random either. */
@@ -191,23 +356,28 @@ export class StageVisual {
       if (Math.abs(dx) > 4) enemy.facing = dx < 0 ? -1 : 1;
     }
 
-    // Keep the field populated. Density is pure spectacle; it has no effect on
-    // the kill rate, which comes from the abstract layer.
-    const target = Math.min(MAX_ENEMIES, 90 + Math.floor(killsPerSecond * 4));
-    for (const enemy of this.enemies) {
-      if (living >= target) break;
-      if (!enemy.alive) {
-        this.spawn(enemy, !this.seeded);
-        living++;
+    this.updateAttempt(dt);
+
+    // During an attempt the wave is finite: it has to visibly empty as the
+    // trash phase runs out, so nothing respawns. Idle farming is endless and
+    // keeps the field full.
+    if (!this.attempt.active) {
+      const target = Math.min(MAX_ENEMIES, 90 + Math.floor(killsPerSecond * 4));
+      for (const enemy of this.enemies) {
+        if (living >= target) break;
+        if (!enemy.alive) {
+          this.spawn(enemy, !this.seeded);
+          living++;
+        }
       }
+      this.seeded = true;
     }
-    this.seeded = true;
 
     this.updateSwing(dt);
 
     // Kills are paid out of a fractional budget, so a rate of 0.3/s produces one
     // kill every ~3s rather than rounding to zero and freezing the screen.
-    this.killCredit += killsPerSecond * dt;
+    this.killCredit += this.effectiveKillRate(living) * dt;
     while (this.killCredit >= 1) {
       // Prefer something inside the sword's arc so the swing looks like the
       // cause. It is not - the abstract layer already decided the rate - but

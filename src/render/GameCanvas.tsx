@@ -11,22 +11,66 @@
 
 import { useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Sprite, Text } from 'pixi.js';
-import { StageVisual } from './cosmetic';
+import { StageVisual, type AttemptOutcome } from './cosmetic';
 import { loadAtlas, type Atlas } from './atlas';
+import type { SpriteId } from './sprites';
+
+/** A replay request. A new `id` starts one; the same id is ignored. */
+export interface AttemptRequest {
+  id: number;
+  stage: number;
+  outcome: AttemptOutcome;
+}
 
 interface Props {
   killsPerSecond: number;
   hitSize: number;
   attacksPerSecond: number;
   stage: number;
+  stageTimeLimit: number;
+  attempt: AttemptRequest | null;
+  /** Fired once when a replay reaches its end. */
+  onAttemptComplete: () => void;
 }
 
 const FLOATER_POOL = 40;
 const MAX_SPRITES = 240;
 /** 16px source art needs scaling up; this keeps it on whole pixels. */
 const SPRITE_SCALE = 2;
+/** Bosses are the same 16px art at a larger whole-number scale. */
+const BOSS_SCALE = 6;
+const BOSS_BAR_WIDTH = 150;
 
-export function GameCanvas({ killsPerSecond, hitSize, attacksPerSecond, stage }: Props) {
+/** Alternates the two boss sprites so consecutive stages do not repeat. */
+function bossSpriteForStage(stage: number): SpriteId {
+  return stage % 2 === 0 ? 'boss.warlock' : 'boss.brute';
+}
+
+/** Health bar: dark backing, coloured fill, drawn straight into a Graphics. */
+function drawBar(
+  g: Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  fraction: number,
+  color: number,
+) {
+  const clamped = Math.max(0, Math.min(1, fraction));
+  g.rect(x - 1, y - 1, width + 2, height + 2).fill({ color: 0x000000, alpha: 0.55 });
+  g.rect(x, y, width, height).fill({ color: 0x27272a });
+  if (clamped > 0) g.rect(x, y, width * clamped, height).fill({ color });
+}
+
+export function GameCanvas({
+  killsPerSecond,
+  hitSize,
+  attacksPerSecond,
+  stage,
+  stageTimeLimit,
+  attempt,
+  onAttemptComplete,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   // Latest sim numbers, read by the ticker without re-running the mount effect.
@@ -37,6 +81,17 @@ export function GameCanvas({ killsPerSecond, hitSize, attacksPerSecond, stage }:
   useEffect(() => {
     optionsRef.current = { killsPerSecond, hitSize, attacksPerSecond, stage };
   }, [killsPerSecond, hitSize, attacksPerSecond, stage]);
+
+  // The ticker is created once, so anything React changes later has to reach it
+  // through a ref rather than through the closure it captured.
+  const attemptRef = useRef<AttemptRequest | null>(attempt);
+  const completeRef = useRef(onAttemptComplete);
+  const limitRef = useRef(stageTimeLimit);
+  useEffect(() => {
+    attemptRef.current = attempt;
+    completeRef.current = onAttemptComplete;
+    limitRef.current = stageTimeLimit;
+  }, [attempt, onAttemptComplete, stageTimeLimit]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -127,6 +182,20 @@ export function GameCanvas({ killsPerSecond, hitSize, attacksPerSecond, stage }:
       swordSprite.visible = false;
       spriteLayer.addChild(swordSprite);
 
+      const bossSprite = new Sprite();
+      bossSprite.anchor.set(0.5);
+      bossSprite.visible = false;
+      spriteLayer.addChild(bossSprite);
+
+      const bars = new Graphics();
+      const banner = new Text({
+        text: '',
+        style: { fontFamily: 'monospace', fontSize: 15, fill: 0xf4f4f5, fontWeight: 'bold' },
+      });
+      banner.anchor.set(0.5, 0);
+      banner.visible = false;
+      instance.stage.addChild(bars, banner);
+
       const floaterPool: Text[] = [];
       for (let i = 0; i < FLOATER_POOL; i++) {
         const text = new Text({
@@ -138,10 +207,18 @@ export function GameCanvas({ killsPerSecond, hitSize, attacksPerSecond, stage }:
         floaterPool.push(text);
       }
 
+      let startedAttemptId = -1;
+
       instance.ticker.add((ticker) => {
         // Clamped: an alt-tabbed tab resumes with a huge delta and would
         // teleport every enemy onto the player.
         const dt = Math.min(ticker.deltaMS / 1000, 0.05);
+
+        const request = attemptRef.current;
+        if (request && request.id !== startedAttemptId) {
+          startedAttemptId = request.id;
+          visual.startAttempt(request.outcome, request.stage);
+        }
         visual.setOptions({
           ...optionsRef.current,
           width: instance.screen.width,
@@ -203,6 +280,58 @@ export function GameCanvas({ killsPerSecond, hitSize, attacksPerSecond, stage }:
           swordSprite.alpha = Math.sin(visual.swing.progress * Math.PI) * 0.85 + 0.15;
         } else {
           swordSprite.visible = false;
+        }
+
+        bars.clear();
+        const playback = visual.attempt;
+
+        // The replay ending is the signal to commit: the command is sent only
+        // now, so the numbers change when the fight visibly resolves rather
+        // than the moment the button was clicked.
+        if (!playback.active && startedAttemptId !== -1 && playback.phase === 'finished') {
+          startedAttemptId = -1;
+          visual.endAttempt();
+          completeRef.current();
+        }
+
+        if (playback.active) {
+          const bossTexture = atlas?.get(bossSpriteForStage(playback.stage)) ?? null;
+          if (visual.boss.alive && bossTexture) {
+            bossSprite.visible = true;
+            bossSprite.texture = bossTexture;
+            bossSprite.x = Math.round(visual.boss.x);
+            bossSprite.y = Math.round(visual.boss.y);
+            bossSprite.scale.set(BOSS_SCALE);
+            drawBar(
+              bars,
+              visual.boss.x - BOSS_BAR_WIDTH / 2,
+              visual.boss.y - 16 * BOSS_SCALE * 0.5 - 18,
+              BOSS_BAR_WIDTH,
+              9,
+              playback.bossHp,
+              0xc0392b,
+            );
+          } else {
+            bossSprite.visible = false;
+          }
+
+          drawBar(bars, visual.player.x - 22, visual.player.y + 20, 44, 5, playback.playerHp, 0x4ade80);
+
+          const remaining = visual.timeRemaining(limitRef.current);
+          banner.visible = true;
+          banner.x = instance.screen.width / 2;
+          // Below the HUD stat chips, which are drawn in the DOM above this
+          // canvas and clipped the banner at y=14.
+          banner.y = 72;
+          banner.text =
+            `STAGE ${playback.stage}  ·  ${playback.phase === 'boss' ? 'BOSS' : 'WAVE'}  ·  ` +
+            `${remaining.toFixed(1)}s`;
+          // The timer is the second failure mode, and it deserves to look like
+          // one before it fires rather than only in the result line.
+          banner.style.fill = remaining < 10 ? 0xf87171 : 0xf4f4f5;
+        } else {
+          bossSprite.visible = false;
+          banner.visible = false;
         }
 
         for (let i = 0; i < floaterPool.length; i++) {

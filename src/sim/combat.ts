@@ -33,6 +33,14 @@ export interface StageOutcome {
   bossPhaseSeconds: number;
   /** Fraction of effective HP consumed. >1 means death. */
   damageTakenFraction: number;
+  /**
+   * The same figure split by phase, so a replay can drain a health bar at the
+   * rate each phase actually inflicted rather than averaging across both. The
+   * boss hits far harder per second, and a bar that ignores that lies about
+   * where the run was lost.
+   */
+  trashDamageFraction: number;
+  bossDamageFraction: number;
 }
 
 function ctxFor(stage: number, isBoss: boolean, hpFraction: number): EffectContext {
@@ -134,6 +142,8 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
       trashPhaseSeconds,
       bossPhaseSeconds,
       damageTakenFraction: totalDamage / ehp,
+      trashDamageFraction: damageDuringTrash / ehp,
+      bossDamageFraction: damageDuringBoss / ehp,
     };
   }
 
@@ -152,6 +162,8 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
     trashPhaseSeconds,
     bossPhaseSeconds,
     damageTakenFraction: totalDamage / ehp,
+    trashDamageFraction: damageDuringTrash / ehp,
+    bossDamageFraction: damageDuringBoss / ehp,
   };
 }
 

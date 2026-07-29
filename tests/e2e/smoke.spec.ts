@@ -1,6 +1,13 @@
 import { expect, test, type ConsoleMessage } from '@playwright/test';
 
 /**
+ * Attempts now play out a replay before the command is sent, so anything
+ * asserting on the result has to outlast it. Stage 1 is ~49 simulated seconds
+ * at 6x, plus the round trip.
+ */
+const REPLAY_TIMEOUT = 20_000;
+
+/**
  * The blind spot the unit suite structurally cannot see: the sim can be
  * perfect and the app still a white screen. Everything here is about the app
  * booting and the round trip closing, not about game rules.
@@ -108,6 +115,54 @@ test('the sword swings', async ({ page }) => {
   expect(observed.distinctAngles, 'swing angle never changed').toBeGreaterThan(3);
 });
 
+test('an attempt plays through wave, boss, then commits', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => '__stageVisual' in globalThis, undefined, { timeout: 15_000 });
+
+  await page.getByRole('button', { name: /Attempt stage/ }).click();
+
+  // The command must not have been sent yet - the whole point of the replay is
+  // that gold and stage move when the fight resolves, not when it starts.
+  await expect(page.getByRole('button', { name: /Fighting stage/ })).toBeVisible();
+
+  const trace = await page.evaluate(async () => {
+    type Visual = {
+      attempt: { active: boolean; phase: string; elapsed: number; playerHp: number };
+      boss: { alive: boolean };
+    };
+    const visual = (globalThis as { __stageVisual?: Visual }).__stageVisual!;
+
+    const phases = new Set<string>();
+    let sawBoss = false;
+    let minPlayerHp = 1;
+    let maxElapsed = 0;
+
+    for (let i = 0; i < 200; i++) {
+      if (visual.attempt.active) {
+        phases.add(visual.attempt.phase);
+        if (visual.boss.alive) sawBoss = true;
+        minPlayerHp = Math.min(minPlayerHp, visual.attempt.playerHp);
+        maxElapsed = Math.max(maxElapsed, visual.attempt.elapsed);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return { phases: [...phases], sawBoss, minPlayerHp, maxElapsed };
+  });
+
+  expect(trace.phases, 'both phases should be reached').toContain('trash');
+  expect(trace.phases).toContain('boss');
+  expect(trace.sawBoss, 'boss never spawned').toBe(true);
+  // Stage 1 costs real health, so a bar pinned at full would mean the damage
+  // split is not being applied.
+  expect(trace.minPlayerHp).toBeLessThan(1);
+  // Elapsed is in simulated seconds, so it should reach tens, not the handful
+  // of real seconds the replay took.
+  expect(trace.maxElapsed).toBeGreaterThan(10);
+
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
+  await expect(page.getByRole('button', { name: /Attempt stage 2/ })).toBeVisible();
+});
+
 test('every upgrade track is rendered', async ({ page }) => {
   await page.goto('/');
 
@@ -155,7 +210,7 @@ test('idle gold accrues even when the browser clock is wrong', async ({ page }) 
   // Farm income comes from the best cleared stage, so there is nothing to
   // accrue until stage 1 is beaten.
   await page.getByRole('button', { name: /Attempt stage/ }).click();
-  await expect(page.getByText(/cleared stage 1/)).toBeVisible();
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
 
   const claim = page.getByRole('button', { name: /idle gold/ });
   await expect(claim).toBeEnabled({ timeout: 15_000 });
@@ -178,7 +233,7 @@ test('the buy multiplier applies to every track', async ({ page }) => {
   await expect(damage).not.toHaveText(/\+10/);
 
   await page.getByRole('button', { name: /Attempt stage/ }).click();
-  await expect(page.getByText(/cleared stage 1/)).toBeVisible();
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
 
   // Max buys as many levels as the gold covers, which after one clear is
   // several - the point being it is more than the single level 1x would buy.
@@ -200,7 +255,7 @@ test('progress survives a reload', async ({ page }) => {
 
   // Stage 1 is beatable from a fresh save, so this pays for the first upgrade.
   await page.getByRole('button', { name: /Attempt stage/ }).click();
-  await expect(page.getByText(/cleared stage 1/)).toBeVisible();
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
 
   await upgrade.click();
   await expect(upgrade).not.toHaveText(before ?? '');

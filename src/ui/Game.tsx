@@ -9,17 +9,20 @@
  * buys you.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   bulkUpgradeCost,
   killsPerSecond,
   maxAffordableUpgrades,
   remainingLevels,
+  resolveStage,
+  STAGE_TIME_LIMIT_SECONDS,
   UPGRADE_TRACKS,
   type UpgradeKey,
   type UpgradeView,
 } from '@/sim';
+import type { AttemptRequest } from '@/render/GameCanvas';
 import { HUD_TICK_MS, useGameStore } from './store';
 
 /** Bulk purchase sizes. 'max' spends everything the track can absorb. */
@@ -48,6 +51,32 @@ export function Game() {
   const { state, hud, events, pending, error, desynced, bootstrap, send, refreshHud } =
     useGameStore();
   const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
+  const [attempt, setAttempt] = useState<AttemptRequest | null>(null);
+  const attemptSeq = useRef(0);
+
+  /**
+   * Resolve the stage now, play the replay, and only then send the command.
+   *
+   * resolveStage is deterministic and pure, so the outcome shown is the outcome
+   * the server will independently reach - the replay is a preview, not a
+   * prediction that could be wrong. Sending on completion is what stops gold
+   * and stage from jumping before the fight is over.
+   *
+   * Closing the tab mid-replay costs the attempt. That is the honest reading:
+   * the run did not finish.
+   */
+  const startAttempt = useCallback(() => {
+    const current = useGameStore.getState().state;
+    if (!current || attempt) return;
+    const stage = current.currentStage;
+    attemptSeq.current += 1;
+    setAttempt({ id: attemptSeq.current, stage, outcome: resolveStage(current, stage) });
+  }, [attempt]);
+
+  const finishAttempt = useCallback(() => {
+    setAttempt(null);
+    void send({ type: 'attemptStage' });
+  }, [send]);
 
   useEffect(() => {
     void bootstrap();
@@ -75,6 +104,9 @@ export function Game() {
           hitSize={hud.stats.damage}
           attacksPerSecond={hud.stats.attackSpeed}
           stage={Math.max(1, hud.bestStage || 1)}
+          stageTimeLimit={STAGE_TIME_LIMIT_SECONDS}
+          attempt={attempt}
+          onAttemptComplete={finishAttempt}
         />
       </div>
 
@@ -140,11 +172,11 @@ export function Game() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={pending}
-              onClick={() => void send({ type: 'attemptStage' })}
+              disabled={pending || attempt !== null}
+              onClick={startAttempt}
               className="rounded bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-40"
             >
-              Attempt stage {hud.currentStage}
+              {attempt ? `Fighting stage ${attempt.stage}…` : `Attempt stage ${hud.currentStage}`}
             </button>
 
             <button
