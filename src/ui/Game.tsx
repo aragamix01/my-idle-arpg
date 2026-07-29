@@ -9,10 +9,22 @@
  * buys you.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { killsPerSecond, UPGRADE_TRACKS, type UpgradeView } from '@/sim';
+import {
+  bulkUpgradeCost,
+  killsPerSecond,
+  maxAffordableUpgrades,
+  remainingLevels,
+  UPGRADE_TRACKS,
+  type UpgradeKey,
+  type UpgradeView,
+} from '@/sim';
 import { HUD_TICK_MS, useGameStore } from './store';
+
+/** Bulk purchase sizes. 'max' spends everything the track can absorb. */
+const BUY_AMOUNTS = [1, 5, 10, 20, 'max'] as const;
+type BuyAmount = (typeof BUY_AMOUNTS)[number];
 
 // Pixi touches the DOM on import, so it must never run during SSR.
 const GameCanvas = dynamic(() => import('@/render/GameCanvas').then((m) => m.GameCanvas), {
@@ -35,6 +47,7 @@ function compact(value: number): string {
 export function Game() {
   const { state, hud, events, pending, error, desynced, bootstrap, send, refreshHud } =
     useGameStore();
+  const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
 
   useEffect(() => {
     void bootstrap();
@@ -91,13 +104,35 @@ export function Game() {
             ))}
           </ul>
 
+          <div className="flex items-center gap-2 text-xs">
+            <label htmlFor="buy-amount" className="text-neutral-400">
+              Buy
+            </label>
+            <select
+              id="buy-amount"
+              value={String(buyAmount)}
+              onChange={(e) =>
+                setBuyAmount(e.target.value === 'max' ? 'max' : (Number(e.target.value) as BuyAmount))
+              }
+              className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-neutral-100"
+            >
+              {BUY_AMOUNTS.map((amount) => (
+                <option key={String(amount)} value={String(amount)}>
+                  {amount === 'max' ? 'Max' : `${amount}x`}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
             {hud.upgrades.map((upgrade) => (
               <UpgradeButton
                 key={upgrade.key}
                 upgrade={upgrade}
+                amount={buyAmount}
+                gold={hud.gold}
                 disabled={pending}
-                onBuy={() => void send({ type: 'buyUpgrade', key: upgrade.key })}
+                onBuy={(count) => void send({ type: 'buyUpgrade', key: upgrade.key, count })}
               />
             ))}
           </div>
@@ -151,29 +186,62 @@ function effectText(key: string): string {
   return percent ? `+${(add * 100).toFixed(1)}% ${noun}` : `+${add} ${noun}`;
 }
 
+/**
+ * Levels this button would buy, and what they cost.
+ *
+ * Mirrors applyCommand's rules so the label matches what the server will
+ * actually do: a fixed multiplier is all-or-nothing, 'max' takes what fits.
+ * Both call the same sim functions the server calls, so they cannot disagree.
+ */
+function plannedPurchase(upgrade: UpgradeView, amount: BuyAmount, gold: number) {
+  const key = upgrade.key as UpgradeKey;
+  if (upgrade.maxed) return { count: 0, cost: Infinity, affordable: false };
+
+  if (amount === 'max') {
+    const count = maxAffordableUpgrades(key, upgrade.level, gold);
+    return {
+      count,
+      cost: count > 0 ? bulkUpgradeCost(key, upgrade.level, count) : upgrade.cost,
+      affordable: count > 0,
+    };
+  }
+
+  const count = Math.min(amount, remainingLevels(key, upgrade.level));
+  if (count <= 0) return { count: 0, cost: Infinity, affordable: false };
+  const cost = bulkUpgradeCost(key, upgrade.level, count);
+  return { count, cost, affordable: gold >= cost };
+}
+
 function UpgradeButton({
   upgrade,
+  amount,
+  gold,
   disabled,
   onBuy,
 }: {
   upgrade: UpgradeView;
+  amount: BuyAmount;
+  gold: number;
   disabled: boolean;
-  onBuy: () => void;
+  onBuy: (count: number | 'max') => void;
 }) {
-  const blocked = disabled || upgrade.maxed || !upgrade.affordable;
+  const plan = plannedPurchase(upgrade, amount, gold);
+  const blocked = disabled || upgrade.maxed || !plan.affordable;
 
   return (
     <button
       type="button"
       disabled={blocked}
-      onClick={onBuy}
+      // 'max' is forwarded as-is rather than as the count computed here. The
+      // client's gold is a cache; the server recomputes against its own.
+      onClick={() => onBuy(amount === 'max' ? 'max' : plan.count)}
       // No title attribute: it duplicates the effect line already rendered
       // below, and it shadows the label in the accessible name.
       className={[
         'flex flex-col items-start gap-0.5 rounded border px-3 py-2 text-left transition',
         upgrade.maxed
           ? 'border-neutral-800 bg-neutral-900/80 text-neutral-500'
-          : upgrade.affordable
+          : plan.affordable
             ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25'
             : 'border-neutral-800 bg-neutral-900/80 text-neutral-400',
         blocked ? 'cursor-not-allowed' : 'cursor-pointer',
@@ -182,7 +250,9 @@ function UpgradeButton({
       <span className="text-sm font-medium">{upgrade.label}</span>
       <span className="text-[11px] text-neutral-400">{effectText(upgrade.key)}</span>
       <span className="font-mono text-[11px]">
-        {upgrade.maxed ? 'MAX' : `Lv ${upgrade.level} · ${compact(upgrade.cost)}g`}
+        {upgrade.maxed
+          ? 'MAX'
+          : `Lv ${upgrade.level}${plan.count > 1 ? ` +${plan.count}` : ''} · ${compact(plan.cost)}g`}
       </span>
     </button>
   );
@@ -206,7 +276,9 @@ function describe(event: { type: string } & Record<string, unknown>): string {
     case 'artifactDropped':
       return `found ${event.artifactId}`;
     case 'upgradeBought':
-      return `${event.key} → ${event.level}`;
+      return Number(event.count) > 1
+        ? `${event.key} +${event.count} → ${event.level}`
+        : `${event.key} → ${event.level}`;
     case 'offlineClaimed':
       return `claimed ${Math.round(Number(event.gold))} idle gold`;
     default:

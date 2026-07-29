@@ -162,6 +162,35 @@ test('idle gold accrues even when the browser clock is wrong', async ({ page }) 
   await expect(claim).not.toHaveText(/Claim 0 idle gold/);
 });
 
+test('the buy multiplier applies to every track', async ({ page }) => {
+  await page.goto('/');
+
+  const damage = page.getByRole('button', { name: /^Damage/ });
+  const health = page.getByRole('button', { name: /^Health/ });
+  await expect(damage).toBeVisible();
+
+  // One selector drives all seven buttons, so both labels must respond.
+  await page.getByLabel('Buy').selectOption('10');
+  await expect(damage).toHaveText(/\+10/);
+  await expect(health).toHaveText(/\+10/);
+
+  await page.getByLabel('Buy').selectOption('1');
+  await expect(damage).not.toHaveText(/\+10/);
+
+  await page.getByRole('button', { name: /Attempt stage/ }).click();
+  await expect(page.getByText(/cleared stage 1/)).toBeVisible();
+
+  // Max buys as many levels as the gold covers, which after one clear is
+  // several - the point being it is more than the single level 1x would buy.
+  await page.getByLabel('Buy').selectOption('max');
+  await damage.click();
+  await expect(page.getByText(/damage \+\d+ →/)).toBeVisible();
+
+  const label = await damage.textContent();
+  const level = Number(/Lv (\d+)/.exec(label ?? '')?.[1] ?? 0);
+  expect(level).toBeGreaterThan(1);
+});
+
 test('progress survives a reload', async ({ page }) => {
   await page.goto('/');
 

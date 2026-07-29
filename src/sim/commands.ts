@@ -12,7 +12,13 @@
 
 import { z } from 'zod';
 import { resolveStage } from './combat';
-import { isUpgradeMaxed, upgradeCost } from './curves';
+import {
+  BULK_PURCHASE_LIMIT,
+  bulkUpgradeCost,
+  isUpgradeMaxed,
+  maxAffordableUpgrades,
+  remainingLevels,
+} from './curves';
 import { ARTIFACTS, CONTENT_VERSION, artifactExists } from './content';
 import { computeOffline } from './offline';
 import { createRng } from './rng';
@@ -29,7 +35,22 @@ import {
 export const CommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('attemptStage') }).strict(),
   z.object({ type: z.literal('setStage'), stage: z.number().int().min(1) }).strict(),
-  z.object({ type: z.literal('buyUpgrade'), key: z.enum(UPGRADE_KEYS) }).strict(),
+  z
+    .object({
+      type: z.literal('buyUpgrade'),
+      key: z.enum(UPGRADE_KEYS),
+      /**
+       * Levels to buy. Omitted means one, so clients predating bulk purchase
+       * keep working unchanged.
+       *
+       * 'max' is resolved server-side against the server's own gold - the
+       * client's balance is a cache and has no say in how much it can afford.
+       */
+      count: z
+        .union([z.number().int().min(1).max(BULK_PURCHASE_LIMIT), z.literal('max')])
+        .optional(),
+    })
+    .strict(),
   z
     .object({
       type: z.literal('equipArtifact'),
@@ -46,7 +67,7 @@ export type SimEvent =
   | { type: 'stageCleared'; stage: number; seconds: number; gold: number }
   | { type: 'stageFailed'; stage: number; reason: 'died' | 'timeout'; gold: number }
   | { type: 'artifactDropped'; artifactId: string }
-  | { type: 'upgradeBought'; key: string; level: number; cost: number }
+  | { type: 'upgradeBought'; key: string; level: number; cost: number; count: number }
   | { type: 'offlineClaimed'; gold: number; seconds: number; capped: boolean };
 
 export interface CommandOutcome {
@@ -146,11 +167,32 @@ export function applyCommand(
     case 'buyUpgrade': {
       const level = next.upgrades[command.key];
       if (isUpgradeMaxed(command.key, level)) return err(`${command.key} is at max level`);
-      const cost = upgradeCost(command.key, level);
-      if (next.gold < cost) return err(`need ${cost} gold, have ${Math.floor(next.gold)}`);
+
+      const requested = command.count ?? 1;
+      const count =
+        requested === 'max'
+          ? maxAffordableUpgrades(command.key, level, next.gold)
+          : Math.min(requested, remainingLevels(command.key, level));
+
+      if (count <= 0) {
+        return err(
+          requested === 'max'
+            ? `cannot afford any ${command.key} levels`
+            : `${command.key} has no levels remaining`,
+        );
+      }
+
+      // A fixed multiplier is all-or-nothing. Silently buying seven when the
+      // player asked for ten would spend their gold on something they did not
+      // choose; 'max' is the button that means "as many as fit".
+      const cost = bulkUpgradeCost(command.key, level, count);
+      if (next.gold < cost) {
+        return err(`need ${Math.ceil(cost)} gold for ${count}x, have ${Math.floor(next.gold)}`);
+      }
+
       next.gold -= cost;
-      next.upgrades[command.key] = level + 1;
-      events.push({ type: 'upgradeBought', key: command.key, level: level + 1, cost });
+      next.upgrades[command.key] = level + count;
+      events.push({ type: 'upgradeBought', key: command.key, level: level + count, cost, count });
       break;
     }
 

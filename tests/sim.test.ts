@@ -5,6 +5,8 @@ import { report, runLadder } from '../scripts/balance';
 import {
   applyCommand,
   ARTIFACTS,
+  BULK_PURCHASE_LIMIT,
+  bulkUpgradeCost,
   CLEAR_TIME_BAND_SECONDS,
   CommandSchema,
   computeOffline,
@@ -14,6 +16,7 @@ import {
   newSave,
   OFFLINE_CAP_SECONDS,
   resolveStage,
+  UPGRADE_TRACKS,
   upgradeCost,
   validateRegistry,
   type Command,
@@ -144,6 +147,88 @@ describe('command validation', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.state.gold).toBe(1000 - cost);
+    expect(result.value.state.upgrades.damage).toBe(1);
+  });
+
+  it('charges the same for a bulk buy as for the same levels one at a time', () => {
+    // If these diverge, the bulk button is either a discount or a penalty.
+    // upgradeCost rounds each level up, so the geometric closed form is wrong
+    // here by up to one gold per level.
+    for (const key of ['damage', 'health', 'greed'] as const) {
+      for (const count of [2, 5, 10, 37]) {
+        const oneByOne = Array.from({ length: count }, (_, i) => upgradeCost(key, 3 + i)).reduce(
+          (a, b) => a + b,
+          0,
+        );
+        expect(bulkUpgradeCost(key, 3, count), `${key} x${count}`).toBe(oneByOne);
+      }
+    }
+  });
+
+  it('buying 10 at once equals buying 1 ten times', () => {
+    const rich: SaveState = { ...newSave(1, T0), gold: 1_000_000 };
+
+    const bulk = play(rich, [{ type: 'buyUpgrade', key: 'damage', count: 10 }]);
+    const singles = play(
+      rich,
+      Array.from({ length: 10 }, () => ({ type: 'buyUpgrade', key: 'damage' }) as const),
+    );
+
+    expect(bulk.upgrades.damage).toBe(singles.upgrades.damage);
+    expect(bulk.gold).toBe(singles.gold);
+  });
+
+  it('refuses a fixed multiplier it cannot fully afford', () => {
+    // All-or-nothing: quietly buying 3 of a requested 20 spends gold on
+    // something the player did not choose.
+    const save: SaveState = { ...newSave(1, T0), gold: upgradeCost('damage', 0) + 1 };
+    const result = applyCommand(save, { type: 'buyUpgrade', key: 'damage', count: 20 }, T0);
+    expect(result.ok).toBe(false);
+  });
+
+  it('max spends what it can and never overdraws', () => {
+    const save: SaveState = { ...newSave(1, T0), gold: 5000 };
+    const result = applyCommand(save, { type: 'buyUpgrade', key: 'damage', count: 'max' }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const bought = result.value.state.upgrades.damage;
+    expect(bought).toBeGreaterThan(0);
+    expect(result.value.state.gold).toBeGreaterThanOrEqual(0);
+    // Exactly maximal: one more level must not have been affordable.
+    expect(bulkUpgradeCost('damage', 0, bought + 1)).toBeGreaterThan(5000);
+  });
+
+  it('max stops at a capped track rather than overshooting', () => {
+    const key = 'crit';
+    const cap = UPGRADE_TRACKS[key].maxLevel!;
+    const save: SaveState = { ...newSave(1, T0), gold: Number.MAX_SAFE_INTEGER };
+    const result = applyCommand(save, { type: 'buyUpgrade', key, count: 'max' }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.state.upgrades[key]).toBe(cap);
+  });
+
+  it('rejects a count beyond the bulk limit at the schema boundary', () => {
+    // Bounds how much work an untrusted 'count' can ask the server to do.
+    expect(
+      CommandSchema.safeParse({ type: 'buyUpgrade', key: 'damage', count: BULK_PURCHASE_LIMIT + 1 })
+        .success,
+    ).toBe(false);
+    expect(CommandSchema.safeParse({ type: 'buyUpgrade', key: 'damage', count: 0 }).success).toBe(
+      false,
+    );
+    expect(CommandSchema.safeParse({ type: 'buyUpgrade', key: 'damage', count: 2.5 }).success).toBe(
+      false,
+    );
+  });
+
+  it('still accepts a command with no count', () => {
+    // Backward compatibility: a client predating bulk purchase omits the field.
+    const rich: SaveState = { ...newSave(1, T0), gold: 1000 };
+    const result = applyCommand(rich, { type: 'buyUpgrade', key: 'damage' }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
     expect(result.value.state.upgrades.damage).toBe(1);
   });
 

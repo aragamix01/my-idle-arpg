@@ -232,6 +232,49 @@ export function isUpgradeMaxed(key: UpgradeKey, level: number): boolean {
   return max !== null && level >= max;
 }
 
+/** Levels still available on a track, or Infinity when uncapped. */
+export function remainingLevels(key: UpgradeKey, level: number): number {
+  const max = UPGRADE_TRACKS[key].maxLevel;
+  return max === null ? Infinity : Math.max(0, max - level);
+}
+
+/**
+ * Most levels a single bulk purchase may buy.
+ *
+ * Bounds the work an untrusted `count: 'max'` can ask the server to do. Late
+ * game gold outruns cost growth badly enough that an unbounded max could ask
+ * for tens of thousands of iterations per request.
+ */
+export const BULK_PURCHASE_LIMIT = 1000;
+
+/**
+ * Total cost of `count` consecutive levels starting from `level`.
+ *
+ * Summed level by level rather than by the geometric closed form, because
+ * upgradeCost rounds each level up. Buying ten at once must cost exactly what
+ * buying one ten times costs, or the bulk button becomes a discount.
+ */
+export function bulkUpgradeCost(key: UpgradeKey, level: number, count: number): number {
+  let total = 0;
+  for (let i = 0; i < count; i++) total += upgradeCost(key, level + i);
+  return total;
+}
+
+/** How many levels `gold` can buy, respecting the track cap and the bulk limit. */
+export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: number): number {
+  const ceiling = Math.min(remainingLevels(key, level), BULK_PURCHASE_LIMIT);
+  let count = 0;
+  let spent = 0;
+
+  while (count < ceiling) {
+    const next = spent + upgradeCost(key, level + count);
+    if (next > gold) break;
+    spent = next;
+    count++;
+  }
+  return count;
+}
+
 // --- Offline --------------------------------------------------------------
 
 /** Offline farming pays this fraction of the online farm rate. */
