@@ -246,6 +246,47 @@ test('the buy multiplier applies to every track', async ({ page }) => {
   expect(level).toBeGreaterThan(1);
 });
 
+test('the character panel shows every stat and the empty inventory', async ({ page }) => {
+  await page.goto('/');
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await expect(panel).toBeVisible();
+
+  // Every label in STAT_LABELS must appear. A stat added to STAT_KEYS without
+  // an entry is a type error, but one added to the panel's ordering and not the
+  // label map would render blank - this catches that.
+  for (const label of [
+    'Damage',
+    'Attack Speed',
+    'Area',
+    'Crit Chance',
+    'Crit Damage',
+    'Max HP',
+    'Toughness',
+    'Gold Find',
+  ]) {
+    await expect(panel.getByText(label, { exact: true })).toBeVisible();
+  }
+
+  // Derived figures are the reason the panel exists - raw stats alone do not
+  // tell a player whether they will survive.
+  for (const label of ['Effective HP', 'DPS (single)', 'DPS (wave)', 'Kills / sec']) {
+    await expect(panel.getByText(label, { exact: true })).toBeVisible();
+  }
+
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  await expect(panel.getByText(/No artifacts yet/)).toBeVisible();
+  // Four slots, all empty on a fresh account.
+  await expect(panel.getByText('empty', { exact: true })).toHaveCount(4);
+
+  await expect(panel.getByText('undefined')).toHaveCount(0);
+  await expect(panel.getByText('NaN')).toHaveCount(0);
+
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+});
+
 test('progress survives a reload', async ({ page }) => {
   await page.goto('/');
 

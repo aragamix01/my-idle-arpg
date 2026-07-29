@@ -19,7 +19,7 @@ import {
   stageOverride,
   STAGE_TIME_LIMIT_SECONDS,
 } from './curves';
-import { critFactor, deriveStats, effectiveHp, goldOnKillBonus, hpBands } from './stats';
+import { deriveStats, effectiveHp, goldOnKillBonus, hpBands, statsDps } from './stats';
 import type { EffectContext, SaveState } from './types';
 
 export interface StageOutcome {
@@ -49,8 +49,7 @@ function ctxFor(stage: number, isBoss: boolean, hpFraction: number): EffectConte
 
 /** Single-target damage per second in a given context. */
 function singleTargetDps(save: SaveState, ctx: EffectContext): number {
-  const s = deriveStats(save, ctx);
-  return s.damage * s.attackSpeed * critFactor(s);
+  return statsDps(deriveStats(save, ctx));
 }
 
 /**

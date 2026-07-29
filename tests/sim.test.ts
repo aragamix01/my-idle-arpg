@@ -11,11 +11,16 @@ import {
   CommandSchema,
   computeOffline,
   createRng,
+  deriveStats,
+  effectiveHp,
+  enemyCount,
+  enemyHp,
   feedbackExponent,
   sideExponents,
   newSave,
   OFFLINE_CAP_SECONDS,
   resolveStage,
+  statsDps,
   UPGRADE_TRACKS,
   upgradeCost,
   validateRegistry,
@@ -277,6 +282,36 @@ describe('content registry', () => {
         outcome.seconds !== baseline.seconds || outcome.goldEarned !== baseline.goldEarned;
       expect(changed, `${artifact.id} has no measurable effect`).toBe(true);
     }
+  });
+});
+
+describe('derived stats', () => {
+  it('statsDps matches the DPS the combat layer actually uses', () => {
+    // The character sheet quotes statsDps. If it drifted from what resolveStage
+    // divides by, the panel would confidently display a number the fight does
+    // not use - the exact failure the shared function exists to prevent.
+    const save: SaveState = {
+      ...newSave(1, T0),
+      upgrades: { ...newSave(1, T0).upgrades, damage: 12, attackSpeed: 7, crit: 20 },
+    };
+    const stage = 1;
+    const outcome = resolveStage(save, stage);
+    const stats = deriveStats(save, { stage, isBoss: false, enemyHpFraction: 1 });
+
+    const poolHp = enemyCount(stage) * enemyHp(stage);
+    const aoeTargets = Math.min(stats.area, enemyCount(stage));
+    const impliedDps = poolHp / (outcome.trashPhaseSeconds * aoeTargets);
+
+    expect(statsDps(stats)).toBeCloseTo(impliedDps, 6);
+  });
+
+  it('effective HP is what damage is measured against', () => {
+    const save: SaveState = {
+      ...newSave(1, T0),
+      upgrades: { ...newSave(1, T0).upgrades, health: 9, toughness: 5 },
+    };
+    const stats = deriveStats(save, { stage: 1, isBoss: false, enemyHpFraction: 1 });
+    expect(effectiveHp(stats)).toBeCloseTo(stats.maxHp * stats.toughness, 6);
   });
 });
 

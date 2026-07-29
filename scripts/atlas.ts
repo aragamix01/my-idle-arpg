@@ -36,6 +36,8 @@ async function build() {
   const licenses: string[] = [];
   let cell = 16;
   let image = '';
+  let imageWidth = 0;
+  let imageHeight = 0;
 
   for (const source of SOURCES) {
     const sheetPath = join(ASSETS, source.sheet);
@@ -49,6 +51,8 @@ async function build() {
     await copyFile(sheetPath, join(OUT_DIR, outName));
     image = `/atlas/${outName}`;
     cell = source.cell;
+    imageWidth = width;
+    imageHeight = height;
     licenses.push(`${source.name}: ${source.license}`);
 
     console.log(
@@ -79,7 +83,7 @@ async function build() {
     for (const id of missing) console.log(`  ${id}`);
   }
 
-  const manifest: AtlasManifest = { image, cell, frames };
+  const manifest: AtlasManifest = { image, cell, imageWidth, imageHeight, frames };
   await writeFile(join(OUT_DIR, 'atlas.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   await writeFile(join(OUT_DIR, 'LICENSE.txt'), `${licenses.join('\n')}\n`, 'utf8');
 

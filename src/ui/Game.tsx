@@ -23,6 +23,8 @@ import {
   type UpgradeView,
 } from '@/sim';
 import type { AttemptRequest } from '@/render/GameCanvas';
+import { CharacterPanel } from './CharacterPanel';
+import { compact } from './format';
 import { HUD_TICK_MS, useGameStore } from './store';
 
 /** Bulk purchase sizes. 'max' spends everything the track can absorb. */
@@ -34,24 +36,12 @@ const GameCanvas = dynamic(() => import('@/render/GameCanvas').then((m) => m.Gam
   ssr: false,
 });
 
-function compact(value: number): string {
-  if (!Number.isFinite(value)) return '-';
-  if (value < 1000) return value.toFixed(value < 10 && value % 1 !== 0 ? 1 : 0);
-  const units = ['k', 'M', 'B', 'T', 'q', 'Q'];
-  let scaled = value;
-  let unit = -1;
-  while (scaled >= 1000 && unit < units.length - 1) {
-    scaled /= 1000;
-    unit++;
-  }
-  return `${scaled.toFixed(2)}${units[unit]}`;
-}
-
 export function Game() {
   const { state, hud, events, pending, error, desynced, bootstrap, send, refreshHud } =
     useGameStore();
   const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
   const [attempt, setAttempt] = useState<AttemptRequest | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
   const attemptSeq = useRef(0);
 
   /**
@@ -118,6 +108,13 @@ export function Game() {
           <Stat label="best" value={String(hud.bestStage)} />
           <Stat label="damage" value={compact(hud.stats.damage)} />
           <Stat label="kills/s" value={compact(rate)} />
+          <button
+            type="button"
+            onClick={() => setPanelOpen(true)}
+            className="rounded border border-neutral-700 bg-neutral-900/80 px-3 py-1.5 text-xs hover:bg-neutral-800"
+          >
+            Character{hud.artifactsOwned.length > 0 ? ` · ${hud.artifactsOwned.length}` : ''}
+          </button>
         </header>
 
         <footer className="pointer-events-auto flex flex-col gap-3">
@@ -190,6 +187,16 @@ export function Game() {
           </div>
         </footer>
       </div>
+
+      {panelOpen && (
+        <CharacterPanel
+          state={state}
+          hud={hud}
+          busy={pending}
+          onEquip={(slot, artifactId) => void send({ type: 'equipArtifact', slot, artifactId })}
+          onClose={() => setPanelOpen(false)}
+        />
+      )}
     </main>
   );
 }

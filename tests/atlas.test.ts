@@ -50,6 +50,13 @@ describe('atlas', () => {
     expect(blank).toEqual([]);
   });
 
+  it('records the sheet dimensions the DOM renderer needs', () => {
+    // Pixi slices frames from a loaded texture and never needs these. CSS
+    // background-size does, and a wrong value silently offsets every icon.
+    expect(manifest.imageWidth).toBe(sheet.width);
+    expect(manifest.imageHeight).toBe(sheet.height);
+  });
+
   it('keeps every frame inside the sheet', () => {
     for (const [id, frame] of Object.entries(manifest.frames)) {
       expect(frame.x + frame.w, `${id} overflows horizontally`).toBeLessThanOrEqual(sheet.width);

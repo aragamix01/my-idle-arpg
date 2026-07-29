@@ -65,6 +65,16 @@ export interface AtlasManifest {
   image: string;
   /** Source cell size, before any display scaling. */
   cell: number;
+  /**
+   * Full sheet dimensions.
+   *
+   * Pixi never needs these - it slices frames from a loaded texture. The DOM
+   * does: rendering one frame as a CSS background requires scaling the whole
+   * sheet with background-size, which is impossible without knowing how big it
+   * is.
+   */
+  imageWidth: number;
+  imageHeight: number;
   frames: Record<string, AtlasFrame>;
 }
 

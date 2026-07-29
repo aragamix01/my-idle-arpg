@@ -123,3 +123,13 @@ export function hpBands(save: SaveState): number[] {
 export function critFactor(stats: Stats): number {
   return 1 + stats.critChance * (stats.critMult - 1);
 }
+
+/**
+ * Single-target damage per second implied by a stat block.
+ *
+ * The combat layer calls this too, so the character sheet cannot quote a DPS
+ * the fight does not actually use.
+ */
+export function statsDps(stats: Stats): number {
+  return stats.damage * stats.attackSpeed * critFactor(stats);
+}
