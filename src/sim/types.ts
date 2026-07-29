@@ -6,6 +6,8 @@
  * route handler (authoritative). The ESLint boundary rule enforces this.
  */
 
+import type { ItemInstance } from './content/schema';
+
 export const STAT_KEYS = [
   'damage',
   'attackSpeed',
@@ -44,6 +46,16 @@ export type UpgradeLevels = Record<UpgradeKey, number>;
 export const ARTIFACT_SLOTS = 4;
 
 /**
+ * Inventory size.
+ *
+ * Every clear now drops an item, so without a cap the save blob grows without
+ * bound - and it is read and written on every single command. A full inventory
+ * refuses new drops rather than discarding silently, because deciding what to
+ * throw away is the interesting part.
+ */
+export const INVENTORY_CAP = 40;
+
+/**
  * Authoritative player state. The server owns this; the client holds a cache
  * and applies commands optimistically.
  *
@@ -61,9 +73,17 @@ export interface SaveState {
   /** Stage the player is currently attempting. */
   currentStage: number;
   upgrades: UpgradeLevels;
-  artifactsOwned: string[];
-  /** Fixed-length; null = empty slot. */
+  /** Rolled item instances. Bounded by INVENTORY_CAP. */
+  artifactsOwned: ItemInstance[];
+  /** Fixed-length; holds item uids. null = empty slot. */
   loadout: (string | null)[];
+  /**
+   * Monotonic source of item uids, and part of every item's roll seed.
+   *
+   * Never decremented - reusing a uid after a discard would make a new item
+   * roll identically to the one it replaced.
+   */
+  nextItemId: number;
   /** Epoch ms of last server-acknowledged interaction. Server-owned. */
   lastSeenAt: number;
 }

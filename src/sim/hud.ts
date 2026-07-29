@@ -11,7 +11,8 @@ import { farmRate } from './combat';
 import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from './curves';
 import { computeOffline } from './offline';
 import { deriveStats } from './stats';
-import { UPGRADE_KEYS, type SaveState, type Stats, type UpgradeKey } from './types';
+import { INVENTORY_CAP, UPGRADE_KEYS, type SaveState, type Stats, type UpgradeKey } from './types';
+import type { ItemInstance } from './content';
 
 export interface UpgradeView {
   key: UpgradeKey;
@@ -32,7 +33,9 @@ export interface HudSnapshot {
   pendingOfflineGold: number;
   offlineCapReached: boolean;
   loadout: (string | null)[];
-  artifactsOwned: string[];
+  artifactsOwned: ItemInstance[];
+  /** Cap included so the panel can show capacity without importing curves. */
+  inventoryCap: number;
 }
 
 export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
@@ -66,5 +69,6 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
     artifactsOwned: save.artifactsOwned,
+    inventoryCap: INVENTORY_CAP,
   };
 }

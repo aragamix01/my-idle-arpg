@@ -13,16 +13,25 @@ import {
   ARTIFACT_SLOTS,
   effectiveHp,
   enemyCount,
-  getArtifact,
+  itemEffects,
+  itemName,
+  itemSprite,
   killsPerSecond,
+  rerollCost,
   statsDps,
   critFactor,
-  type Artifact,
   type HudSnapshot,
+  type ItemInstance,
   type SaveState,
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
-import { compact, describeArtifactEffect, RARITY_STYLE, statEntries } from './format';
+import {
+  compact,
+  describeArtifactEffect,
+  describeRolledAffix,
+  RARITY_STYLE,
+  statEntries,
+} from './format';
 
 type Tab = 'character' | 'inventory';
 
@@ -31,10 +40,20 @@ interface Props {
   hud: HudSnapshot;
   busy: boolean;
   onEquip: (slot: number, artifactId: string | null) => void;
+  onReroll: (uid: string) => void;
+  onDiscard: (uid: string) => void;
   onClose: () => void;
 }
 
-export function CharacterPanel({ state, hud, busy, onEquip, onClose }: Props) {
+export function CharacterPanel({
+  state,
+  hud,
+  busy,
+  onEquip,
+  onReroll,
+  onDiscard,
+  onClose,
+}: Props) {
   const [tab, setTab] = useState<Tab>('character');
 
   useEffect(() => {
@@ -64,7 +83,7 @@ export function CharacterPanel({ state, hud, busy, onEquip, onClose }: Props) {
             Character
           </TabButton>
           <TabButton active={tab === 'inventory'} onClick={() => setTab('inventory')}>
-            Inventory ({hud.artifactsOwned.length})
+            Inventory ({hud.artifactsOwned.length}/{hud.inventoryCap})
           </TabButton>
           <button
             type="button"
@@ -80,7 +99,13 @@ export function CharacterPanel({ state, hud, busy, onEquip, onClose }: Props) {
           {tab === 'character' ? (
             <CharacterTab state={state} hud={hud} />
           ) : (
-            <InventoryTab hud={hud} busy={busy} onEquip={onEquip} />
+            <InventoryTab
+              hud={hud}
+              busy={busy}
+              onEquip={onEquip}
+              onReroll={onReroll}
+              onDiscard={onDiscard}
+            />
           )}
         </div>
       </div>
@@ -157,49 +182,50 @@ function InventoryTab({
   hud,
   busy,
   onEquip,
+  onReroll,
+  onDiscard,
 }: {
   hud: HudSnapshot;
   busy: boolean;
   onEquip: (slot: number, artifactId: string | null) => void;
+  onReroll: (uid: string) => void;
+  onDiscard: (uid: string) => void;
 }) {
-  const owned = hud.artifactsOwned
-    .map((id) => getArtifact(id))
-    .filter((a): a is Artifact => a !== undefined);
-
-  const equip = (artifactId: string) => {
+  const equip = (uid: string) => {
     const free = hud.loadout.indexOf(null);
     // Every slot taken is a choice to make, not an error to swallow - the
     // player unequips something first.
     if (free === -1) return;
-    onEquip(free, artifactId);
+    onEquip(free, uid);
   };
 
   const slotsFull = !hud.loadout.includes(null);
+  const byUid = new Map(hud.artifactsOwned.map((item) => [item.uid, item]));
 
   return (
     <div className="flex flex-col gap-5">
       <Section title={`Equipped (${hud.loadout.filter(Boolean).length}/${ARTIFACT_SLOTS})`}>
         <div className="grid grid-cols-4 gap-2">
-          {hud.loadout.map((id, slot) => {
-            const artifact = id ? getArtifact(id) : undefined;
+          {hud.loadout.map((uid, slot) => {
+            const item = uid ? byUid.get(uid) : undefined;
             return (
               <button
                 key={slot}
                 type="button"
-                disabled={busy || !artifact}
-                onClick={() => artifact && onEquip(slot, null)}
-                title={artifact ? `Unequip ${artifact.name}` : 'Empty slot'}
+                disabled={busy || !item}
+                onClick={() => item && onEquip(slot, null)}
+                title={item ? `Unequip ${itemName(item)}` : 'Empty slot'}
                 className={`flex flex-col items-center gap-1 rounded border p-2 text-center ${
-                  artifact
-                    ? `${RARITY_STYLE[artifact.rarity].border} bg-neutral-900 hover:bg-neutral-800`
+                  item
+                    ? `${RARITY_STYLE[item.rarity].border} bg-neutral-900 hover:bg-neutral-800`
                     : 'border-dashed border-neutral-800 bg-neutral-900/50'
                 }`}
               >
-                {artifact ? (
+                {item ? (
                   <>
-                    <AtlasSprite id={artifact.sprite} scale={2} />
-                    <span className={`text-[10px] ${RARITY_STYLE[artifact.rarity].text}`}>
-                      {artifact.name}
+                    <AtlasSprite id={itemSprite(item)} scale={2} />
+                    <span className={`text-[10px] leading-tight ${RARITY_STYLE[item.rarity].text}`}>
+                      {itemName(item)}
                     </span>
                   </>
                 ) : (
@@ -214,54 +240,122 @@ function InventoryTab({
         </div>
       </Section>
 
-      <Section title="Collection">
-        {owned.length === 0 ? (
+      <Section title={`Collection (${hud.artifactsOwned.length}/${hud.inventoryCap})`}>
+        {hud.artifactsOwned.length === 0 ? (
           <p className="text-sm text-neutral-500">
-            No artifacts yet — bosses drop them. Clear stages to find your first.
+            No items yet — every stage clear drops one. Clear stage 1 to find your first.
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {owned.map((artifact) => {
-              const equipped = hud.loadout.includes(artifact.id);
-              const style = RARITY_STYLE[artifact.rarity];
-              return (
-                <li
-                  key={artifact.id}
-                  className={`flex items-start gap-3 rounded border ${style.border} bg-neutral-900/70 p-2.5`}
-                >
-                  <AtlasSprite id={artifact.sprite} scale={2} className="mt-0.5" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className={`text-sm font-medium ${style.text}`}>{artifact.name}</span>
-                      <span className="text-[10px] uppercase tracking-wide text-neutral-500">
-                        {style.label}
-                      </span>
-                    </div>
-                    <ul className="mt-0.5 text-[11px] text-neutral-400">
-                      {artifact.effects.map((effect, i) => (
-                        <li key={i}>{describeArtifactEffect(effect)}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busy || (!equipped && slotsFull)}
-                    onClick={() =>
-                      equipped
-                        ? onEquip(hud.loadout.indexOf(artifact.id), null)
-                        : equip(artifact.id)
-                    }
-                    className="shrink-0 self-center rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
-                  >
-                    {equipped ? 'Unequip' : slotsFull ? 'Slots full' : 'Equip'}
-                  </button>
-                </li>
-              );
-            })}
+            {/* Newest first: the item you just found is the one you want to look at. */}
+            {[...hud.artifactsOwned].reverse().map((item) => (
+              <ItemRow
+                key={item.uid}
+                item={item}
+                equipped={hud.loadout.includes(item.uid)}
+                gold={hud.gold}
+                busy={busy}
+                slotsFull={slotsFull}
+                onEquip={() =>
+                  hud.loadout.includes(item.uid)
+                    ? onEquip(hud.loadout.indexOf(item.uid), null)
+                    : equip(item.uid)
+                }
+                onReroll={() => onReroll(item.uid)}
+                onDiscard={() => onDiscard(item.uid)}
+              />
+            ))}
           </ul>
         )}
       </Section>
     </div>
+  );
+}
+
+function ItemRow({
+  item,
+  equipped,
+  gold,
+  busy,
+  slotsFull,
+  onEquip,
+  onReroll,
+  onDiscard,
+}: {
+  item: ItemInstance;
+  equipped: boolean;
+  gold: number;
+  busy: boolean;
+  slotsFull: boolean;
+  onEquip: () => void;
+  onReroll: () => void;
+  onDiscard: () => void;
+}) {
+  const style = RARITY_STYLE[item.rarity];
+  const isUnique = item.rarity === 'unique';
+  const cost = isUnique ? Infinity : rerollCost(item.rarity, item.itemLevel, item.rerolls);
+
+  return (
+    <li className={`flex items-start gap-3 rounded border ${style.border} bg-neutral-900/70 p-2.5`}>
+      <AtlasSprite id={itemSprite(item)} scale={2} className="mt-0.5" />
+
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-2">
+          <span className={`text-sm font-medium ${style.text}`}>{itemName(item)}</span>
+          <span className="text-[10px] uppercase tracking-wide text-neutral-500">
+            {style.label} · iLvl {item.itemLevel}
+            {item.rerolls > 0 ? ` · ${item.rerolls} rerolls` : ''}
+          </span>
+        </div>
+
+        <ul className="mt-0.5 text-[11px] text-neutral-400">
+          {isUnique
+            ? itemEffects(item).map((effect, i) => <li key={i}>{describeArtifactEffect(effect)}</li>)
+            : item.affixes.map((rolled, i) => {
+                const line = describeRolledAffix(rolled);
+                return (
+                  <li key={i} className="flex gap-2">
+                    <span className="w-7 shrink-0 font-mono text-neutral-600">{line.tier}</span>
+                    <span>{line.text}</span>
+                  </li>
+                );
+              })}
+        </ul>
+      </div>
+
+      <div className="flex shrink-0 flex-col gap-1">
+        <button
+          type="button"
+          disabled={busy || (!equipped && slotsFull)}
+          onClick={onEquip}
+          className="rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
+        >
+          {equipped ? 'Unequip' : slotsFull ? 'Slots full' : 'Equip'}
+        </button>
+
+        {/* Uniques have no affixes to reroll - that is what makes them unique. */}
+        {!isUnique && (
+          <button
+            type="button"
+            disabled={busy || gold < cost}
+            onClick={onReroll}
+            title="Rerolls every modifier. There is no way to keep one."
+            className="rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
+          >
+            Reroll {compact(cost)}g
+          </button>
+        )}
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onDiscard}
+          className="rounded border border-red-900/70 px-2.5 py-1 text-xs text-red-400 hover:bg-red-950/40 disabled:opacity-40"
+        >
+          Discard
+        </button>
+      </div>
+    </li>
   );
 }
 

@@ -1,164 +1,426 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`content registry > matches its snapshot 1`] = `
-[
-  {
-    "dropStage": 1,
-    "effects": [
-      {
+{
+  "affixes": [
+    {
+      "effect": {
         "kind": "statMod",
         "op": "mul",
         "stat": "damage",
-        "value": 1.15,
       },
-    ],
-    "id": "whetstone",
-    "name": "Whetstone",
-    "rarity": "common",
-    "sprite": "artifact.whetstone",
-  },
-  {
-    "dropStage": 1,
-    "effects": [
-      {
-        "kind": "statMod",
-        "op": "mul",
-        "stat": "attackSpeed",
-        "value": 1.12,
-      },
-    ],
-    "id": "quickdraw-glove",
-    "name": "Quickdraw Glove",
-    "rarity": "common",
-    "sprite": "artifact.quickdraw_glove",
-  },
-  {
-    "dropStage": 3,
-    "effects": [
-      {
-        "kind": "goldOnKill",
-        "multiplier": 0.25,
-      },
-    ],
-    "id": "coin-purse",
-    "name": "Coin Purse",
-    "rarity": "common",
-    "sprite": "artifact.coin_purse",
-  },
-  {
-    "dropStage": 8,
-    "effects": [
-      {
-        "kind": "statMod",
-        "op": "mul",
-        "stat": "damage",
-        "value": 1.45,
-        "when": {
-          "enemyHpBelow": 0.3,
+      "id": "brutal",
+      "kind": "prefix",
+      "nameFragment": "Brutal",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1.04,
         },
-      },
-    ],
-    "id": "executioners-mark",
-    "name": "Executioner's Mark",
-    "rarity": "rare",
-    "sprite": "artifact.executioners_mark",
-  },
-  {
-    "dropStage": 12,
-    "effects": [
-      {
-        "kind": "statMod",
-        "op": "mul",
-        "stat": "damage",
-        "value": 1.35,
-        "when": {
-          "isBoss": true,
+        {
+          "minStage": 15,
+          "value": 1.06,
         },
-      },
-      {
-        "kind": "statMod",
-        "op": "add",
-        "stat": "area",
-        "value": -1,
-      },
-    ],
-    "id": "giant-slayer",
-    "name": "Giant Slayer",
-    "rarity": "rare",
-    "sprite": "artifact.giant_slayer",
-  },
-  {
-    "dropStage": 20,
-    "effects": [
-      {
-        "kind": "statMod",
-        "op": "add",
-        "stat": "area",
-        "value": 3,
-      },
-      {
-        "kind": "statMod",
-        "op": "mul",
-        "stat": "damage",
-        "value": 0.85,
-      },
-    ],
-    "id": "swarm-lens",
-    "name": "Swarm Lens",
-    "rarity": "epic",
-    "sprite": "artifact.swarm_lens",
-  },
-  {
-    "dropStage": 25,
-    "effects": [
-      {
-        "kind": "statMod",
-        "op": "add",
-        "stat": "critChance",
-        "value": 0.12,
-      },
-      {
-        "kind": "statMod",
-        "op": "add",
-        "stat": "critMult",
-        "value": 0.5,
-      },
-      {
+        {
+          "minStage": 40,
+          "value": 1.08,
+        },
+        {
+          "minStage": 80,
+          "value": 1.1,
+        },
+      ],
+    },
+    {
+      "effect": {
         "kind": "statMod",
         "op": "mul",
         "stat": "maxHp",
-        "value": 0.8,
       },
-    ],
-    "id": "bloodstone",
-    "name": "Bloodstone",
-    "rarity": "epic",
-    "sprite": "artifact.bloodstone",
-  },
-  {
-    "dropStage": 40,
-    "effects": [
-      {
+      "id": "vital",
+      "kind": "prefix",
+      "nameFragment": "Vital",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1.07,
+        },
+        {
+          "minStage": 15,
+          "value": 1.1,
+        },
+        {
+          "minStage": 40,
+          "value": 1.13,
+        },
+        {
+          "minStage": 80,
+          "value": 1.16,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "mul",
+        "stat": "toughness",
+      },
+      "id": "armoured",
+      "kind": "prefix",
+      "nameFragment": "Armoured",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1.015,
+        },
+        {
+          "minStage": 15,
+          "value": 1.02,
+        },
+        {
+          "minStage": 40,
+          "value": 1.025,
+        },
+        {
+          "minStage": 80,
+          "value": 1.03,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "add",
+        "stat": "area",
+      },
+      "id": "sweeping",
+      "kind": "prefix",
+      "nameFragment": "Sweeping",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.3,
+        },
+        {
+          "minStage": 15,
+          "value": 0.5,
+        },
+        {
+          "minStage": 40,
+          "value": 0.65,
+        },
+        {
+          "minStage": 80,
+          "value": 0.8,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "mul",
+        "stat": "attackSpeed",
+      },
+      "id": "of-haste",
+      "kind": "suffix",
+      "nameFragment": "of Haste",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1.025,
+        },
+        {
+          "minStage": 15,
+          "value": 1.04,
+        },
+        {
+          "minStage": 40,
+          "value": 1.05,
+        },
+        {
+          "minStage": 80,
+          "value": 1.06,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "add",
+        "stat": "critChance",
+      },
+      "id": "of-precision",
+      "kind": "suffix",
+      "nameFragment": "of Precision",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.01,
+        },
+        {
+          "minStage": 15,
+          "value": 0.018,
+        },
+        {
+          "minStage": 40,
+          "value": 0.025,
+        },
+        {
+          "minStage": 80,
+          "value": 0.03,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "add",
+        "stat": "critMult",
+      },
+      "id": "of-ruin",
+      "kind": "suffix",
+      "nameFragment": "of Ruin",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.08,
+        },
+        {
+          "minStage": 15,
+          "value": 0.13,
+        },
+        {
+          "minStage": 40,
+          "value": 0.18,
+        },
+        {
+          "minStage": 80,
+          "value": 0.22,
+        },
+      ],
+    },
+    {
+      "effect": {
         "kind": "statMod",
         "op": "mul",
         "stat": "goldFind",
-        "value": 1.6,
-        "when": {
-          "stageAtLeast": 40,
-        },
       },
-      {
-        "kind": "goldOnKill",
-        "multiplier": 0.5,
-        "when": {
-          "isBoss": true,
+      "id": "of-avarice",
+      "kind": "suffix",
+      "nameFragment": "of Avarice",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1.06,
         },
-      },
-    ],
-    "id": "deep-delvers-idol",
-    "name": "Deep Delver's Idol",
-    "rarity": "legendary",
-    "sprite": "artifact.deep_delvers_idol",
-  },
-]
+        {
+          "minStage": 15,
+          "value": 1.09,
+        },
+        {
+          "minStage": 40,
+          "value": 1.12,
+        },
+        {
+          "minStage": 80,
+          "value": 1.15,
+        },
+      ],
+    },
+  ],
+  "bases": [
+    {
+      "id": "whetstone",
+      "name": "Whetstone",
+      "sprite": "artifact.whetstone",
+    },
+    {
+      "id": "glove",
+      "name": "Glove",
+      "sprite": "artifact.quickdraw_glove",
+    },
+    {
+      "id": "purse",
+      "name": "Purse",
+      "sprite": "artifact.coin_purse",
+    },
+    {
+      "id": "sigil",
+      "name": "Sigil",
+      "sprite": "artifact.executioners_mark",
+    },
+    {
+      "id": "blade",
+      "name": "Blade",
+      "sprite": "artifact.giant_slayer",
+    },
+    {
+      "id": "lens",
+      "name": "Lens",
+      "sprite": "artifact.swarm_lens",
+    },
+    {
+      "id": "charm",
+      "name": "Charm",
+      "sprite": "artifact.bloodstone",
+    },
+    {
+      "id": "idol",
+      "name": "Idol",
+      "sprite": "artifact.deep_delvers_idol",
+    },
+  ],
+  "uniques": [
+    {
+      "dropStage": 1,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "mul",
+          "stat": "damage",
+          "value": 1.35,
+        },
+      ],
+      "id": "whetstone",
+      "name": "The Whetstone",
+      "sprite": "artifact.whetstone",
+    },
+    {
+      "dropStage": 1,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "mul",
+          "stat": "attackSpeed",
+          "value": 1.3,
+        },
+      ],
+      "id": "quickdraw-glove",
+      "name": "Quickdraw Glove",
+      "sprite": "artifact.quickdraw_glove",
+    },
+    {
+      "dropStage": 3,
+      "effects": [
+        {
+          "kind": "goldOnKill",
+          "multiplier": 0.6,
+        },
+      ],
+      "id": "coin-purse",
+      "name": "Bottomless Purse",
+      "sprite": "artifact.coin_purse",
+    },
+    {
+      "dropStage": 8,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "mul",
+          "stat": "damage",
+          "value": 1.9,
+          "when": {
+            "enemyHpBelow": 0.3,
+          },
+        },
+      ],
+      "id": "executioners-mark",
+      "name": "Executioner's Mark",
+      "sprite": "artifact.executioners_mark",
+    },
+    {
+      "dropStage": 12,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "mul",
+          "stat": "damage",
+          "value": 1.7,
+          "when": {
+            "isBoss": true,
+          },
+        },
+        {
+          "kind": "statMod",
+          "op": "add",
+          "stat": "area",
+          "value": -1,
+        },
+      ],
+      "id": "giant-slayer",
+      "name": "Giant Slayer",
+      "sprite": "artifact.giant_slayer",
+    },
+    {
+      "dropStage": 20,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "add",
+          "stat": "area",
+          "value": 4,
+        },
+        {
+          "kind": "statMod",
+          "op": "mul",
+          "stat": "damage",
+          "value": 0.8,
+        },
+      ],
+      "id": "swarm-lens",
+      "name": "Swarm Lens",
+      "sprite": "artifact.swarm_lens",
+    },
+    {
+      "dropStage": 25,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "add",
+          "stat": "critChance",
+          "value": 0.18,
+        },
+        {
+          "kind": "statMod",
+          "op": "add",
+          "stat": "critMult",
+          "value": 0.6,
+        },
+        {
+          "kind": "statMod",
+          "op": "mul",
+          "stat": "maxHp",
+          "value": 0.75,
+        },
+      ],
+      "id": "bloodstone",
+      "name": "Bloodstone",
+      "sprite": "artifact.bloodstone",
+    },
+    {
+      "dropStage": 40,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "mul",
+          "stat": "goldFind",
+          "value": 2,
+          "when": {
+            "stageAtLeast": 40,
+          },
+        },
+        {
+          "kind": "goldOnKill",
+          "multiplier": 0.5,
+          "when": {
+            "isBoss": true,
+          },
+        },
+      ],
+      "id": "deep-delvers-idol",
+      "name": "Deep Delver's Idol",
+      "sprite": "artifact.deep_delvers_idol",
+    },
+  ],
+}
 `;

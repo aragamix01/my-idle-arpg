@@ -16,13 +16,19 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
+  ARTIFACT_SLOTS,
   farmRate,
-  newSave,
-  resolveStage,
-  upgradeCost,
+  INVENTORY_CAP,
   isUpgradeMaxed,
-  UPGRADE_KEYS,
+  itemPower,
+  newSave,
+  rerollAffixes,
+  rerollCost,
+  resolveStage,
+  rollItem,
   STAGE_TIME_LIMIT_SECONDS,
+  upgradeCost,
+  UPGRADE_KEYS,
   type SaveState,
   type UpgradeKey,
 } from '../src/sim';
@@ -112,6 +118,91 @@ function diagnose(save: SaveState, stage: number): string {
   return lines.join('\n');
 }
 
+/**
+ * Take the guaranteed drop, discarding the weakest unequipped item when full.
+ *
+ * Modelled directly rather than through applyCommand because the harness also
+ * wants the timing figures resolveStage returns, and calling both would roll
+ * the stage twice.
+ */
+function takeDrop(save: SaveState, stage: number): SaveState {
+  let owned = [...save.artifactsOwned];
+  const uid = save.nextItemId;
+
+  if (owned.length >= INVENTORY_CAP) {
+    const spare = owned
+      .filter((item) => !save.loadout.includes(item.uid))
+      .sort((a, b) => itemPower(a) - itemPower(b))[0];
+    if (!spare) return { ...save, nextItemId: uid };
+    owned = owned.filter((item) => item.uid !== spare.uid);
+  }
+
+  owned.push(rollItem(save.seed, uid, stage));
+  return { ...save, artifactsOwned: owned, nextItemId: uid + 1 };
+}
+
+/**
+ * Equip whatever raises the objective.
+ *
+ * Repeated single swaps rather than a search over all combinations - the
+ * agent is greedy everywhere else and this keeps it comparable.
+ */
+function improveLoadout(save: SaveState, stage: number): SaveState {
+  let current = save;
+
+  for (let pass = 0; pass < ARTIFACT_SLOTS * 2; pass++) {
+    const baseline = value(current, stage);
+    let best: { save: SaveState; gain: number } | null = null;
+
+    for (let slot = 0; slot < ARTIFACT_SLOTS; slot++) {
+      for (const item of current.artifactsOwned) {
+        if (current.loadout.includes(item.uid)) continue;
+        const loadout = [...current.loadout];
+        loadout[slot] = item.uid;
+        const candidate = { ...current, loadout };
+        const gain = value(candidate, stage) - baseline;
+        if (gain > 0 && (!best || gain > best.gain)) best = { save: candidate, gain };
+      }
+    }
+
+    if (!best) break;
+    current = best.save;
+  }
+
+  return current;
+}
+
+/**
+ * Gamble on a reroll when gold is plentiful.
+ *
+ * A reroll's outcome is unknowable in advance, so the agent cannot evaluate it
+ * the way it evaluates an upgrade. It rerolls the weakest equipped non-unique
+ * only when it can comfortably afford to - the 4x multiplier assumes a player
+ * who chases rolls, and ignoring rerolling entirely would model someone who
+ * never touches the system.
+ */
+function maybeReroll(save: SaveState, stage: number): SaveState {
+  const equipped = save.artifactsOwned.filter(
+    (item) => save.loadout.includes(item.uid) && item.rarity !== 'unique',
+  );
+  if (equipped.length === 0) return save;
+
+  const weakest = equipped.sort((a, b) => itemPower(a) - itemPower(b))[0];
+  const cost = rerollCost(weakest.rarity, weakest.itemLevel, weakest.rerolls);
+  // Never starve the upgrade tracks: rerolling is discretionary spending.
+  if (!Number.isFinite(cost) || save.gold < cost * 4) return save;
+
+  const rerolled = rerollAffixes(save.seed, weakest);
+  const next: SaveState = {
+    ...save,
+    gold: save.gold - cost,
+    artifactsOwned: save.artifactsOwned.map((item) => (item.uid === weakest.uid ? rerolled : item)),
+  };
+  // The result is kept whatever it is - that is what "cannot remove if it
+  // broke" means. Re-equipping afterwards may drop it for something better.
+  return improveLoadout(next, stage);
+}
+
 export function runLadder(): { rows: Row[]; wall: number | null; diagnosis: string; stallReason: string } {
   let save = newSave(SEED, 0);
   let elapsed = 0;
@@ -131,6 +222,8 @@ export function runLadder(): { rows: Row[]; wall: number | null; diagnosis: stri
 
       if (outcome.cleared) {
         save = { ...save, bestStage: stage, currentStage: stage + 1 };
+        save = takeDrop(save, stage);
+        save = improveLoadout(save, stage);
         break;
       }
 
@@ -142,6 +235,8 @@ export function runLadder(): { rows: Row[]; wall: number | null; diagnosis: stri
         save = { ...withUpgrade(save, buy.key), gold: save.gold - buy.cost };
         boughtAnything = true;
       }
+
+      save = maybeReroll(save, stage);
 
       if (!boughtAnything) {
         // Farm at the best cleared stage until the next useful upgrade is affordable.

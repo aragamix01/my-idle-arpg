@@ -276,7 +276,7 @@ test('the character panel shows every stat and the empty inventory', async ({ pa
   }
 
   await panel.getByRole('button', { name: /^Inventory/ }).click();
-  await expect(panel.getByText(/No artifacts yet/)).toBeVisible();
+  await expect(panel.getByText(/No items yet/)).toBeVisible();
   // Four slots, all empty on a fresh account.
   await expect(panel.getByText('empty', { exact: true })).toHaveCount(4);
 

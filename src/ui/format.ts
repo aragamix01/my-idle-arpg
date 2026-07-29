@@ -6,7 +6,16 @@
  * a number the sim no longer applies.
  */
 
-import type { Effect, Rarity, StatKey, Stats } from '@/sim';
+import {
+  affixEffect,
+  displayTier,
+  getAffix,
+  type Effect,
+  type Rarity,
+  type RolledAffix,
+  type StatKey,
+  type Stats,
+} from '@/sim';
 
 /** Short human-readable magnitude: 1.23k, 4.56M, 7.89B. */
 export function compact(value: number): string {
@@ -42,12 +51,17 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   goldFind: { label: 'Gold Find', format: (v) => `x${v.toFixed(2)}` },
 };
 
-/** Border and text colours per rarity. Tailwind classes, applied to a tile. */
+/**
+ * Border and text colours per rarity.
+ *
+ * Follows the Path of Exile convention the item system is modelled on: white,
+ * blue, yellow, orange. Players coming from that game read these instantly.
+ */
 export const RARITY_STYLE: Record<Rarity, { border: string; text: string; label: string }> = {
   common: { border: 'border-neutral-600', text: 'text-neutral-200', label: 'Common' },
-  rare: { border: 'border-sky-500/70', text: 'text-sky-300', label: 'Rare' },
-  epic: { border: 'border-violet-500/70', text: 'text-violet-300', label: 'Epic' },
-  legendary: { border: 'border-amber-500/80', text: 'text-amber-300', label: 'Legendary' },
+  magic: { border: 'border-sky-500/70', text: 'text-sky-300', label: 'Magic' },
+  rare: { border: 'border-yellow-500/70', text: 'text-yellow-300', label: 'Rare' },
+  unique: { border: 'border-orange-500/80', text: 'text-orange-400', label: 'Unique' },
 };
 
 /** Trailing clause for a conditional effect, or '' when it always applies. */
@@ -89,6 +103,24 @@ export function describeArtifactEffect(effect: Effect): string {
   const shown =
     effect.stat === 'critChance' ? percent(effect.value) : effect.value.toFixed(2).replace(/\.00$/, '');
   return `${sign}${shown} ${label}${suffix}`;
+}
+
+/**
+ * A rolled affix as one line: the effect, plus which tier it landed on.
+ *
+ * The tier is the part that matters once a player has a full loadout - two
+ * items can carry the same affix and be worth very different amounts, and
+ * without the tier shown there is no way to see that at a glance.
+ */
+export function describeRolledAffix(rolled: RolledAffix): { text: string; tier: string } {
+  const affix = getAffix(rolled.affixId);
+  if (!affix) return { text: 'unknown modifier', tier: '' };
+
+  const effect = affixEffect(rolled);
+  return {
+    text: effect ? describeArtifactEffect(effect) : 'unknown modifier',
+    tier: `T${displayTier(affix, rolled.tier)}`,
+  };
 }
 
 /** Ordered stat list for the character sheet. */

@@ -10,6 +10,8 @@ export * from './types';
 export * from './rng';
 export * from './curves';
 export * from './content';
+export * from './items';
+export * from './migrate';
 export * from './stats';
 export * from './combat';
 export * from './offline';

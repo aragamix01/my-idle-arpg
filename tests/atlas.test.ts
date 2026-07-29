@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PNG } from 'pngjs';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ARTIFACTS } from '../src/sim';
+import { BASES, UNIQUES } from '../src/sim';
 import { SPRITE_IDS, type AtlasManifest } from '../src/render/sprites';
 import { SOURCES } from '../scripts/atlas/sources';
 
@@ -64,11 +64,11 @@ describe('atlas', () => {
     }
   });
 
-  it('gives every artifact in the registry a sprite', () => {
-    // Content and art drift apart quietly: an artifact added to the registry
-    // without a sprite renders as a placeholder that nobody notices for weeks.
-    const unmapped = ARTIFACTS.filter((artifact) => !(artifact.sprite in manifest.frames));
-    expect(unmapped.map((a) => `${a.id} -> ${a.sprite}`)).toEqual([]);
+  it('gives every item base and unique a sprite', () => {
+    // Content and art drift apart quietly: a base or unique added without a
+    // sprite renders as a placeholder that nobody notices for weeks.
+    const unmapped = [...BASES, ...UNIQUES].filter((entry) => !(entry.sprite in manifest.frames));
+    expect(unmapped.map((e) => `${e.id} -> ${e.sprite}`)).toEqual([]);
   });
 
   it('maps no two sprite ids to the same tile', () => {

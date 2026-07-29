@@ -6,8 +6,9 @@
  * whole item pool without executing arbitrary code.
  */
 
-import { getArtifact, type Effect } from './content';
+import type { Effect, ItemInstance } from './content';
 import { UPGRADE_TRACKS } from './curves';
+import { itemEffects } from './items';
 import type { EffectContext, SaveState, StatKey, Stats, UpgradeLevels } from './types';
 
 /** Stats with zero upgrades and no artifacts. */
@@ -59,14 +60,19 @@ function conditionHolds(effect: Effect, ctx: EffectContext): boolean {
   return true;
 }
 
-/** Effects from currently equipped artifacts only — owned-but-unequipped do nothing. */
+/** Find an owned item by uid. */
+export function findItem(save: SaveState, uid: string): ItemInstance | undefined {
+  return save.artifactsOwned.find((item) => item.uid === uid);
+}
+
+/** Effects from currently equipped items only — owned-but-unequipped do nothing. */
 export function equippedEffects(save: SaveState): Effect[] {
   const out: Effect[] = [];
-  for (const id of save.loadout) {
-    if (!id) continue;
-    const artifact = getArtifact(id);
-    if (!artifact) continue; // stale save referencing removed content
-    out.push(...artifact.effects);
+  for (const uid of save.loadout) {
+    if (!uid) continue;
+    const item = findItem(save, uid);
+    if (!item) continue; // loadout referencing a discarded or migrated-away item
+    out.push(...itemEffects(item));
   }
   return out;
 }

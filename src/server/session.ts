@@ -13,7 +13,7 @@
 
 import 'server-only';
 import { cookies } from 'next/headers';
-import { newSave, type SaveState } from '@/sim';
+import { migrateSave, newSave, type SaveState } from '@/sim';
 import { readSupabaseConfig } from './env';
 import { getSaveStore } from './store';
 import { createUserClient } from './supabase';
@@ -37,6 +37,18 @@ function freshSave(): SaveState {
   return newSave(seed, Date.now());
 }
 
+/**
+ * Bring a loaded save up to the current content version.
+ *
+ * Written back immediately when anything changed, so a migration runs once
+ * rather than on every request until the player happens to issue a command.
+ */
+async function applyMigration(playerId: string, loaded: SaveState): Promise<SaveState> {
+  const { state, migrated } = migrateSave(loaded);
+  if (migrated) await getSaveStore().save(playerId, state);
+  return state;
+}
+
 export async function getSession(): Promise<Session> {
   const config = readSupabaseConfig();
   return config ? supabaseSession() : cookieSession();
@@ -53,7 +65,9 @@ async function supabaseSession(): Promise<Session> {
 
   if (user) {
     const existing = await store.load(user.id);
-    if (existing) return { playerId: user.id, state: existing, created: false };
+    if (existing) {
+      return { playerId: user.id, state: await applyMigration(user.id, existing), created: false };
+    }
 
     // Authenticated but no row: the account exists and the save write failed,
     // or the row was deleted. Rebuilding beats a 500 the player cannot escape.
@@ -84,7 +98,9 @@ async function cookieSession(): Promise<Session> {
 
   if (existing) {
     const state = await store.load(existing);
-    if (state) return { playerId: existing, state, created: false };
+    if (state) {
+      return { playerId: existing, state: await applyMigration(existing, state), created: false };
+    }
   }
 
   const playerId = crypto.randomUUID();

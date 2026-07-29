@@ -5,45 +5,76 @@
  * progress from saves that may be weeks old — without the stamp, a balance
  * patch silently corrupts those numbers.
  *
- * Bump it whenever ARTIFACTS, the effect schema, or TUNING changes in a way
- * that alters outcomes.
+ * Bump it whenever the affix pool, the effect schema, or TUNING changes in a
+ * way that alters outcomes. A bump that also changes the *shape* of a save
+ * needs a matching step in src/sim/migrate.ts.
  */
 
-import { ARTIFACTS } from './artifacts';
-import { ArtifactSchema, type Artifact } from './schema';
+import { AFFIXES } from './affixes';
+import { BASES } from './bases';
+import { UNIQUES } from './uniques';
+import { EffectSchema, UniqueSchema } from './schema';
 
-export const CONTENT_VERSION = 1;
+/** 2: artifacts became rolled item instances with prefixes and suffixes. */
+export const CONTENT_VERSION = 2;
 
 export * from './schema';
-export { ARTIFACTS } from './artifacts';
-export type { ArtifactId } from './artifacts';
-
-const byId = new Map<string, Artifact>(ARTIFACTS.map((a) => [a.id, a]));
-
-export function getArtifact(id: string): Artifact | undefined {
-  return byId.get(id);
-}
-
-export function artifactExists(id: string): boolean {
-  return byId.has(id);
-}
+export * from './affixes';
+export * from './bases';
+export * from './uniques';
 
 /**
- * Validates the whole registry against the schema. Called by a test, not at
- * runtime — the `satisfies` clause in artifacts.ts already type-checks shape,
- * this catches the things types cannot (duplicate ids, out-of-range numbers).
+ * Validates the whole registry.
+ *
+ * Called by a test rather than at runtime. Types already cover shape; this
+ * catches what they cannot - duplicate ids, tier tables that are not ascending,
+ * and affix templates that produce effects the interpreter would reject.
  */
 export function validateRegistry(): { ok: true } | { ok: false; errors: string[] } {
   const errors: string[] = [];
-  const seen = new Set<string>();
 
-  for (const artifact of ARTIFACTS) {
-    const parsed = ArtifactSchema.safeParse(artifact);
-    if (!parsed.success) {
-      errors.push(`${artifact.id}: ${parsed.error.issues.map((i) => i.message).join(', ')}`);
+  const seenAffix = new Set<string>();
+  for (const affix of AFFIXES) {
+    if (seenAffix.has(affix.id)) errors.push(`duplicate affix id: ${affix.id}`);
+    seenAffix.add(affix.id);
+
+    if (affix.tiers.length === 0) errors.push(`${affix.id}: no tiers`);
+    for (let i = 1; i < affix.tiers.length; i++) {
+      if (affix.tiers[i].minStage < affix.tiers[i - 1].minStage) {
+        errors.push(`${affix.id}: tier ${i} unlocks before tier ${i - 1}`);
+      }
     }
-    if (seen.has(artifact.id)) errors.push(`duplicate id: ${artifact.id}`);
-    seen.add(artifact.id);
+    // Tier 0 must be reachable at stage 1 or nothing can roll the affix.
+    if (affix.tiers[0]?.minStage > 1) errors.push(`${affix.id}: lowest tier is gated above stage 1`);
+
+    // Every template must produce an effect the interpreter accepts.
+    const sample =
+      affix.effect.kind === 'goldOnKill'
+        ? { kind: 'goldOnKill' as const, multiplier: affix.tiers[0].value }
+        : {
+            kind: 'statMod' as const,
+            stat: affix.effect.stat,
+            op: affix.effect.op,
+            value: affix.tiers[0].value,
+          };
+    const parsed = EffectSchema.safeParse(sample);
+    if (!parsed.success) errors.push(`${affix.id}: produces an invalid effect`);
+  }
+
+  const seenBase = new Set<string>();
+  for (const base of BASES) {
+    if (seenBase.has(base.id)) errors.push(`duplicate base id: ${base.id}`);
+    seenBase.add(base.id);
+  }
+
+  const seenUnique = new Set<string>();
+  for (const unique of UNIQUES) {
+    if (seenUnique.has(unique.id)) errors.push(`duplicate unique id: ${unique.id}`);
+    seenUnique.add(unique.id);
+    const parsed = UniqueSchema.safeParse(unique);
+    if (!parsed.success) {
+      errors.push(`${unique.id}: ${parsed.error.issues.map((i) => i.message).join(', ')}`);
+    }
   }
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors };

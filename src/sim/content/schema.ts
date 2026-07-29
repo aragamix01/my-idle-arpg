@@ -5,10 +5,14 @@
  * power — a novel effect needs a new `kind` plus interpreter support — and buys
  * serialisability, diffability, schema validation, and the option to move the
  * registry into the database later without rewriting anything.
+ *
+ * Affixes follow the same rule: a definition carries an effect *template* plus
+ * a tier table of numbers, never a function. That is what lets a rolled affix
+ * be stored in a save, displayed in the panel, and validated by a test.
  */
 
 import { z } from 'zod';
-import { STAT_KEYS } from '../types';
+import { STAT_KEYS, type StatKey } from '../types';
 
 export const StatKeySchema = z.enum(STAT_KEYS);
 
@@ -48,20 +52,119 @@ export const EffectSchema = z.discriminatedUnion('kind', [
 export type Effect = z.infer<typeof EffectSchema>;
 export type Condition = z.infer<typeof ConditionSchema>;
 
-export const RaritySchema = z.enum(['common', 'rare', 'epic', 'legendary']);
+// --- Rarity ---------------------------------------------------------------
+
+export const RaritySchema = z.enum(['common', 'magic', 'rare', 'unique']);
 export type Rarity = z.infer<typeof RaritySchema>;
 
-export const ArtifactSchema = z
+/**
+ * How many affixes each rarity carries.
+ *
+ * Uniques roll nothing - their effects are authored and fixed, which is the
+ * whole point of a unique.
+ */
+export const AFFIX_LIMITS: Record<Rarity, { prefix: number; suffix: number }> = {
+  common: { prefix: 1, suffix: 0 },
+  magic: { prefix: 1, suffix: 1 },
+  rare: { prefix: 2, suffix: 2 },
+  unique: { prefix: 0, suffix: 0 },
+};
+
+/** Relative drop weights. Rolled once per drop; every clear yields an item. */
+export const RARITY_WEIGHTS: Record<Rarity, number> = {
+  common: 55,
+  magic: 30,
+  rare: 13,
+  unique: 2,
+};
+
+// --- Affixes --------------------------------------------------------------
+
+export type AffixKind = 'prefix' | 'suffix';
+
+/**
+ * What an affix does, minus its magnitude.
+ *
+ * Deliberately not a function taking a value. A template plus a number is data
+ * that can be validated and diffed; a factory closure is neither.
+ */
+export type AffixEffectTemplate =
+  | { kind: 'statMod'; stat: StatKey; op: 'add' | 'mul' }
+  | { kind: 'goldOnKill' };
+
+export interface AffixTier {
+  /** Lowest item level that may roll this tier. */
+  minStage: number;
+  /** The magnitude. For `mul` templates this is the multiplier, e.g. 1.2. */
+  value: number;
+}
+
+export interface AffixDefinition {
+  id: string;
+  kind: AffixKind;
+  /** Composes item names: 'Brutal' + base, or base + 'of Haste'. */
+  nameFragment: string;
+  effect: AffixEffectTemplate;
+  /** Ascending by strength. Index 0 is the weakest and always available. */
+  tiers: AffixTier[];
+}
+
+/** A rolled affix as stored on an item. */
+export const RolledAffixSchema = z
+  .object({
+    affixId: z.string().min(1),
+    /** Index into the definition's tier table. */
+    tier: z.number().int().min(0),
+    /**
+     * The rolled magnitude, stored rather than looked up.
+     *
+     * Retuning a tier table must not silently restat items already sitting in
+     * someone's inventory, and the panel must show exactly what the sim applies.
+     */
+    value: z.number(),
+  })
+  .strict();
+
+export type RolledAffix = z.infer<typeof RolledAffixSchema>;
+
+// --- Items ----------------------------------------------------------------
+
+export const ItemInstanceSchema = z
+  .object({
+    /** Stable identity. The loadout stores these, not indices. */
+    uid: z.string().min(1),
+    baseId: z.string().min(1),
+    rarity: RaritySchema,
+    /** Stage it dropped at. Caps which affix tiers it may ever roll. */
+    itemLevel: z.number().int().min(1),
+    affixes: z.array(RolledAffixSchema),
+    /** Prior rerolls. Feeds both the cost curve and the roll seed. */
+    rerolls: z.number().int().min(0),
+    /** Set only on uniques, naming the authored entry in the unique registry. */
+    uniqueId: z.string().optional(),
+  })
+  .strict();
+
+export type ItemInstance = z.infer<typeof ItemInstanceSchema>;
+
+/** A base type: the name and icon an item is built on. */
+export interface ItemBase {
+  id: string;
+  name: string;
+  /** Logical sprite ID — never a filename. Resolved via the atlas sprite map. */
+  sprite: string;
+}
+
+/** An authored unique. Fixed effects, never rolled, never rerolled. */
+export const UniqueSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
-    /** Logical sprite ID — never a filename. Resolved via the atlas sprite map. */
     sprite: z.string().min(1),
-    rarity: RaritySchema,
     /** Earliest stage this can drop from. */
     dropStage: z.number().int().min(1),
     effects: z.array(EffectSchema).min(1),
   })
   .strict();
 
-export type Artifact = z.infer<typeof ArtifactSchema>;
+export type Unique = z.infer<typeof UniqueSchema>;

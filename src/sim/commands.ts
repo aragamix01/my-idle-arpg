@@ -18,12 +18,15 @@ import {
   isUpgradeMaxed,
   maxAffordableUpgrades,
   remainingLevels,
+  rerollCost,
 } from './curves';
-import { ARTIFACTS, CONTENT_VERSION, artifactExists } from './content';
+import { CONTENT_VERSION } from './content';
 import { computeOffline } from './offline';
-import { createRng } from './rng';
+import { rerollAffixes, rollItem, itemName } from './items';
+import { findItem } from './stats';
 import {
   ARTIFACT_SLOTS,
+  INVENTORY_CAP,
   UPGRADE_KEYS,
   err,
   ok,
@@ -55,9 +58,12 @@ export const CommandSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('equipArtifact'),
       slot: z.number().int().min(0).max(ARTIFACT_SLOTS - 1),
+      /** Item uid, or null to clear the slot. */
       artifactId: z.string().nullable(),
     })
     .strict(),
+  z.object({ type: z.literal('rerollItem'), uid: z.string().min(1) }).strict(),
+  z.object({ type: z.literal('discardItem'), uid: z.string().min(1) }).strict(),
   z.object({ type: z.literal('claimOffline') }).strict(),
 ]);
 
@@ -66,7 +72,10 @@ export type Command = z.infer<typeof CommandSchema>;
 export type SimEvent =
   | { type: 'stageCleared'; stage: number; seconds: number; gold: number }
   | { type: 'stageFailed'; stage: number; reason: 'died' | 'timeout'; gold: number }
-  | { type: 'artifactDropped'; artifactId: string }
+  | { type: 'artifactDropped'; artifactId: string; name: string; rarity: string }
+  | { type: 'inventoryFull' }
+  | { type: 'itemRerolled'; uid: string; cost: number }
+  | { type: 'itemDiscarded'; uid: string }
   | { type: 'upgradeBought'; key: string; level: number; cost: number; count: number }
   | { type: 'offlineClaimed'; gold: number; seconds: number; capped: boolean };
 
@@ -89,23 +98,9 @@ export function newSave(seed: number, nowMs: number): SaveState {
     upgrades: emptyUpgrades(),
     artifactsOwned: [],
     loadout: Array<string | null>(ARTIFACT_SLOTS).fill(null),
+    nextItemId: 1,
     lastSeenAt: nowMs,
   };
-}
-
-/**
- * Roll a boss drop. Seeded by (account seed, stage) so the same clear always
- * produces the same drop — the client's optimistic prediction matches the
- * server's answer, and neither can reroll for a better item.
- */
-function rollDrop(save: SaveState, stage: number): string | null {
-  const rng = createRng(save.seed).fork(stage * 2654435761);
-  const eligible = ARTIFACTS.filter(
-    (a) => a.dropStage <= stage && !save.artifactsOwned.includes(a.id),
-  );
-  if (eligible.length === 0) return null;
-  if (!rng.chance(0.35)) return null;
-  return eligible[rng.int(eligible.length)].id;
 }
 
 export function applyCommand(
@@ -140,10 +135,20 @@ export function applyCommand(
           gold: Math.floor(outcome.goldEarned),
         });
 
-        const drop = rollDrop(state, stage);
-        if (drop) {
-          next.artifactsOwned.push(drop);
-          events.push({ type: 'artifactDropped', artifactId: drop });
+        // Every clear drops. Rarity is what varies, not whether anything falls.
+        if (next.artifactsOwned.length >= INVENTORY_CAP) {
+          events.push({ type: 'inventoryFull' });
+        } else {
+          const uid = next.nextItemId;
+          next.nextItemId = uid + 1;
+          const item = rollItem(next.seed, uid, stage);
+          next.artifactsOwned.push(item);
+          events.push({
+            type: 'artifactDropped',
+            artifactId: item.uid,
+            name: itemName(item),
+            rarity: item.rarity,
+          });
         }
       } else {
         events.push({
@@ -199,12 +204,42 @@ export function applyCommand(
     case 'equipArtifact': {
       const { slot, artifactId } = command;
       if (artifactId !== null) {
-        if (!artifactExists(artifactId)) return err(`unknown artifact: ${artifactId}`);
-        if (!next.artifactsOwned.includes(artifactId)) return err(`not owned: ${artifactId}`);
+        if (!findItem(next, artifactId)) return err(`not owned: ${artifactId}`);
         const existing = next.loadout.indexOf(artifactId);
         if (existing !== -1 && existing !== slot) next.loadout[existing] = null;
       }
       next.loadout[slot] = artifactId;
+      break;
+    }
+
+    case 'rerollItem': {
+      const index = next.artifactsOwned.findIndex((item) => item.uid === command.uid);
+      if (index === -1) return err(`not owned: ${command.uid}`);
+
+      const item = next.artifactsOwned[index];
+      if (item.rarity === 'unique') return err('uniques cannot be rerolled');
+
+      const cost = rerollCost(item.rarity, item.itemLevel, item.rerolls);
+      if (next.gold < cost) {
+        return err(`need ${cost} gold to reroll, have ${Math.floor(next.gold)}`);
+      }
+
+      next.gold -= cost;
+      // Replaces every affix. There is deliberately no way to keep one and
+      // reroll the rest - that choice is what gives each roll weight.
+      next.artifactsOwned = next.artifactsOwned.map((current, i) =>
+        i === index ? rerollAffixes(next.seed, current) : current,
+      );
+      events.push({ type: 'itemRerolled', uid: command.uid, cost });
+      break;
+    }
+
+    case 'discardItem': {
+      if (!findItem(next, command.uid)) return err(`not owned: ${command.uid}`);
+      // Unequip first, or the loadout would point at an item that is gone.
+      next.loadout = next.loadout.map((uid) => (uid === command.uid ? null : uid));
+      next.artifactsOwned = next.artifactsOwned.filter((item) => item.uid !== command.uid);
+      events.push({ type: 'itemDiscarded', uid: command.uid });
       break;
     }
 

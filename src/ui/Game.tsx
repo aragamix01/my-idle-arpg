@@ -194,6 +194,8 @@ export function Game() {
           hud={hud}
           busy={pending}
           onEquip={(slot, artifactId) => void send({ type: 'equipArtifact', slot, artifactId })}
+          onReroll={(uid) => void send({ type: 'rerollItem', uid })}
+          onDiscard={(uid) => void send({ type: 'discardItem', uid })}
           onClose={() => setPanelOpen(false)}
         />
       )}
@@ -313,7 +315,13 @@ function describe(event: { type: string } & Record<string, unknown>): string {
     case 'stageFailed':
       return `stage ${event.stage} failed (${event.reason})`;
     case 'artifactDropped':
-      return `found ${event.artifactId}`;
+      return `found ${event.name} (${event.rarity})`;
+    case 'inventoryFull':
+      return 'inventory full — discard something';
+    case 'itemRerolled':
+      return `rerolled for ${Math.round(Number(event.cost))}g`;
+    case 'itemDiscarded':
+      return 'discarded an item';
     case 'upgradeBought':
       return Number(event.count) > 1
         ? `${event.key} +${event.count} → ${event.level}`
