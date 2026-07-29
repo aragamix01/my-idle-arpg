@@ -79,6 +79,35 @@ test('draws atlas sprites rather than placeholders', async ({ page }) => {
   expect(stats?.placeholders ?? -1, 'some enemies fell back to placeholders').toBe(0);
 });
 
+test('the sword swings', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => '__stageVisual' in globalThis, undefined, { timeout: 15_000 });
+
+  // Kenney Tiny Dungeon has no animation frames, so the swing is procedural:
+  // a static sword sprite swept around the player. If the cadence stalls the
+  // sprite simply stops appearing, which nothing else would catch.
+  const observed = await page.evaluate(async () => {
+    type Visual = { swing: { active: boolean; progress: number }; swingAngle(): number };
+    const visual = (globalThis as { __stageVisual?: Visual }).__stageVisual!;
+
+    const angles = new Set<number>();
+    let sawActive = false;
+
+    for (let i = 0; i < 60; i++) {
+      if (visual.swing.active) {
+        sawActive = true;
+        angles.add(Math.round(visual.swingAngle() * 100));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return { sawActive, distinctAngles: angles.size };
+  });
+
+  expect(observed.sawActive, 'swing never became active').toBe(true);
+  // A frozen sweep would report one angle repeatedly.
+  expect(observed.distinctAngles, 'swing angle never changed').toBeGreaterThan(3);
+});
+
 test('every upgrade track is rendered', async ({ page }) => {
   await page.goto('/');
 

@@ -34,10 +34,21 @@ export interface VisualOptions {
   killsPerSecond: number;
   /** Typical hit for the damage numbers. Cosmetic - the real number lives in the sim. */
   hitSize: number;
+  /** Swings per second, from the sim's attackSpeed stat. Paces the animation only. */
+  attacksPerSecond: number;
   /** Decides which creatures appear. Has no effect on outcomes. */
   stage: number;
   width: number;
   height: number;
+}
+
+/** A sword sweep. Purely presentational - it never decides who dies. */
+export interface Swing {
+  active: boolean;
+  /** Centre of the arc, radians. */
+  aim: number;
+  /** 0 at the start of the sweep, 1 at the end. */
+  progress: number;
 }
 
 const MAX_ENEMIES = 240;
@@ -55,10 +66,26 @@ const ENEMY_SPEED = 72;
 const PLAYER_ORBIT_SPEED = 0.4;
 const PLAYER_ORBIT_RADIUS = 0.12;
 
+/** Half-width of the sword sweep, radians. The blade covers 120 degrees. */
+const SWING_ARC = Math.PI / 3;
+/** How far the blade orbits from the player, in pixels. */
+const SWING_RADIUS = 20;
+/**
+ * Attack speed compounds without limit, so by late stages the sim's rate is
+ * hundreds of swings per second. Past this the animation is a strobe rather
+ * than a swing, and the number on the HUD is the honest place to read it.
+ */
+const MAX_VISUAL_SWINGS_PER_SECOND = 7;
+/** Fraction of the interval the blade is mid-sweep; the rest is wind-up. */
+const SWING_DUTY = 0.55;
+
 export class StageVisual {
   readonly enemies: CosmeticEnemy[] = [];
   readonly floaters: Floater[] = [];
   player = { x: 0, y: 0 };
+  readonly swing: Swing = { active: false, aim: 0, progress: 0 };
+
+  private swingClock = 0;
 
   private options: VisualOptions;
   private killCredit = 0;
@@ -176,11 +203,16 @@ export class StageVisual {
     }
     this.seeded = true;
 
+    this.updateSwing(dt);
+
     // Kills are paid out of a fractional budget, so a rate of 0.3/s produces one
     // kill every ~3s rather than rounding to zero and freezing the screen.
     this.killCredit += killsPerSecond * dt;
     while (this.killCredit >= 1) {
-      const victim = this.nearestLiving();
+      // Prefer something inside the sword's arc so the swing looks like the
+      // cause. It is not - the abstract layer already decided the rate - but
+      // kills landing in empty air read as a bug.
+      const victim = this.livingInSwingArc() ?? this.nearestLiving();
       if (!victim) break;
       this.kill(victim);
       this.killCredit -= 1;
@@ -194,6 +226,86 @@ export class StageVisual {
       floater.y -= 26 * dt;
       if (floater.life <= 0) this.floaters.splice(i, 1);
     }
+  }
+
+  /**
+   * Advance the sword sweep.
+   *
+   * Cadence comes from the sim's attackSpeed, but nothing here feeds back into
+   * it. The swing is a depiction of a decision already made.
+   */
+  private updateSwing(dt: number) {
+    const rate = Math.max(
+      0.2,
+      Math.min(this.options.attacksPerSecond, MAX_VISUAL_SWINGS_PER_SECOND),
+    );
+    const interval = 1 / rate;
+
+    this.swingClock += dt;
+    if (this.swingClock >= interval) {
+      this.swingClock -= interval;
+      // Aim where the fight is. Holding the previous aim when the field is
+      // empty avoids the blade snapping back to angle zero between waves.
+      const target = this.nearestLiving();
+      if (target) {
+        this.swing.aim = Math.atan2(target.y - this.player.y, target.x - this.player.x);
+      }
+      this.swing.active = true;
+      this.swing.progress = 0;
+    }
+
+    if (!this.swing.active) return;
+
+    this.swing.progress += dt / (interval * SWING_DUTY);
+    if (this.swing.progress >= 1) {
+      this.swing.progress = 1;
+      this.swing.active = false;
+    }
+  }
+
+  /** Angle the blade currently occupies. Meaningless while the swing is idle. */
+  swingAngle(): number {
+    return this.swing.aim - SWING_ARC + 2 * SWING_ARC * this.swing.progress;
+  }
+
+  /** Blade tip position, for the renderer. */
+  swingPosition(): { x: number; y: number; rotation: number } {
+    const angle = this.swingAngle();
+    return {
+      x: this.player.x + Math.cos(angle) * SWING_RADIUS,
+      y: this.player.y + Math.sin(angle) * SWING_RADIUS,
+      // The sprite's blade points up, so it needs a quarter turn to lie along
+      // the radius rather than across it.
+      rotation: angle + Math.PI / 2,
+    };
+  }
+
+  private livingInSwingArc(): CosmeticEnemy | null {
+    if (!this.swing.active) return null;
+    const angle = this.swingAngle();
+    const reach = SWING_RADIUS + 26;
+
+    let best: CosmeticEnemy | null = null;
+    let bestDistance = Infinity;
+    for (const enemy of this.enemies) {
+      if (!enemy.alive) continue;
+      const dx = enemy.x - this.player.x;
+      const dy = enemy.y - this.player.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > reach) continue;
+
+      // Shortest signed angular difference, so the wrap at +/-PI does not
+      // exclude everything on one side.
+      let delta = Math.atan2(dy, dx) - angle;
+      delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+      if (Math.abs(delta) > SWING_ARC * 0.6) continue;
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = enemy;
+      }
+    }
+    return best;
   }
 
   private nearestLiving(): CosmeticEnemy | null {

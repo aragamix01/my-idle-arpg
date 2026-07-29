@@ -17,6 +17,7 @@ import { loadAtlas, type Atlas } from './atlas';
 interface Props {
   killsPerSecond: number;
   hitSize: number;
+  attacksPerSecond: number;
   stage: number;
 }
 
@@ -25,17 +26,17 @@ const MAX_SPRITES = 240;
 /** 16px source art needs scaling up; this keeps it on whole pixels. */
 const SPRITE_SCALE = 2;
 
-export function GameCanvas({ killsPerSecond, hitSize, stage }: Props) {
+export function GameCanvas({ killsPerSecond, hitSize, attacksPerSecond, stage }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   // Latest sim numbers, read by the ticker without re-running the mount effect.
   // Written in an effect rather than during render: React may render a
   // component without committing it, and the ticker would then be drawing from
   // numbers that were never real.
-  const optionsRef = useRef({ killsPerSecond, hitSize, stage });
+  const optionsRef = useRef({ killsPerSecond, hitSize, attacksPerSecond, stage });
   useEffect(() => {
-    optionsRef.current = { killsPerSecond, hitSize, stage };
-  }, [killsPerSecond, hitSize, stage]);
+    optionsRef.current = { killsPerSecond, hitSize, attacksPerSecond, stage };
+  }, [killsPerSecond, hitSize, attacksPerSecond, stage]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -120,6 +121,12 @@ export function GameCanvas({ killsPerSecond, hitSize, stage }: Props) {
       playerSprite.visible = false;
       spriteLayer.addChild(playerSprite);
 
+      // Drawn after the player so the blade passes in front of the body.
+      const swordSprite = new Sprite();
+      swordSprite.anchor.set(0.5);
+      swordSprite.visible = false;
+      spriteLayer.addChild(swordSprite);
+
       const floaterPool: Text[] = [];
       for (let i = 0; i < FLOATER_POOL; i++) {
         const text = new Text({
@@ -180,6 +187,22 @@ export function GameCanvas({ killsPerSecond, hitSize, stage }: Props) {
           placeholders
             .circle(visual.player.x, visual.player.y, 13)
             .stroke({ width: 2, color: 0xe8f5e9 });
+        }
+
+        const swordTexture = atlas?.get('weapon.sword') ?? null;
+        if (swordTexture && visual.swing.active) {
+          const blade = visual.swingPosition();
+          swordSprite.visible = true;
+          swordSprite.texture = swordTexture;
+          swordSprite.x = blade.x;
+          swordSprite.y = blade.y;
+          swordSprite.rotation = blade.rotation;
+          swordSprite.scale.set(SPRITE_SCALE);
+          // Fades in and out across the sweep, which reads as motion on a
+          // sprite that has no animation frames of its own.
+          swordSprite.alpha = Math.sin(visual.swing.progress * Math.PI) * 0.85 + 0.15;
+        } else {
+          swordSprite.visible = false;
         }
 
         for (let i = 0; i < floaterPool.length; i++) {

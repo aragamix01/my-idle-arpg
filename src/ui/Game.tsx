@@ -60,6 +60,7 @@ export function Game() {
         <GameCanvas
           killsPerSecond={rate}
           hitSize={hud.stats.damage}
+          attacksPerSecond={hud.stats.attackSpeed}
           stage={Math.max(1, hud.bestStage || 1)}
         />
       </div>

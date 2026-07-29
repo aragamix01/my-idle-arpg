@@ -27,6 +27,7 @@ export const SPRITE_IDS = [
 
   // Player.
   'player.knight',
+  'weapon.sword',
 
   // Artifacts - must stay in step with src/sim/content/artifacts.ts.
   'artifact.whetstone',

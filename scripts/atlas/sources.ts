@@ -58,6 +58,9 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     'boss.warlock': 84,
 
     'player.knight': 96,
+    // 106 is a sword too, but it is already bound to giant_slayer and the
+    // duplicate-tile test would reject sharing it.
+    'weapon.sword': 104,
 
     'artifact.whetstone': 102,
     'artifact.quickdraw_glove': 103,
