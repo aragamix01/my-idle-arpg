@@ -395,8 +395,27 @@ test('the craft modal explains what it refuses, and applies what it allows', asy
 test('dissembling a common yields a fragment without a confirmation', async ({ page }) => {
   await page.goto('/');
 
-  await page.getByRole('button', { name: /Attempt stage/ }).click();
-  await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
+  // Enough clears that a common is a certainty. A single clear drops one to
+  // three items at 55% common each, so one run in ten has none at all - an
+  // earlier version filtered to Common after one clear and duly found an empty
+  // grid in the full suite.
+  await page.evaluate(async () => {
+    for (let i = 0; i < 12; i++) {
+      await fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'attemptStage' }),
+      });
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
+        await fetch('/api/command', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'buyUpgrade', key, count: 'max' }),
+        });
+      }
+    }
+  });
+  await page.reload();
 
   await page.getByRole('button', { name: /^Character/ }).click();
   const panel = page.getByRole('dialog', { name: 'Character' });
@@ -418,8 +437,13 @@ test('dissembling a common yields a fragment without a confirmation', async ({ p
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await expect(tiles).toHaveCount(before - 1);
 
+  // The fragment it melted down to is in the stash. Asserted on the count
+  // rather than the combine button's label, which switches from "N/10" to
+  // "Combine (N)" once ten have accumulated.
   await panel.getByRole('button', { name: 'Currency', exact: true }).click();
-  await expect(panel.getByRole('list', { name: 'Fragments' }).getByText(/[1-9]\d*\/10/)).toBeVisible();
+  const shards = panel.getByRole('list', { name: 'Fragments' });
+  await expect(shards.getByText('Magic Ore Shard')).toBeVisible();
+  await expect(shards.getByText(/^x[1-9]\d*$/).first()).toBeVisible();
 });
 
 test('fragments combine into ore, and the ore upgrades a common', async ({ page }) => {
@@ -475,6 +499,64 @@ test('fragments combine into ore, and the ore upgrades a common', async ({ page 
   await expect(tiles).toHaveCount(commonsBefore - 1);
   await expect(panel.getByText(/armed/)).toHaveCount(0);
   await expect(page.getByText(/used Magic Ore/)).toBeVisible();
+});
+
+test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) => {
+  await page.goto('/');
+
+  const dungeon = page.getByRole('button', { name: /^Dungeon/ });
+  // Nothing to spend yet: keys drop from stage bosses.
+  await expect(dungeon).toBeDisabled();
+
+  // Clear *until* a key drops rather than a fixed number of times. Keys are a
+  // 20% roll, so twenty clears still leaves one run in eighty with none - which
+  // is exactly how this test failed once.
+  const keysFound = await page.evaluate(async () => {
+    const post = (body: unknown) =>
+      fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+
+    for (let i = 0; i < 60; i++) {
+      const result = await post({ type: 'attemptStage' });
+      const held = result?.state?.currency?.['dungeon-key'] ?? 0;
+      if (held > 0) return held;
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
+        await post({ type: 'buyUpgrade', key, count: 'max' });
+      }
+    }
+    return 0;
+  });
+  expect(keysFound).toBeGreaterThan(0);
+  await page.reload();
+
+  await expect(dungeon).toBeEnabled();
+  const keysBefore = Number((await dungeon.textContent())?.match(/(\d+)\s*$/)?.[1] ?? 0);
+  expect(keysBefore).toBeGreaterThan(0);
+
+  await dungeon.click();
+
+  // The banner says DUNGEON, and there is no WAVE phase to pass through.
+  const banner = () =>
+    page.evaluate(() => {
+      const visual = (globalThis as unknown as { __stageVisual?: { attempt: Record<string, unknown> } })
+        .__stageVisual;
+      return visual ? visual.attempt : null;
+    });
+  await expect
+    .poll(async () => (await banner())?.dungeon, { timeout: REPLAY_TIMEOUT })
+    .toBe(true);
+  await expect.poll(async () => (await banner())?.trashSeconds).toBe(0);
+
+  // Resolved: the key is spent whichever way it went.
+  await expect(page.getByText(/cleared dungeon|dungeon failed/)).toBeVisible({
+    timeout: REPLAY_TIMEOUT,
+  });
+  await expect
+    .poll(async () => Number((await dungeon.textContent())?.match(/(\d+)\s*$/)?.[1] ?? -1))
+    .toBe(keysBefore - 1);
 });
 
 test('progress survives a reload', async ({ page }) => {

@@ -16,6 +16,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
+  applyCommand,
   applyCurrencyToItem,
   availableTiers,
   CURRENCIES,
@@ -31,6 +32,7 @@ import {
   newSave,
   rerollAffixes,
   rerollCost,
+  resolveDungeon,
   resolveStage,
   rollDropCount,
   rollItem,
@@ -174,6 +176,40 @@ function takeDrop(save: SaveState, stage: number): SaveState {
   }
 
   return { ...save, items: owned, currency, nextItemId: uid };
+}
+
+/**
+ * Spend keys on dungeons.
+ *
+ * Only when the dungeon is actually winnable - a loss costs the key and pays
+ * nothing, and an agent that threw keys at a boss it could not kill would model
+ * a player who never learns. resolveDungeon is pure, so checking first is not
+ * foresight about a random roll; it is the same reasoning a player does by
+ * looking at their own numbers.
+ *
+ * Returns the elapsed seconds alongside the new state, because a dungeon is
+ * time spent and the ladder's pacing has to account for it.
+ */
+function runDungeons(save: SaveState): { save: SaveState; seconds: number } {
+  let current = save;
+  let seconds = 0;
+
+  for (let i = 0; i < 50; i++) {
+    if ((current.currency['dungeon-key'] ?? 0) < 1) break;
+    if (!resolveDungeon(current, current.bestStage).cleared) break;
+
+    const before = current;
+    const result = applyCommand(current, { type: 'attemptDungeon' }, 0);
+    if (!result.ok) break;
+    current = result.value.state;
+
+    const cleared = result.value.events.find((e) => e.type === 'dungeonCleared');
+    seconds += cleared && cleared.type === 'dungeonCleared' ? cleared.seconds : 0;
+    // Defensive: a command that consumed nothing would loop forever.
+    if (current.currency['dungeon-key'] === before.currency['dungeon-key']) break;
+  }
+
+  return { save: current, seconds };
 }
 
 /** Spend ten fragments whenever ten have accumulated. */
@@ -400,6 +436,12 @@ export function runLadder(): {
         save = { ...save, bestStage: stage, currentStage: stage + 1 };
         save = takeDrop(save, stage);
         save = improveLoadout(save, stage);
+        // Dungeons before crafting: they are where finished currency and the
+        // only spirits come from, so spending keys first is what gives the
+        // crafting pass something to spend.
+        const dungeons = runDungeons(save);
+        save = dungeons.save;
+        elapsed += dungeons.seconds;
         save = spendCurrency(save, stage);
         break;
       }

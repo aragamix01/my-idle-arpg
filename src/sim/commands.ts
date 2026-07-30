@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { resolveStage } from './combat';
+import { resolveDungeon, resolveStage } from './combat';
 import {
   BULK_PURCHASE_LIMIT,
   bulkUpgradeCost,
@@ -35,6 +35,8 @@ import {
   itemName,
   rerollAffixes,
   rollDropCount,
+  rollDungeonCurrency,
+  rollDungeonItem,
   rollItem,
   rollStageBossDrops,
 } from './items';
@@ -93,6 +95,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
     .strict(),
   z.object({ type: z.literal('combineFragments'), currencyId: CurrencyIdSchema }).strict(),
   z.object({ type: z.literal('dissembleItem'), uid: z.string().min(1) }).strict(),
+  /** Takes no stage: a dungeon always runs at bestStage, never at a chosen one. */
+  z.object({ type: z.literal('attemptDungeon') }).strict(),
   z.object({ type: z.literal('claimOffline') }).strict(),
 ]);
 
@@ -101,6 +105,8 @@ export type Command = z.infer<typeof CommandSchema>;
 export type SimEvent =
   | { type: 'stageCleared'; stage: number; seconds: number; gold: number }
   | { type: 'stageFailed'; stage: number; reason: 'died' | 'timeout'; gold: number }
+  | { type: 'dungeonCleared'; stage: number; seconds: number; gold: number }
+  | { type: 'dungeonFailed'; stage: number; reason: 'died' | 'timeout' }
   | { type: 'itemDropped'; itemId: string; name: string; rarity: string }
   /** Carries how many drops were lost, so the message can say what it cost. */
   | { type: 'inventoryFull'; lost: number }
@@ -387,6 +393,67 @@ export function applyCommand(
       next.items = next.items.filter((current) => current.uid !== command.uid);
       next.currency = credit(next.currency, { [yielded]: 1 });
       events.push({ type: 'itemDissembled', uid: command.uid, yielded });
+      break;
+    }
+
+    case 'attemptDungeon': {
+      const stage = next.bestStage;
+      if (stage < 1) return err('clear a stage first');
+
+      const keys = next.currency['dungeon-key'] ?? 0;
+      if (keys < 1) return err('you have no dungeon keys');
+
+      // Spent up front, and spent on a loss too. That is what "need a key to
+      // attempt" means, and it is the pressure that makes running one at the
+      // edge of your power a decision rather than a formality.
+      next.currency = { ...next.currency, 'dungeon-key': keys - 1 };
+
+      const outcome = resolveDungeon(next, stage);
+      if (!outcome.cleared) {
+        events.push({
+          type: 'dungeonFailed',
+          stage,
+          reason: outcome.failure === 'timeout' ? 'timeout' : 'died',
+        });
+        break;
+      }
+
+      next.gold += Math.floor(outcome.goldEarned);
+      events.push({
+        type: 'dungeonCleared',
+        stage,
+        seconds: outcome.seconds,
+        gold: Math.floor(outcome.goldEarned),
+      });
+
+      const uid = next.nextItemId;
+      next.nextItemId = uid + 1;
+
+      if (next.items.length >= INVENTORY_CAP) {
+        events.push({ type: 'inventoryFull', lost: 1 });
+      } else {
+        const item = rollDungeonItem(next.seed, uid, stage);
+        next.items.push(item);
+        events.push({
+          type: 'itemDropped',
+          itemId: item.uid,
+          name: itemName(item),
+          rarity: item.rarity,
+        });
+      }
+
+      // Currency is unaffected by the inventory cap - it is a counter, not an
+      // object, so there is nothing to run out of room for.
+      const reward = rollDungeonCurrency(next.seed, uid);
+      next.currency = credit(next.currency, reward);
+      for (const [id, count] of Object.entries(reward) as [CurrencyId, number][]) {
+        events.push({
+          type: 'currencyDropped',
+          currencyId: id,
+          name: getCurrency(id)?.name ?? id,
+          count,
+        });
+      }
       break;
     }
 

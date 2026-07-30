@@ -12,6 +12,9 @@ import {
   bossGold,
   bossHp,
   contactCount,
+  DUNGEON_BOSS_DPS_MULT,
+  DUNGEON_BOSS_HP_MULT,
+  DUNGEON_GOLD_MULT,
   enemyCount,
   enemyDps,
   enemyHp,
@@ -163,6 +166,65 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
     damageTakenFraction: totalDamage / ehp,
     trashDamageFraction: damageDuringTrash / ehp,
     bossDamageFraction: damageDuringBoss / ehp,
+  };
+}
+
+/**
+ * Resolve a dungeon: one boss, no wave, no escape.
+ *
+ * Scaled off `bestStage` rather than a ladder of its own. A second progression
+ * axis would be a second curve to balance and a second wall to test for, and
+ * the interesting decision here is whether to spend the key - not which depth
+ * to spend it at.
+ *
+ * Returns the same StageOutcome shape as resolveStage with `trashPhaseSeconds`
+ * at zero, which is what lets the replay renderer handle both unchanged.
+ */
+export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
+  const bossCtx = ctxFor(stage, true, 1);
+  const bossStats = deriveStats(save, bossCtx);
+
+  const hp = bossHp(stage) * DUNGEON_BOSS_HP_MULT;
+  const seconds = timeToKill(save, hp, stage, true, 1);
+  const ehp = effectiveHp(bossStats);
+  const incoming = bossDps(stage) * DUNGEON_BOSS_DPS_MULT;
+
+  const damage = seconds * incoming;
+  const died = damage >= ehp;
+  const timedOut = seconds > STAGE_TIME_LIMIT_SECONDS;
+
+  const outcome = {
+    trashPhaseSeconds: 0,
+    bossPhaseSeconds: seconds,
+    damageTakenFraction: damage / ehp,
+    trashDamageFraction: 0,
+    bossDamageFraction: damage / ehp,
+  };
+
+  if (died || timedOut) {
+    // No partial credit. A dungeon pays on the kill or not at all - that is
+    // what makes spending the key a decision rather than a formality.
+    const survived = died ? Math.min(seconds, ehp / Math.max(incoming, 1e-9)) : seconds;
+    return {
+      ...outcome,
+      cleared: false,
+      failure: died ? 'died' : 'timeout',
+      seconds: Math.min(survived, STAGE_TIME_LIMIT_SECONDS),
+      goldEarned: 0,
+      bossPhaseSeconds: Math.min(survived, STAGE_TIME_LIMIT_SECONDS),
+    };
+  }
+
+  return {
+    ...outcome,
+    cleared: true,
+    failure: 'none',
+    seconds,
+    goldEarned:
+      bossGold(stage) *
+      DUNGEON_GOLD_MULT *
+      bossStats.goldFind *
+      (1 + goldOnKillBonus(save, bossCtx)),
   };
 }
 

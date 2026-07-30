@@ -20,6 +20,8 @@ export interface AttemptRequest {
   id: number;
   stage: number;
   outcome: AttemptOutcome;
+  /** Dungeon runs get their own boss and banner; the playback is identical. */
+  dungeon?: boolean;
 }
 
 interface Props {
@@ -41,8 +43,14 @@ const SPRITE_SCALE = 2;
 const BOSS_SCALE = 6;
 const BOSS_BAR_WIDTH = 150;
 
-/** Alternates the two boss sprites so consecutive stages do not repeat. */
-function bossSpriteForStage(stage: number): SpriteId {
+/**
+ * Which boss to draw.
+ *
+ * Dungeons always show the warlock so they read as a different fight at a
+ * glance; stages alternate so consecutive ones do not repeat.
+ */
+function bossSpriteFor(stage: number, dungeon: boolean): SpriteId {
+  if (dungeon) return 'boss.warlock';
   return stage % 2 === 0 ? 'boss.warlock' : 'boss.brute';
 }
 
@@ -217,7 +225,7 @@ export function GameCanvas({
         const request = attemptRef.current;
         if (request && request.id !== startedAttemptId) {
           startedAttemptId = request.id;
-          visual.startAttempt(request.outcome, request.stage);
+          visual.startAttempt(request.outcome, request.stage, request.dungeon ?? false);
         }
         visual.setOptions({
           ...optionsRef.current,
@@ -295,13 +303,16 @@ export function GameCanvas({
         }
 
         if (playback.active) {
-          const bossTexture = atlas?.get(bossSpriteForStage(playback.stage)) ?? null;
+          const bossTexture =
+            atlas?.get(bossSpriteFor(playback.stage, playback.dungeon)) ?? null;
           if (visual.boss.alive && bossTexture) {
             bossSprite.visible = true;
             bossSprite.texture = bossTexture;
             bossSprite.x = Math.round(visual.boss.x);
             bossSprite.y = Math.round(visual.boss.y);
-            bossSprite.scale.set(BOSS_SCALE);
+            // A dungeon boss is the only thing on screen, so it can afford to
+            // be bigger than one standing at the end of a wave.
+            bossSprite.scale.set(playback.dungeon ? BOSS_SCALE * 1.35 : BOSS_SCALE);
             drawBar(
               bars,
               visual.boss.x - BOSS_BAR_WIDTH / 2,
@@ -323,9 +334,10 @@ export function GameCanvas({
           // Below the HUD stat chips, which are drawn in the DOM above this
           // canvas and clipped the banner at y=14.
           banner.y = 72;
-          banner.text =
-            `STAGE ${playback.stage}  ·  ${playback.phase === 'boss' ? 'BOSS' : 'WAVE'}  ·  ` +
-            `${remaining.toFixed(1)}s`;
+          banner.text = playback.dungeon
+            ? `DUNGEON ${playback.stage}  ·  BOSS  ·  ${remaining.toFixed(1)}s`
+            : `STAGE ${playback.stage}  ·  ${playback.phase === 'boss' ? 'BOSS' : 'WAVE'}  ·  ` +
+              `${remaining.toFixed(1)}s`;
           // The timer is the second failure mode, and it deserves to look like
           // one before it fires rather than only in the result line.
           banner.style.fill = remaining < 10 ? 0xf87171 : 0xf4f4f5;

@@ -66,6 +66,14 @@ export interface AttemptPlayback {
   stage: number;
   cleared: boolean;
   failure: 'none' | 'died' | 'timeout';
+  /**
+   * A dungeon rather than a stage.
+   *
+   * Only the presentation differs - a different boss sprite and a different
+   * banner. The playback machinery is identical, because resolveDungeon returns
+   * the same outcome shape with no trash phase.
+   */
+  dungeon: boolean;
 }
 
 /** What the replay needs from resolveStage. Structural, so the sim stays unimported here. */
@@ -147,6 +155,7 @@ export class StageVisual {
     stage: 1,
     cleared: false,
     failure: 'none',
+    dungeon: false,
   };
 
   /** The boss, alive only during the boss phase. */
@@ -176,7 +185,7 @@ export class StageVisual {
   }
 
   /** Begin replaying a resolved attempt. Ignored while one is already running. */
-  startAttempt(outcome: AttemptOutcome, stage: number) {
+  startAttempt(outcome: AttemptOutcome, stage: number, dungeon = false) {
     if (this.attempt.active) return;
 
     // A failure ends when the player died, not when the fight would have. The
@@ -198,8 +207,16 @@ export class StageVisual {
       stage,
       cleared: outcome.cleared,
       failure: outcome.failure,
+      dungeon,
     });
     this.boss.alive = false;
+
+    // A dungeon is a duel. The idle swarm is still on screen from farming, and
+    // leaving it there would show a crowd standing around watching - they stop
+    // dying the moment the boss phase starts, so they would simply pile up.
+    if (dungeon) {
+      for (const enemy of this.enemies) enemy.alive = false;
+    }
   }
 
   /** Clear a finished replay so the idle view resumes. */

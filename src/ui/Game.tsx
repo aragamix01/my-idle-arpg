@@ -16,6 +16,7 @@ import {
   killsPerSecond,
   maxAffordableUpgrades,
   remainingLevels,
+  resolveDungeon,
   resolveStage,
   STAGE_TIME_LIMIT_SECONDS,
   UPGRADE_TRACKS,
@@ -65,10 +66,31 @@ export function Game() {
     setAttempt({ id: attemptSeq.current, stage, outcome: resolveStage(current, stage) });
   }, [attempt]);
 
+  /**
+   * Same shape as a stage attempt: resolve now, play the replay, commit when
+   * it finishes. resolveDungeon is pure and deterministic, so what the replay
+   * shows is what the server will independently reach.
+   */
+  const startDungeon = useCallback(() => {
+    const current = useGameStore.getState().state;
+    if (!current || attempt) return;
+    attemptSeq.current += 1;
+    setAttempt({
+      id: attemptSeq.current,
+      stage: current.bestStage,
+      outcome: resolveDungeon(current, current.bestStage),
+      dungeon: true,
+    });
+  }, [attempt]);
+
   const finishAttempt = useCallback(() => {
+    // Which command to send is decided by what was being replayed. Reading it
+    // off the request rather than tracking a second piece of state means the
+    // two can never disagree about what the player just watched.
+    const wasDungeon = attempt?.dungeon ?? false;
     setAttempt(null);
-    void send({ type: 'attemptStage' });
-  }, [send]);
+    void send({ type: wasDungeon ? 'attemptDungeon' : 'attemptStage' });
+  }, [attempt, send]);
 
   useEffect(() => {
     void bootstrap();
@@ -87,6 +109,7 @@ export function Game() {
   }
 
   const rate = killsPerSecond(state, Math.max(1, state.bestStage || 1));
+  const keys = hud.currency['dungeon-key'] ?? 0;
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-100">
@@ -185,7 +208,27 @@ export function Game() {
               onClick={startAttempt}
               className="rounded bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-40"
             >
-              {attempt ? `Fighting stage ${attempt.stage}…` : `Attempt stage ${hud.currentStage}`}
+              {/* A dungeon replay disables this button too, so it must not
+                  claim a stage fight is under way while a duel is on screen. */}
+              {attempt
+                ? attempt.dungeon
+                  ? 'In a dungeon…'
+                  : `Fighting stage ${attempt.stage}…`
+                : `Attempt stage ${hud.currentStage}`}
+            </button>
+
+            <button
+              type="button"
+              disabled={pending || attempt !== null || keys < 1 || hud.bestStage < 1}
+              onClick={startDungeon}
+              title={
+                keys < 1 ? 'Keys drop from stage bosses' : `Runs a dungeon at stage ${hud.bestStage}`
+              }
+              className="flex items-center gap-2 rounded border border-amber-500/60 bg-amber-500/10 px-4 py-2 text-sm text-amber-100 disabled:opacity-40"
+            >
+              <AtlasSprite id="currency.dungeon_key" scale={1.5} />
+              Dungeon
+              <span className="font-mono text-xs">{keys}</span>
             </button>
 
             <button
@@ -358,6 +401,10 @@ function describe(event: { type: string } & Record<string, unknown>): string {
       return `cleared stage ${event.stage} in ${Number(event.seconds).toFixed(1)}s`;
     case 'stageFailed':
       return `stage ${event.stage} failed (${event.reason})`;
+    case 'dungeonCleared':
+      return `cleared dungeon ${event.stage} in ${Number(event.seconds).toFixed(1)}s`;
+    case 'dungeonFailed':
+      return `dungeon failed (${event.reason}) — key spent`;
     case 'itemDropped':
       return `found ${event.name} (${event.rarity})`;
     case 'inventoryFull':

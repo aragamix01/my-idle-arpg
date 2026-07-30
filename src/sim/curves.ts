@@ -321,6 +321,29 @@ export const FRAGMENTS_PER_CLEAR = { min: 0, max: 3 } as const;
 export const KEY_DROP_CHANCE = 0.2;
 
 /**
+ * Dungeon boss, as a multiple of the stage boss at the same stage.
+ *
+ * A dungeon has no trash phase, so the whole timer is spent on one target. HP
+ * is therefore set against what a player kills a stage boss in, not against a
+ * whole stage: at 2.5x the duel runs roughly two to three times a stage boss
+ * fight and still lands inside STAGE_TIME_LIMIT_SECONDS.
+ *
+ * Incoming damage is the harder number. The stage boss phase is short and
+ * follows a trash phase that has already worn the player down; a dungeon starts
+ * at full health and lasts longer, so an unchanged DPS multiple would make
+ * dungeons trivially safe. 1.5x keeps a dungeon a real risk without making it a
+ * wall the moment a key drops.
+ */
+export const DUNGEON_BOSS_HP_MULT = 2.5;
+export const DUNGEON_BOSS_DPS_MULT = 1.5;
+
+/** Gold from a dungeon clear, as a multiple of the stage boss's lump sum. */
+export const DUNGEON_GOLD_MULT = 3;
+
+/** Currency a dungeon clear awards, inclusive. */
+export const DUNGEON_CURRENCY_PER_CLEAR = { min: 1, max: 2 } as const;
+
+/**
  * Gold to reroll an item's modifiers.
  *
  * Priced off `goldPerKill` at the item's own level, so a stage-80 item costs

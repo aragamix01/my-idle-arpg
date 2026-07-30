@@ -20,15 +20,22 @@ import {
 import { availableTiers, getAffix, PREFIXES, SUFFIXES } from './content/affixes';
 import { BASES, getBase, getBaseAffix } from './content/bases';
 import {
+  CURRENCY_DROP_WEIGHTS,
   FRAGMENT_GATES,
   type AffixSide,
+  type CurrencyId,
   type CurrencyAction,
   type CurrencyDefinition,
   type CurrencyPurse,
   type SpiritDelta,
 } from './content/currency';
 import { getUnique, uniquesFor } from './content/uniques';
-import { DROPS_PER_CLEAR, FRAGMENTS_PER_CLEAR, KEY_DROP_CHANCE } from './curves';
+import {
+  DROPS_PER_CLEAR,
+  DUNGEON_CURRENCY_PER_CLEAR,
+  FRAGMENTS_PER_CLEAR,
+  KEY_DROP_CHANCE,
+} from './curves';
 import { createRng, type Rng } from './rng';
 
 /** Arbitrary large odd multiplier, so reroll streams never collide with drops. */
@@ -39,6 +46,9 @@ const DROP_COUNT_STREAM = 0x85eb_ca6b;
 
 /** And for the boss's fragment and key rolls. */
 const BOSS_DROP_STREAM = 0xc2b2_ae35;
+
+/** And for dungeon rewards, which must not collide with the stage-clear rolls. */
+const DUNGEON_STREAM = 0x27d4_eb2f;
 
 /**
  * The RNG stream for an item's current roll.
@@ -231,6 +241,61 @@ export function rollStageBossDrops(
 
   if (rng.next() < KEY_DROP_CHANCE) purse['dungeon-key'] = 1;
   return purse;
+}
+
+/**
+ * What a dungeon clear awards, besides the item.
+ *
+ * The only source of finished currency in the game, and the only source of
+ * spirits at all - stage bosses drop fragments, which take ten to become
+ * anything. That split is what stops either activity dominating: the ladder is
+ * the steady trickle, dungeons are the gated burst.
+ */
+export function rollDungeonCurrency(accountSeed: number, uid: number): CurrencyPurse {
+  const rng = createRng(accountSeed).fork(uid * DUNGEON_STREAM);
+  const purse: CurrencyPurse = {};
+
+  const span = DUNGEON_CURRENCY_PER_CLEAR.max - DUNGEON_CURRENCY_PER_CLEAR.min + 1;
+  const count = DUNGEON_CURRENCY_PER_CLEAR.min + rng.int(span);
+
+  const entries = Object.entries(CURRENCY_DROP_WEIGHTS) as [CurrencyId, number][];
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+
+  for (let i = 0; i < count; i++) {
+    let roll = rng.next() * total;
+    for (const [id, weight] of entries) {
+      roll -= weight;
+      if (roll <= 0) {
+        purse[id] = (purse[id] ?? 0) + 1;
+        break;
+      }
+    }
+  }
+
+  return purse;
+}
+
+/**
+ * The item a dungeon clear drops.
+ *
+ * Same roll as a stage drop but on weights that skew rare - a key is a limited
+ * resource, and handing back the common a free clear would have given makes
+ * spending one pointless.
+ */
+export function rollDungeonItem(accountSeed: number, uid: number, itemLevel: number): ItemInstance {
+  const item = rollItem(accountSeed, uid, itemLevel);
+  if (item.rarity !== 'common') return item;
+
+  // Re-roll a common once against magic-or-better. Cheaper than a second weight
+  // table, and it keeps every dungeon drop meaningfully above the floor without
+  // guaranteeing a rare.
+  const rng = createRng(accountSeed).fork(uid * DUNGEON_STREAM + 1);
+  const upgraded = rng.next() < 0.5 ? 'magic' : 'rare';
+  return {
+    ...item,
+    rarity: upgraded,
+    affixes: rollAffixesForRarity(upgraded, itemLevel, rng),
+  };
 }
 
 /**
