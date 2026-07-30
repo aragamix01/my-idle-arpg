@@ -38,6 +38,16 @@ export const STAT_KEYS = [
    */
   'physicalSkillLevel',
   'magicalSkillLevel',
+  /**
+   * Resource restored per second - stamina or mana, named by the equipped weapon.
+   *
+   * Sustained uses per second is `min(speed, regen / cost)`, so this is what decides
+   * whether your attack speed is real. There is deliberately NO pool stat: the
+   * combat layer works in expected values over a whole stage, where a pool only
+   * governs burst and averages out to nothing. A stat that reads as a bonus and
+   * changes no outcome is worse than no stat.
+   */
+  'resourceRegen',
 ] as const;
 
 export type StatKey = (typeof STAT_KEYS)[number];
@@ -71,6 +81,17 @@ export const BASE_STATS: Stats = {
   goldFind: 1.0,
   physicalSkillLevel: 0,
   magicalSkillLevel: 0,
+  /**
+   * Three per second, against Unarmed's cost of one and speed of 1.5.
+   *
+   * Sized so NO skill is resource-limited at base: the most expensive costs 3.3 against
+   * a base speed of 0.9, and 3/3.3 clears it. The resource is a cap on the speed you
+   * BUY, not a tax on standing still - a flat tax at level zero would just be one
+   * playstyle being worse.
+   * That is what keeps the migration power-neutral - a save that loads unarmed
+   * derives exactly what it derived before resources existed.
+   */
+  resourceRegen: 3,
 };
 
 /** The stats an equipped skill supplies the base for, instead of BASE_STATS. */
@@ -84,6 +105,8 @@ export const UPGRADE_KEYS = [
   'health',
   'toughness',
   'greed',
+  /** Stamina and mana recovery. The purchasable way past the sustain cap. */
+  'resource',
 ] as const;
 
 export type UpgradeKey = (typeof UPGRADE_KEYS)[number];

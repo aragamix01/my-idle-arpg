@@ -89,7 +89,12 @@ function weightedRarity(rng: Rng): Rarity {
 export function eligibleAffixes(pool: AffixDefinition[], baseId?: string): AffixDefinition[] {
   const kind = baseId ? getBase(baseId)?.skillId : undefined;
   const skill = kind ? getSkill(kind) : undefined;
-  return pool.filter((affix) => !affix.weapons || affix.weapons === skill?.kind);
+  // Untagged rolls anywhere. 'gear' rolls only where there is no skill; a kind
+  // rolls only on a weapon granting a skill of that kind.
+  return pool.filter((affix) => {
+    if (!affix.rollsOn) return true;
+    return affix.rollsOn === 'gear' ? skill === undefined : affix.rollsOn === skill?.kind;
+  });
 }
 
 /**

@@ -1,4 +1,18 @@
 import { expect, test, type ConsoleMessage } from '@playwright/test';
+import { WEAPON_BASES } from '../../src/sim';
+
+/**
+ * CSS that excludes every weapon tile, derived from the registry not written down.
+ *
+ * An attribute selector rather than Playwright's `hasNotText`, because a grid tile
+ * renders only a sprite - the item's name is in its `title`, so a text filter matched
+ * nothing at all and quietly selected the first tile regardless. That made the tests
+ * using it pass or fail on whether the newest drop happened to be a weapon.
+ *
+ * Derived, because a hand-written /Axe|Wand/ went stale the same day two more weapons
+ * were added.
+ */
+const NOT_A_WEAPON = WEAPON_BASES.map((b) => `:not([title*="${b.name}"])`).join('');
 
 /**
  * Attempts now play out a replay before the command is sent, so anything
@@ -311,7 +325,9 @@ test('the inventory grid selects, filters and sorts', async ({ page }) => {
   // Nothing is selected until the player picks something - the detail pane is
   // the only place affixes are readable, so this is the core interaction.
   await expect(panel.getByText(/Select an item to inspect/)).toBeVisible();
-  await tiles.first().click();
+  // Gear, not the newest tile: a weapon equips to its own slot and would never move
+  // the "Equipped (n/4)" counter this asserts on.
+  await panel.locator(`[aria-label="Item grid"] button${NOT_A_WEAPON}`).first().click();
   await expect(panel.getByText(/Select an item to inspect/)).toHaveCount(0);
 
   // Equipping from the detail pane must reach the sim, not just the pane.
@@ -668,7 +684,8 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
   // weapons now and a weapon goes to its own slot, so "Equipped (1/4)" would never
   // appear - and since the newest item is a weapon only sometimes, taking the first
   // tile made this pass or fail depending on the account seed.
-  const gear = tiles.filter({ hasNotText: /Axe|Wand/ }).first();
+  const gear = panel.locator(`[aria-label="Item grid"] button${NOT_A_WEAPON}`).first();
+  const gearTitle = await gear.getAttribute('title');
   await gear.click();
   await panel.getByRole('button', { name: 'Equip', exact: true }).click();
   await expect(panel.getByText('Equipped (1/4)')).toBeVisible();
@@ -678,15 +695,21 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
   await panel.getByRole('button', { name: 'Select', exact: true }).click();
   await expect(panel.getByText('0 selected')).toBeVisible();
 
-  // The equipped tile cannot be picked at all.
-  await expect(tiles.first()).toBeDisabled();
+  // Exactly one tile is unselectable, and it is the one just equipped.
+  //
+  // Asserted as a count rather than by position: the item equipped above is the
+  // first piece of GEAR, and that is only tile zero when tile zero is not a weapon.
+  const pickable = tiles.and(panel.locator('button:not([disabled])'));
+  await expect(pickable).toHaveCount(total - 1);
+  expect(gearTitle, 'equipped a tile with no title').toBeTruthy();
 
-  // Pick three, then unpick one - the toggle has to work both ways.
-  await tiles.nth(1).click();
-  await tiles.nth(2).click();
-  await tiles.nth(3).click();
+  // Pick three, then unpick one - the toggle has to work both ways. Selectable tiles
+  // only, so the equipped one is never among them whatever index it landed on.
+  await pickable.nth(0).click();
+  await pickable.nth(1).click();
+  await pickable.nth(2).click();
   await expect(panel.getByText('3 selected')).toBeVisible();
-  await tiles.nth(3).click();
+  await pickable.nth(2).click();
   await expect(panel.getByText('2 selected')).toBeVisible();
 
   const sweep = panel.getByRole('button', { name: /^Dissemble \d+$/ });

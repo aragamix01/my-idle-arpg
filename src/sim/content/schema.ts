@@ -154,13 +154,19 @@ export interface AffixDefinition {
   nameFragment: string;
   effect: AffixEffectTemplate;
   /**
-   * Restricts this affix to weapons of one kind. Absent means "rolls on anything".
+   * Where this affix may roll. Absent means anywhere.
    *
-   * What makes a physical item and a magical item different objects rather than the
-   * same item with different numbers: `+2 to Physical Skill Levels` on a wand would
-   * be a dead row, so it never rolls there.
+   * Three values rather than two, because "gear only" is as load-bearing as
+   * "weapons only". Without it a weapon rolls everything gear does plus its own
+   * exclusives, so gear is strictly a weapon with fewer options - and the four gear
+   * slots become a place to put leftovers.
+   *
+   * The division is offence-and-resource against defence-and-economy. A weapon
+   * cannot roll max HP or gold find; gear cannot roll skill levels. So the two are
+   * different objects rather than the same object with different numbers, and
+   * `+2 to Physical Skill Levels` never appears on a wand as a dead row.
    */
-  weapons?: SkillKind;
+  rollsOn?: 'gear' | SkillKind;
   /** Ascending by strength. Index 0 is the weakest and always available. */
   tiers: AffixTier[];
 }
@@ -292,6 +298,15 @@ export const SkillSchema = z
      * reverse. The 75s limit applies to the total, so each is a real failure mode.
      */
     baseArea: z.number().positive(),
+    /**
+     * Resource spent per use - stamina on a physical skill, mana on a magical one.
+     *
+     * One system with two labels. The maths is identical and only the name the UI
+     * prints differs, because two implementations of one idea would double the stat
+     * surface and buy nothing. What actually differs is the NUMBER: a cheap cost
+     * against fast regen binds late, an expensive one binds immediately.
+     */
+    resourceCost: z.number().positive(),
   })
   .strict();
 

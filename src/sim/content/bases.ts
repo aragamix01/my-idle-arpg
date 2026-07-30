@@ -138,6 +138,23 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     // increased Area" twice. Caught by the guard, and by a rendering test.
     tiers: tiers([0.018, 0.028, 0.038, 0.048]),
   },
+  maul: {
+    id: 'implicit-maul-area',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'area', op: 'flat' },
+    tiers: tiers([0.09, 0.14, 0.19, 0.25]),
+  },
+  staff: {
+    // The resource implicit goes on the widest, thirstiest skill, where sustain is
+    // the thing a player feels first.
+    id: 'implicit-staff-regen',
+    kind: 'suffix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
+    // Held to about a third of Of Recovery, the weakest rolled peer on this stat.
+    tiers: tiers([0.012, 0.02, 0.028, 0.036]),
+  },
 };
 
 /**
@@ -153,7 +170,9 @@ export const WEAPON_BASES: ItemBase[] = [
   // icon disagree is the kind of defect only a screenshot catches, so the name
   // followed the art.
   { id: 'axe', name: 'Axe', sprite: 'item.axe', skillId: 'sunder' },
+  { id: 'maul', name: 'Maul', sprite: 'item.maul', skillId: 'cleave' },
   { id: 'wand', name: 'Wand', sprite: 'item.wand', skillId: 'fireball' },
+  { id: 'staff', name: 'Staff', sprite: 'item.staff', skillId: 'frost-nova' },
 ];
 
 export const GEAR_BASES: ItemBase[] = [

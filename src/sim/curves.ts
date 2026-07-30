@@ -293,6 +293,32 @@ export const UPGRADE_TRACKS: Record<UpgradeKey, UpgradeTrack> = {
     key: 'toughness', label: 'Toughness',
     baseCost: 35, costGrowth: 1.14, valueGrowth: 1.04, valueAdd: null, maxLevel: null, affectsIncome: false,
   },
+  /**
+   * The release valve on the resource cap, and it has to exist.
+   *
+   * Stamina and mana cap attack speed at `regen / cost`, which is the point - it is
+   * the soft cap attack speed otherwise lacks. But a cap whose only escape is a rare
+   * affix is not a cap, it is a wall: the harness hit one at stage 44, buying attack
+   * speed that bought nothing while the regen rolls it needed never dropped.
+   *
+   * Gold buying the sustain that unlocks the speed you already own is the decision
+   * this was supposed to create.
+   *
+   * It MIRRORS ATTACK SPEED exactly - same growth, same cost curve, uncapped - and
+   * that is forced rather than tidy. A capped flat track cannot keep pace with an
+   * uncapped multiplicative one: regen would rise by a fixed total while speed
+   * compounded, so the cap would bite eventually and then permanently, wherever the
+   * cap was set. Measured as a wall at stage 128 with a capped version. Matching the
+   * shapes makes the ratio something the player manages rather than something that
+   * runs out.
+   *
+   * The practical effect is that attack speed now costs roughly double: you buy the
+   * speed, then you buy the sustain that makes it real.
+   */
+  resource: {
+    key: 'resource', label: 'Recovery',
+    baseCost: 30, costGrowth: 1.31, valueGrowth: 1.04, valueAdd: null, maxLevel: null, affectsIncome: true,
+  },
 };
 
 /**

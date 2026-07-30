@@ -54,6 +54,10 @@ export const UNARMED: Skill = {
   baseSpeed: 1.5,
   baseCritChance: 0.05,
   baseArea: 2,
+  // Below base regen of 2, so min(1.5, 2/1) is 1.5 and the resource does not bind.
+  // Unarmed has to derive exactly the pre-resource numbers or the migration stops
+  // being power-neutral.
+  resourceCost: 1,
 };
 
 export const SKILLS = [
@@ -70,6 +74,30 @@ export const SKILLS = [
     baseSpeed: 1.5,
     baseCritChance: 0.1,
     baseArea: 1,
+    // Cheap against a base regen of 2, so stamina sits well above 1.5 and is
+    // invisible. It only starts to bind once attack speed has been stacked past
+    // 2.0 - which is exactly the intended arc: you buy speed for a long time, then
+    // one day discover you are not swinging any faster and go looking for regen.
+    resourceCost: 1,
+  },
+  {
+    /**
+     * The physical wave option, and the per-hit is low ON PURPOSE.
+     *
+     * Area multiplies straight into wave damage, so a three-target skill with a
+     * respectable hit beats a five-target spell on trash AND on the boss. The first
+     * cut did exactly that - Cleave dominated Fireball on both halves, which is one
+     * playstyle being strictly better - and the parity test caught it. A wide
+     * physical skill has to pay for its area in per-hit damage like everything else.
+     */
+    id: 'cleave',
+    name: 'Cleave',
+    kind: 'physical',
+    baseDamage: 54,
+    baseSpeed: 1.3,
+    baseCritChance: 0.07,
+    baseArea: 3,
+    resourceCost: 1.4,
   },
   {
     /**
@@ -87,6 +115,26 @@ export const SKILLS = [
     baseSpeed: 1,
     baseCritChance: 0.01,
     baseArea: 5,
+    // Expensive against a base regen of 3: 3/3 is exactly Fireball's base speed, so a
+    // caster is not taxed at rest but binds the instant they buy any attack speed.
+    // Sunder at cost 1 has headroom to 3.0 and binds only at double base speed. That
+    // gap in WHEN it binds is the entire difference between mana and stamina.
+    resourceCost: 3,
+  },
+  {
+    /**
+     * The widest skill in the game and the weakest per hit. Eight targets erases a
+     * wave; against a boss it is close to useless, which is the trade stated as
+     * plainly as the numbers allow.
+     */
+    id: 'frost-nova',
+    name: 'Frost Nova',
+    kind: 'magical',
+    baseDamage: 38,
+    baseSpeed: 0.9,
+    baseCritChance: 0.01,
+    baseArea: 8,
+    resourceCost: 3.3,
   },
 ] as const satisfies readonly Skill[];
 

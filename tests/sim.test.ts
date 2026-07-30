@@ -33,6 +33,8 @@ import {
   FRAGMENTS_PER_CLEAR,
   getAffix,
   getBaseAffix,
+  eligibleAffixes,
+  GEAR_BASES,
   getCurrency,
   getSkill,
   IMPLICIT_AFFIXES,
@@ -336,8 +338,10 @@ describe('content registry', () => {
   });
 
   it('every affix changes at least one outcome', () => {
+    // No shared baseline: each affix is now compared against its own reference
+    // build, because what counts as "the same build minus this affix" depends on
+    // where the affix can roll and whether its stat is even live.
     const base: SaveState = { ...newSave(1, T0), bestStage: 45, currentStage: 45 };
-    const baseline = resolveStage(base, 45);
 
     for (const affix of AFFIXES) {
       const top = affix.tiers.length - 1;
@@ -345,9 +349,23 @@ describe('content registry', () => {
       // the weapon slot, or it is inert for a reason that says nothing about the
       // affix. `+4 to Physical Skill Levels` on a Whetstone in a gear slot does
       // exactly nothing, and that is the rule working rather than a content bug.
-      const host = affix.weapons
-        ? WEAPON_BASES.find((b) => getSkill(b.skillId!)!.kind === affix.weapons)!
-        : { id: 'whetstone', skillId: undefined };
+      const weaponHost =
+        affix.rollsOn && affix.rollsOn !== 'gear'
+          ? WEAPON_BASES.find((b) => getSkill(b.skillId!)!.kind === affix.rollsOn)!
+          : undefined;
+      const host = weaponHost ?? { id: 'whetstone', skillId: undefined };
+
+      // A resource affix does nothing unless the resource is what limits you, and on
+      // a fresh build it usually is not - Unarmed and Sunder both regenerate faster
+      // than they spend, deliberately. So the reference build for a regen affix
+      // carries enough attack speed that the resource has started to bind. Measuring
+      // stamina regen on a base-speed Axe would correctly report zero and tell you
+      // nothing about the affix.
+      const needsBinding = affix.effect.kind === 'statMod' && affix.effect.stat === 'resourceRegen';
+      const bindingWeapon = WEAPON_BASES.find((b) => getSkill(b.skillId!)!.kind === 'magical')!;
+      const fast: SaveState = needsBinding
+        ? { ...base, upgrades: { ...base.upgrades, attackSpeed: 30 } }
+        : base;
       const item = {
         uid: 'test',
         baseId: host.id,
@@ -357,18 +375,26 @@ describe('content registry', () => {
         rerolls: 0,
         crafts: 0,
       };
-      // Compared against a baseline holding the same weapon, so what is measured is
-      // the affix and not the skill the weapon happens to grant.
+      // Compared against a baseline in the same build, so what is measured is the
+      // affix and not the skill the weapon happens to grant.
       const bare = { ...item, uid: 'bare', affixes: [] };
-      const reference: SaveState = host.skillId
-        ? { ...base, items: [bare], weapon: bare.uid }
-        : base;
-      const equipped: SaveState = host.skillId
-        ? { ...base, items: [item], weapon: item.uid }
-        : { ...base, items: [item], loadout: [item.uid, null, null, null] };
+      const carrier = needsBinding && !weaponHost
+        ? { uid: 'carrier', baseId: bindingWeapon.id, rarity: 'common' as const, itemLevel: 100,
+            affixes: [], rerolls: 0, crafts: 0 }
+        : undefined;
 
-      const ref = host.skillId ? resolveStage(reference, 45) : baseline;
-      const outcome = resolveStage(equipped, 45);
+      const build = (piece: typeof item): SaveState =>
+        weaponHost
+          ? { ...fast, items: [piece], weapon: piece.uid }
+          : {
+              ...fast,
+              items: carrier ? [piece, carrier] : [piece],
+              loadout: [piece.uid, null, null, null],
+              weapon: carrier ? carrier.uid : null,
+            };
+
+      const ref = resolveStage(build(bare), 45);
+      const outcome = resolveStage(build(item), 45);
       const changed = outcome.seconds !== ref.seconds || outcome.goldEarned !== ref.goldEarned;
       expect(changed, `${affix.id} has no measurable effect`).toBe(true);
     }
@@ -1224,10 +1250,19 @@ describe('power budget', () => {
         ]
       : [[prefix, suffix]];
     let best = { value: 0, save: base, label: '' };
-    for (const baseId of Object.keys(BASE_AFFIXES)) {
+    // Gear bases only, and only affixes that can actually roll on them.
+    //
+    // This measures the AFFIX POOL's ceiling, which is what the budget has always
+    // been about; the weapon is a separate axis and the ladder measures it. Without
+    // the eligibility filter the search happily built a Whetstone carrying Savage
+    // and Arcane - two weapon-only affixes on a piece of gear - and reported an
+    // offensive ceiling of 3.5x for a loadout nobody can ever assemble.
+    for (const baseId of GEAR_BASES.map((b) => b.id)) {
+      const prefixes = eligibleAffixes(PREFIXES, baseId).map((a) => a.id);
+      const suffixes = eligibleAffixes(SUFFIXES, baseId).map((a) => a.id);
       for (const [np, ns] of shapes) {
-        for (const ps of combos(PREFIXES.map((a) => a.id), np)) {
-          for (const ss of combos(SUFFIXES.map((a) => a.id), ns)) {
+        for (const ps of combos(prefixes, np)) {
+          for (const ss of combos(suffixes, ns)) {
             const ids = [...ps, ...ss];
             const save = loadoutOf(baseId, ids);
             const value = metric(save);
@@ -1382,6 +1417,70 @@ describe('power budget', () => {
     const contribution = dpsRatio(offence.save) / dpsRatio(stripped);
     expect(contribution).toBeGreaterThan(1.04);
     expect(contribution).toBeLessThan(1.15);
+  });
+});
+
+describe('physical and magical parity', () => {
+  // The third invariant, beside offence/defence symmetry and the feedback exponent.
+  // Whichever playstyle runs ahead makes the other dead content, and it will not hold
+  // by accident - the offence/defence one has now broken structurally four times.
+  const STAGE = 60;
+  const CTX = { stage: STAGE, isBoss: false, enemyHpFraction: 1 };
+  const base: SaveState = { ...newSave(1, T0), bestStage: STAGE, currentStage: STAGE };
+
+  /** The same character, differing only in which weapon it holds. */
+  const wielding = (baseId: string): SaveState => {
+    const weapon = {
+      uid: 'w',
+      baseId,
+      rarity: 'common' as const,
+      itemLevel: STAGE,
+      affixes: [],
+      rerolls: 0,
+      crafts: 0,
+    };
+    return { ...base, items: [weapon], weapon: weapon.uid };
+  };
+
+  const outcomes = WEAPON_BASES.map((b) => ({
+    name: b.name,
+    kind: getSkill(b.skillId!)!.kind,
+    outcome: resolveStage(wielding(b.id), STAGE),
+  }));
+
+  it('clears a whole stage in comparable total time whichever weapon is held', () => {
+    // TOTAL time, not per phase. Magic is meant to be faster on trash and slower on
+    // the boss, so a per-phase check would fail on precisely the difference that is
+    // the point of having two playstyles.
+    const totals = outcomes.map((o) => o.outcome.seconds);
+    const spread = Math.max(...totals) / Math.min(...totals);
+    const detail = outcomes.map((o) => `${o.name} ${o.outcome.seconds.toFixed(1)}s`).join(', ');
+    expect(spread, detail).toBeLessThan(1.6);
+  });
+
+  it('makes each kind measurably better at the half it is meant to win', () => {
+    // The half that proves the axis exists rather than merely balances. Matching
+    // totals AND matching phases would mean the two playstyles were one playstyle
+    // wearing different names.
+    const best = (kind: string, phase: 'trashPhaseSeconds' | 'bossPhaseSeconds') =>
+      Math.min(...outcomes.filter((o) => o.kind === kind).map((o) => o.outcome[phase]));
+
+    expect(best('magical', 'trashPhaseSeconds')).toBeLessThan(best('physical', 'trashPhaseSeconds'));
+    expect(best('physical', 'bossPhaseSeconds')).toBeLessThan(best('magical', 'bossPhaseSeconds'));
+  });
+
+  it('does not resource-limit any skill at rest', () => {
+    // A resource that binds before a single upgrade is bought is not a cap on what
+    // you buy, it is a flat tax on one playstyle - and the ladder is not tuned for
+    // one playstyle starting a third down.
+    for (const b of WEAPON_BASES) {
+      const skill = getSkill(b.skillId!)!;
+      const stats = deriveStats(wielding(b.id), CTX);
+      expect(stats.attackSpeed, `${b.name} is resource-limited at base`).toBeCloseTo(
+        skill.baseSpeed,
+        6,
+      );
+    }
   });
 });
 

@@ -50,6 +50,9 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   maxHp: { label: 'Max HP', format: compact },
   toughness: { label: 'Toughness', format: (v) => `x${v.toFixed(2)}` },
   goldFind: { label: 'Gold Find', format: (v) => `x${v.toFixed(2)}` },
+  // Named for the mechanic rather than for stamina or mana, because which one it is
+  // depends on the weapon in your hand and the label has to be right for both.
+  resourceRegen: { label: 'Resource Regen', format: (v) => `${v.toFixed(2)}/s` },
   // "to" is part of the label so the line reads "+1 to Magical Skill Levels" rather
   // than "+1 Magical Skill Levels", which parses as a count of levels you own
   // instead of a bonus to the skill you are wielding.

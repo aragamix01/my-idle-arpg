@@ -68,6 +68,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "vital",
       "kind": "prefix",
       "nameFragment": "Vital",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -96,6 +97,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "bulwark",
       "kind": "prefix",
       "nameFragment": "Bulwark",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -124,6 +126,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "armoured",
       "kind": "prefix",
       "nameFragment": "Armoured",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -174,6 +177,93 @@ exports[`content registry > matches its snapshot 1`] = `
     {
       "effect": {
         "kind": "statMod",
+        "op": "flat",
+        "stat": "damage",
+      },
+      "id": "savage",
+      "kind": "prefix",
+      "nameFragment": "Savage",
+      "rollsOn": "physical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 2.6,
+        },
+        {
+          "minStage": 15,
+          "value": 4.2,
+        },
+        {
+          "minStage": 40,
+          "value": 5.6,
+        },
+        {
+          "minStage": 80,
+          "value": 6.8,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "damage",
+      },
+      "id": "arcane",
+      "kind": "prefix",
+      "nameFragment": "Arcane",
+      "rollsOn": "magical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 2.4,
+        },
+        {
+          "minStage": 15,
+          "value": 3.9,
+        },
+        {
+          "minStage": 40,
+          "value": 5.2,
+        },
+        {
+          "minStage": 80,
+          "value": 6.4,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "resourceRegen",
+      },
+      "id": "resolute",
+      "kind": "prefix",
+      "nameFragment": "Resolute",
+      "rollsOn": "gear",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.06,
+        },
+        {
+          "minStage": 15,
+          "value": 0.1,
+        },
+        {
+          "minStage": 40,
+          "value": 0.14,
+        },
+        {
+          "minStage": 80,
+          "value": 0.18,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
         "op": "increased",
         "stat": "area",
       },
@@ -208,6 +298,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "warded",
       "kind": "prefix",
       "nameFragment": "Warded",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -404,6 +495,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "of-avarice",
       "kind": "suffix",
       "nameFragment": "of Avarice",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -432,6 +524,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "of-stone",
       "kind": "suffix",
       "nameFragment": "of Stone",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -460,6 +553,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "of-vigour",
       "kind": "suffix",
       "nameFragment": "of Vigour",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -482,12 +576,100 @@ exports[`content registry > matches its snapshot 1`] = `
     {
       "effect": {
         "kind": "statMod",
+        "op": "increased",
+        "stat": "resourceRegen",
+      },
+      "id": "of-endurance",
+      "kind": "suffix",
+      "nameFragment": "of Endurance",
+      "rollsOn": "physical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.05,
+        },
+        {
+          "minStage": 15,
+          "value": 0.08,
+        },
+        {
+          "minStage": 40,
+          "value": 0.11,
+        },
+        {
+          "minStage": 80,
+          "value": 0.145,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "resourceRegen",
+      },
+      "id": "of-clarity",
+      "kind": "suffix",
+      "nameFragment": "of Clarity",
+      "rollsOn": "magical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.057,
+        },
+        {
+          "minStage": 15,
+          "value": 0.088,
+        },
+        {
+          "minStage": 40,
+          "value": 0.122,
+        },
+        {
+          "minStage": 80,
+          "value": 0.158,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "resourceRegen",
+      },
+      "id": "of-recovery",
+      "kind": "suffix",
+      "nameFragment": "of Recovery",
+      "rollsOn": "gear",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.035,
+        },
+        {
+          "minStage": 15,
+          "value": 0.06,
+        },
+        {
+          "minStage": 40,
+          "value": 0.085,
+        },
+        {
+          "minStage": 80,
+          "value": 0.105,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
         "op": "flat",
         "stat": "physicalSkillLevel",
       },
       "id": "of-mastery",
       "kind": "suffix",
       "nameFragment": "of Mastery",
+      "rollsOn": "physical",
       "tiers": [
         {
           "minStage": 1,
@@ -506,7 +688,6 @@ exports[`content registry > matches its snapshot 1`] = `
           "value": 4,
         },
       ],
-      "weapons": "physical",
     },
     {
       "effect": {
@@ -517,6 +698,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "of-attunement",
       "kind": "suffix",
       "nameFragment": "of Attunement",
+      "rollsOn": "magical",
       "tiers": [
         {
           "minStage": 1,
@@ -535,7 +717,6 @@ exports[`content registry > matches its snapshot 1`] = `
           "value": 4,
         },
       ],
-      "weapons": "magical",
     },
   ],
   "bases": [
@@ -586,10 +767,22 @@ exports[`content registry > matches its snapshot 1`] = `
       "sprite": "item.axe",
     },
     {
+      "id": "maul",
+      "name": "Maul",
+      "skillId": "cleave",
+      "sprite": "item.maul",
+    },
+    {
       "id": "wand",
       "name": "Wand",
       "skillId": "fireball",
       "sprite": "item.wand",
+    },
+    {
+      "id": "staff",
+      "name": "Staff",
+      "skillId": "frost-nova",
+      "sprite": "item.staff",
     },
   ],
   "uniques": [

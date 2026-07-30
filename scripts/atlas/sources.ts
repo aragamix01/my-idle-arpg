@@ -78,6 +78,8 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     // giant_slayer and two shards.
     'item.axe': 117,
     'item.wand': 131,
+    'item.maul': 118,
+    'item.staff': 128,
 
     // Currency. Tiny Dungeon has no purpose-drawn crafting icons, so these are
     // the closest readable stand-ins from what the pack ships: potions for the

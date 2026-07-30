@@ -21,6 +21,7 @@ import {
   itemPower,
   itemSprite,
   isWeaponBase,
+  isResourceBound,
   baseSkillId,
   getSkill,
   UNARMED,
@@ -334,6 +335,8 @@ function InventoryTab({
     (weaponItem && baseSkillId(weaponItem.baseId)) || UNARMED.id,
   )!;
   const weaponSkillLevel = weaponItem ? weaponItem.itemLevel : 0;
+  const resourceName = equippedSkill.kind === 'magical' ? 'Mana' : 'Stamina';
+  const resourceBound = isResourceBound(hud.stats, equippedSkill);
 
   const equip = (uid: string) => {
     const item = byUid.get(uid);
@@ -436,7 +439,19 @@ function InventoryTab({
             <span className="text-[10px] text-neutral-500">
               {equippedSkill.name}
               {weaponItem ? ` · skill level ${weaponSkillLevel}` : ' · find a weapon'}
+              {` · ${resourceName} ${hud.stats.resourceRegen.toFixed(2)}/s`}
             </span>
+            {/*
+              Named here and nowhere else, because which resource it is depends on the
+              weapon in your hand - and the "limiting" note is the whole reason this
+              line exists. Attack speed is silently capped at regen/cost, so a player
+              who buys more of it and sees no change has no way to find out why.
+            */}
+            {resourceBound && (
+              <span className="text-[10px] text-amber-400">
+                {resourceName} is capping your attack speed — buy Recovery
+              </span>
+            )}
           </span>
         </button>
       </Section>

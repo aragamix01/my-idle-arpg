@@ -110,6 +110,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'vital',
+    rollsOn: 'gear',
     kind: 'prefix',
     nameFragment: 'Vital',
     effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
@@ -120,6 +121,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'bulwark',
+    rollsOn: 'gear',
     kind: 'prefix',
     nameFragment: 'Bulwark',
     effect: { kind: 'statMod', stat: 'maxHp', op: 'flat' },
@@ -127,6 +129,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'armoured',
+    rollsOn: 'gear',
     kind: 'prefix',
     nameFragment: 'Armoured',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
@@ -138,6 +141,42 @@ export const PREFIXES: AffixDefinition[] = [
     nameFragment: 'Sweeping',
     effect: { kind: 'statMod', stat: 'area', op: 'flat' },
     tiers: tiers([0.3, 0.5, 0.65, 0.8]),
+  },
+  {
+    /**
+     * Flat damage on a weapon, and stronger than Honed because it can only ever
+     * appear on one item. Honed rolls on all five; these two roll on one.
+     */
+    id: 'savage',
+    rollsOn: 'physical',
+    kind: 'prefix',
+    nameFragment: 'Savage',
+    effect: { kind: 'statMod', stat: 'damage', op: 'flat' },
+    tiers: tiers([2.6, 4.2, 5.6, 6.8]),
+  },
+  {
+    id: 'arcane',
+    rollsOn: 'magical',
+    kind: 'prefix',
+    nameFragment: 'Arcane',
+    effect: { kind: 'statMod', stat: 'damage', op: 'flat' },
+    // Must not collide with Honed or Savage at any tier.
+    tiers: tiers([2.4, 3.9, 5.2, 6.4]),
+  },
+  {
+    /**
+     * Gear's own route to sustain.
+     *
+     * Flat regen where the weapon-locked ones are increased, so the two stack in the
+     * way flat and increased always do: gear gives a caster a floor to work from,
+     * and the weapon multiplies it.
+     */
+    id: 'resolute',
+    rollsOn: 'gear',
+    kind: 'prefix',
+    nameFragment: 'Resolute',
+    effect: { kind: 'statMod', stat: 'resourceRegen', op: 'flat' },
+    tiers: tiers([0.06, 0.1, 0.14, 0.18]),
   },
   {
     /** The increased counterpart to Sweeping, on a base of 2 targets. */
@@ -163,6 +202,7 @@ export const PREFIXES: AffixDefinition[] = [
      * silently re-narrow the defensive pool.
      */
     id: 'warded',
+    rollsOn: 'gear',
     kind: 'prefix',
     nameFragment: 'Warded',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
@@ -232,6 +272,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-avarice',
+    rollsOn: 'gear',
     kind: 'suffix',
     nameFragment: 'of Avarice',
     effect: { kind: 'statMod', stat: 'goldFind', op: 'increased' },
@@ -244,6 +285,7 @@ export const SUFFIXES: AffixDefinition[] = [
      * header. They are the structural fix, not flavour.
      */
     id: 'of-stone',
+    rollsOn: 'gear',
     kind: 'suffix',
     nameFragment: 'of Stone',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
@@ -252,6 +294,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-vigour',
+    rollsOn: 'gear',
     kind: 'suffix',
     nameFragment: 'of Vigour',
     effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
@@ -272,11 +315,50 @@ export const SUFFIXES: AffixDefinition[] = [
      * Levels` on a wand would be a row that renders as a bonus and does nothing at
      * all, which is worse than a row that is a poor pick.
      */
+    /**
+     * The resource affixes, one per weapon kind.
+     *
+     * Same stat and near-identical values, and that is not duplication: they can
+     * never appear together, because no item is both a physical and a magical
+     * weapon. The two names exist so the line a player reads matches the resource
+     * their weapon actually spends.
+     *
+     * They arrive at opposite times. Stamina regen is worthless on a fresh Axe and
+     * becomes the affix that unlocks attack speed you already paid for; mana regen
+     * is the first thing a caster needs and stays that way.
+     */
+    id: 'of-endurance',
+    rollsOn: 'physical',
+    kind: 'suffix',
+    nameFragment: 'of Endurance',
+    effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
+    tiers: tiers([0.05, 0.08, 0.11, 0.145]),
+  },
+  {
+    id: 'of-clarity',
+    rollsOn: 'magical',
+    kind: 'suffix',
+    nameFragment: 'of Clarity',
+    effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
+    // Must not collide with Of Endurance, Of Recovery or the Staff implicit at any
+    // tier. Four tables share this stat, which is past what anyone eyeballs - the
+    // registry guard caught two overlaps here that would have rendered twice.
+    tiers: tiers([0.057, 0.088, 0.122, 0.158]),
+  },
+  {
+    id: 'of-recovery',
+    rollsOn: 'gear',
+    kind: 'suffix',
+    nameFragment: 'of Recovery',
+    effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
+    tiers: tiers([0.035, 0.06, 0.085, 0.105]),
+  },
+  {
     id: 'of-mastery',
     kind: 'suffix',
     nameFragment: 'of Mastery',
     effect: { kind: 'statMod', stat: 'physicalSkillLevel', op: 'flat' },
-    weapons: 'physical',
+    rollsOn: 'physical',
     tiers: tiers([1, 2, 3, 4]),
   },
   {
@@ -284,7 +366,7 @@ export const SUFFIXES: AffixDefinition[] = [
     kind: 'suffix',
     nameFragment: 'of Attunement',
     effect: { kind: 'statMod', stat: 'magicalSkillLevel', op: 'flat' },
-    weapons: 'magical',
+    rollsOn: 'magical',
     tiers: tiers([1, 2, 3, 4]),
   },
 ];

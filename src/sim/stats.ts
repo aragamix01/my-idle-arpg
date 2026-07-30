@@ -37,6 +37,7 @@ const TRACK_STAT: Record<keyof UpgradeLevels, StatKey> = {
   area: 'area',
   crit: 'critChance',
   toughness: 'toughness',
+  resource: 'resourceRegen',
 };
 
 /** The three layers, accumulated per stat before anything is resolved. */
@@ -214,7 +215,49 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
   stats.critChance = Math.min(1, Math.max(0, stats.critChance));
   stats.maxHp = Math.max(1, stats.maxHp);
   stats.toughness = Math.max(0.1, stats.toughness);
+  stats.resourceRegen = Math.max(0, stats.resourceRegen);
+
+  // Attack speed is capped by what the resource can sustain, and the CAP IS WRITTEN
+  // INTO THE STAT rather than applied later in the damage formula.
+  //
+  // That is deliberate. `attackSpeed` now means "swings you actually get", so every
+  // caller - the combat layer, the character sheet, the balance harness - is talking
+  // about the same number without being told about resources. A panel quoting 3.0/s
+  // to a player who can only sustain 2.0/s would be the exact failure statsDps was
+  // written to prevent.
+  //
+  // Closed-form, which is non-negotiable: resolveStage has no per-tick loop, and
+  // that is what lets the server resolve offline progress and the harness sweep 300
+  // stages in milliseconds.
+  stats.attackSpeed = Math.min(stats.attackSpeed, sustainedRate(stats, equippedSkill(save)));
   return stats;
+}
+
+/**
+ * Uses per second the resource can pay for.
+ *
+ * A cheap cost against fast regen sits above your attack speed and never binds; an
+ * expensive one sits below it and binds from the first swing. That difference in
+ * WHEN it binds is the whole distinction between stamina and mana - the formula is
+ * identical and only the numbers differ.
+ */
+export function sustainedRate(stats: Stats, skill: Skill): number {
+  if (skill.resourceCost <= 0) return Infinity;
+  return stats.resourceRegen / skill.resourceCost;
+}
+
+/**
+ * Whether the resource, not the weapon, is what limits your attacks.
+ *
+ * Since deriveStats already capped attackSpeed to the smaller of the two, the
+ * resource is binding exactly when the two are equal - no need to carry the
+ * uncapped figure around to find out.
+ *
+ * Exported for the panel. A stat silently lower than the modifiers on your gear
+ * imply is a number a player cannot act on without being told why.
+ */
+export function isResourceBound(stats: Stats, skill: Skill): boolean {
+  return sustainedRate(stats, skill) <= stats.attackSpeed * (1 + 1e-9);
 }
 
 /** Effective HP: what the incoming damage pool is actually measured against. */

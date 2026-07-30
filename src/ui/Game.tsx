@@ -273,6 +273,7 @@ const EFFECT_NOUNS: Record<string, { noun: string; percent: boolean }> = {
   greed: { noun: 'gold found', percent: true },
   area: { noun: 'targets hit', percent: false },
   crit: { noun: 'crit chance', percent: true },
+  resource: { noun: 'stamina and mana regen', percent: false },
 };
 
 function effectText(key: string): string {
