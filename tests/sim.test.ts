@@ -1727,11 +1727,19 @@ describe('clear time stays watchable', () => {
 describe('balance curve', () => {
   it('matches the golden snapshot', () => {
     // Change a constant in curves.ts and this diff shows exactly how pacing
-    // moved. Regenerate deliberately with `pnpm balance --write`.
+    // moved. Regenerate deliberately with `pnpm balance --write` - a shell
+    // redirect writes something subtly different and the mismatch is baffling.
+    //
+    // Line endings are normalised even though .gitattributes already pins this
+    // file to LF. The attribute fixes the repository; this makes sure a
+    // misconfigured checkout cannot make the test lie about pacing. `report()`
+    // joins with \n, so a CRLF checkout failed here on every fresh clone on
+    // Windows while the numbers were identical.
+    const lf = (s: string) => s.replace(/\r\n/g, '\n').trimEnd();
     const golden = readFileSync(
       resolve(process.cwd(), 'tests/__snapshots__/balance.golden.txt'),
       'utf8',
-    ).trimEnd();
-    expect(report()).toBe(golden);
+    );
+    expect(lf(report())).toBe(lf(golden));
   }, 60_000);
 });
