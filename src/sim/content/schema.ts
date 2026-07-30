@@ -234,6 +234,18 @@ export const ItemInstanceSchema = z
     spiritDelta: z.object({ prefix: z.number().int(), suffix: z.number().int() }).strict().optional(),
     /** Set only on uniques, naming the authored entry in the unique registry. */
     uniqueId: z.string().optional(),
+    /**
+     * One rolled magnitude per authored effect, in the registry's order.
+     *
+     * Stored rather than derived for the same reason a RolledAffix stores its value:
+     * the roll IS the item. Recomputing it from the id would make every copy of a
+     * unique identical again, and retuning a range would restat one already owned.
+     *
+     * Optional because uniques predating ranges have none. Everything reading it
+     * falls back to the range's midpoint, so an old item is neither bricked nor
+     * silently promoted to a perfect roll.
+     */
+    uniqueRolls: z.array(z.number()).optional(),
   })
   .strict();
 
@@ -312,7 +324,75 @@ export const SkillSchema = z
 
 export type Skill = z.infer<typeof SkillSchema>;
 
-/** An authored unique. Fixed effects, never rolled, never rerolled. */
+// --- Uniques --------------------------------------------------------------
+
+/**
+ * How hard a unique is to obtain, and nothing else.
+ *
+ * Separate from `dropStage`, which says WHEN one becomes possible. A tier says how
+ * often, so the two dials are independent: a shallow-gated unique can still be the
+ * rarest thing in the game, and a deep gate is not forced to also be rare.
+ *
+ * Three tiers rather than a per-unique weight. A weight per entry drifts - every
+ * addition silently rebalances every other one, because what matters is the share of
+ * a total nobody is looking at. Tiers make the roster's shape reviewable: count the
+ * ancients.
+ */
+export const UniqueTierSchema = z.enum(['lesser', 'greater', 'ancient']);
+export type UniqueTier = z.infer<typeof UniqueTierSchema>;
+
+/** Relative weights, rolled among the tiers that have an eligible unique. */
+export const UNIQUE_TIER_WEIGHTS: Record<UniqueTier, number> = {
+  lesser: 68,
+  greater: 27,
+  ancient: 5,
+};
+
+/**
+ * The range a unique's value rolls in.
+ *
+ * This is what makes a unique a chase rather than a checkbox. Under fixed values the
+ * second copy of an item was worthless the moment the first dropped; with a range,
+ * the item is the start of the hunt and the roll is the hunt itself.
+ *
+ * Rolled once at drop and stored on the instance, exactly like an affix magnitude -
+ * an authored range that is retuned later must not restat what someone already owns.
+ */
+export const RollRangeSchema = z
+  .object({ min: z.number(), max: z.number() })
+  .strict()
+  .refine((r) => r.max >= r.min, { message: 'max must not be below min' });
+
+export type RollRange = z.infer<typeof RollRangeSchema>;
+
+/**
+ * An authored effect with a range in place of its magnitude.
+ *
+ * Mirrors EffectSchema variant for variant on purpose: resolving one is substituting
+ * a number, so the interpreter never learns that uniques exist.
+ */
+export const UniqueEffectSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('statMod'),
+      stat: StatKeySchema,
+      op: ModLayerSchema,
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('goldOnKill'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+]);
+
+export type UniqueEffect = z.infer<typeof UniqueEffectSchema>;
+
+/** An authored unique. Which effects it has is fixed; how big they are is rolled. */
 export const UniqueSchema = z
   .object({
     id: z.string().min(1),
@@ -320,7 +400,9 @@ export const UniqueSchema = z
     sprite: z.string().min(1),
     /** Earliest stage this can drop from. */
     dropStage: z.number().int().min(1),
-    effects: z.array(EffectSchema).min(1),
+    /** Drop weight, independent of the stage gate. */
+    tier: UniqueTierSchema,
+    effects: z.array(UniqueEffectSchema).min(1),
   })
   .strict();
 

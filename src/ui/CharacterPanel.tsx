@@ -944,7 +944,6 @@ function ItemDetail({
   }
 
   const style = RARITY_STYLE[item.rarity];
-  const isUnique = item.rarity === 'unique';
   const skillId = baseSkillId(item.baseId);
   const skill = skillId ? getSkill(skillId) : undefined;
 
@@ -975,18 +974,19 @@ function ItemDetail({
           {equipped ? 'Unequip' : slotsFull ? 'Slots full' : 'Equip'}
         </button>
 
-        {/* One button for every way of changing an item - gold and currency
-            alike. Uniques are authored, so there is nothing to change. */}
-        {!isUnique && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onCraft}
-            className="rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
-          >
-            Craft…
-          </button>
-        )}
+        {/* One button for every way of changing an item - gold and currency alike.
+            Uniques open it too now: their effects are authored but their MAGNITUDES
+            are rolled, so Angel Flame has something to reroll. The modal greys out
+            everything else with the reason, which is a better answer than a missing
+            button - a player who cannot open it never learns the flame applies. */}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onCraft}
+          className="rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
+        >
+          Craft…
+        </button>
 
         <button
           type="button"

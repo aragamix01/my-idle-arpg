@@ -142,7 +142,10 @@ export function CraftModal({
               sprite="item.coin_purse"
               name="Gold Reroll"
               description="Rerolls every modifier except the implicit. There is no way to keep one."
-              trailing={`${compact(goldCost)}g`}
+              // A unique has no gold price at all, and compact(Infinity) renders as
+              // "-g" - a number that looks like a bug rather than an absence. The
+              // refusal below already says why.
+              trailing={isUnique ? '—' : `${compact(goldCost)}g`}
               reason={
                 isUnique
                   ? 'uniques cannot be modified'

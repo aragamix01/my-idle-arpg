@@ -14,14 +14,15 @@ import { AFFIXES, IMPLICIT_AFFIXES } from './affixes';
 import { BASE_AFFIXES, BASES } from './bases';
 import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
 import { UNIQUES } from './uniques';
-import { EffectSchema, UniqueSchema } from './schema';
+import { EffectSchema, UNIQUE_TIER_WEIGHTS, UniqueSchema, type UniqueEffect } from './schema';
 import { BASE_STATS } from '../types';
 
 /** 2: artifacts became rolled item instances with prefixes and suffixes. */
 /** 3: bases carry implicits, drops come in threes, and "artifact" became "item". */
 /** 4: crafting currency, fragments, spirits, and dissembling. */
 /** 5: modifiers carry a layer - flat, increased, more - instead of add/mul. */
-export const CONTENT_VERSION = 5;
+/** 6: weapons grant skills, skills cost a resource, and uniques roll their values. */
+export const CONTENT_VERSION = 6;
 
 export * from './schema';
 export * from './affixes';
@@ -162,6 +163,43 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     if (!parsed.success) {
       errors.push(`${unique.id}: ${parsed.error.issues.map((i) => i.message).join(', ')}`);
     }
+
+    // Widened, because `as const satisfies` narrows every authored value to a
+    // literal and a check the CURRENT roster happens to satisfy would be reported as
+    // dead code rather than run. These guards exist for the next entry, not this one.
+    for (const [i, effect] of (unique.effects as readonly UniqueEffect[]).entries()) {
+      // Uniques are the one place `more` is allowed, but critMult already multiplies
+      // into DPS through critFactor, so a `more` on top compounds twice over. The
+      // rollable pool is barred from this by the loop above; this is the same rule
+      // held against authored content.
+      if (effect.kind === 'statMod' && effect.stat === 'critMult' && effect.op === 'more') {
+        errors.push(`${unique.id}: critMult must not take a more modifier`);
+      }
+      // Both ends of a range must be resolvable by the interpreter, not just the
+      // midpoint - a range straddling a value the schema rejects would produce an
+      // item that works until the day someone rolls the bad end of it.
+      for (const value of [effect.roll.min, effect.roll.max]) {
+        const sample =
+          effect.kind === 'goldOnKill'
+            ? { kind: 'goldOnKill' as const, multiplier: value }
+            : { kind: 'statMod' as const, stat: effect.stat, op: effect.op, value };
+        if (!EffectSchema.safeParse(sample).success) {
+          errors.push(`${unique.id} effect ${i}: ${value} produces an invalid effect`);
+        }
+      }
+    }
+
+    // A unique whose ranges are all constants can never be improved, which makes
+    // Angel Flame refuse it - fine for one authored downside, wrong for a whole item.
+    if (unique.effects.every((e) => e.roll.max === e.roll.min)) {
+      errors.push(`${unique.id}: every effect is a constant, so nothing can be rolled`);
+    }
+  }
+
+  // Every tier must have at least one unique, or its share of the drop weight is
+  // silently redistributed and the roster's shape is not what the table says.
+  for (const tier of Object.keys(UNIQUE_TIER_WEIGHTS)) {
+    if (!UNIQUES.some((u) => u.tier === tier)) errors.push(`no unique in the ${tier} tier`);
   }
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors };

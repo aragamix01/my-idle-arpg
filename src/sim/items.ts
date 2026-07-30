@@ -30,7 +30,7 @@ import {
   type CurrencyPurse,
   type SpiritDelta,
 } from './content/currency';
-import { getUnique, uniquesFor } from './content/uniques';
+import { getUnique, pickUnique, rollUniqueValues, uniqueEffects } from './content/uniques';
 import {
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
@@ -60,7 +60,7 @@ const DUNGEON_STREAM = 0x27d4_eb2f;
  * reroll draw different numbers - two operations sharing a stream would make
  * "reroll, then flame, then reroll" reproduce the first reroll's result.
  */
-function rollStream(accountSeed: number, uid: number, crafts: number): Rng {
+export function rollStream(accountSeed: number, uid: number, crafts: number): Rng {
   return createRng(accountSeed).fork(uid * 7919 + crafts * REROLL_STREAM);
 }
 
@@ -194,12 +194,11 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
   let rarity = weightedRarity(rng);
 
   if (rarity === 'unique') {
-    const eligible = uniquesFor(itemLevel);
+    const unique = pickUnique(itemLevel, rng);
     // Early stages have no eligible uniques. Falling back keeps every clear a
     // drop rather than silently swallowing one.
-    if (eligible.length === 0) rarity = 'rare';
+    if (!unique) rarity = 'rare';
     else {
-      const unique = eligible[rng.int(eligible.length)];
       return {
         uid: String(uid),
         baseId: unique.id,
@@ -209,6 +208,7 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
         rerolls: 0,
         crafts: 0,
         uniqueId: unique.id,
+        uniqueRolls: rollUniqueValues(unique, rng),
       };
     }
   }
@@ -365,6 +365,19 @@ export function rerollAffixes(accountSeed: number, item: ItemInstance): ItemInst
 // --- Currency -------------------------------------------------------------
 
 /**
+ * Whether a unique has any range wide enough to be worth a flame.
+ *
+ * Swarm Lens's downside and Giant Slayer's are authored constants, and a unique made
+ * entirely of those would accept a flame, consume it, and produce a byte-identical
+ * item. Refusing up front is the difference between a currency that did nothing and
+ * a currency that was allowed to do nothing.
+ */
+function hasRollableRange(item: ItemInstance): boolean {
+  const unique = item.uniqueId ? getUnique(item.uniqueId) : undefined;
+  return unique?.effects.some((e) => e.roll.max > e.roll.min) ?? false;
+}
+
+/**
  * Why this currency cannot be used on this item, or null when it can.
  *
  * One function, two callers: applyCommand refuses with this string, and the
@@ -382,8 +395,14 @@ export function currencyLegality(
   if (action.kind === 'combine') return 'combine this in the stash, not on an item';
   if (action.kind === 'inert') return `${currency.name} is not used on items`;
 
-  // Uniques are authored, not rolled. Nothing here has anything to act on.
-  if (item.rarity === 'unique') return 'uniques cannot be modified';
+  // A unique has no affixes, no rarity to raise and no rows to trade, so every
+  // currency but one has nothing to act on. Angel Flame does: it rerolls magnitudes
+  // and leaves identity alone, which is exactly what a unique's ranges are.
+  if (item.rarity === 'unique') {
+    if (action.kind !== 'rerollTiers') return 'uniques cannot be modified';
+    if (!hasRollableRange(item)) return 'this unique has nothing left to roll';
+    return null;
+  }
 
   switch (action.kind) {
     case 'rerollAffixes': {
@@ -477,6 +496,15 @@ export function applyCurrencyToItem(
     }
 
     case 'rerollTiers': {
+      // On a unique this rerolls the authored ranges. Same effects, new numbers -
+      // the identical operation the flame performs on a rare, which is why uniques
+      // accept this currency and no other.
+      const unique = item.uniqueId ? getUnique(item.uniqueId) : undefined;
+      if (unique) {
+        next.uniqueRolls = rollUniqueValues(unique, rng);
+        return { item: next, transmuted: false };
+      }
+
       // Same modifiers, new magnitudes. An item whose affixes are right but
       // whose numbers are not is exactly what this exists for.
       next.affixes = item.affixes.map((rolled) => {
@@ -515,18 +543,18 @@ export function applyCurrencyToItem(
 
     case 'gamble': {
       if (rng.next() >= action.successChance) return { item: null, transmuted: false };
-      const eligible = uniquesFor(item.itemLevel);
+      const unique = pickUnique(item.itemLevel, rng);
       // No unique exists this early. Refunding the item rather than eating it
       // keeps the failure honest: the droplet did not fail, it had nothing to
       // turn the item into.
-      if (eligible.length === 0) return { item: next, transmuted: false };
-      const unique = eligible[rng.int(eligible.length)];
+      if (!unique) return { item: next, transmuted: false };
       return {
         item: {
           ...next,
           baseId: unique.id,
           rarity: 'unique',
           uniqueId: unique.id,
+          uniqueRolls: rollUniqueValues(unique, rng),
           affixes: [],
           baseAffix: undefined,
           spirit: undefined,
@@ -585,7 +613,10 @@ export function affixEffect(rolled: RolledAffix): Effect | null {
 
 /** Everything an item contributes: implicit, rolled affixes, or authored effects. */
 export function itemEffects(item: ItemInstance): Effect[] {
-  if (item.uniqueId) return [...(getUnique(item.uniqueId)?.effects ?? [])];
+  if (item.uniqueId) {
+    const unique = getUnique(item.uniqueId);
+    return unique ? uniqueEffects(unique, item.uniqueRolls) : [];
+  }
   const rolled = [...(item.baseAffix ? [item.baseAffix] : []), ...item.affixes];
   return rolled.map(affixEffect).filter((e): e is Effect => e !== null);
 }

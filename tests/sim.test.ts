@@ -37,6 +37,7 @@ import {
   GEAR_BASES,
   getCurrency,
   getSkill,
+  getUnique,
   IMPLICIT_AFFIXES,
   KEY_DROP_CHANCE,
   PREFIXES,
@@ -488,7 +489,7 @@ describe('item rolling', () => {
     expect(tiers.size).toBeGreaterThan(1);
   });
 
-  it('gives uniques fixed effects and no affixes', () => {
+  it('gives uniques authored effects, rolled values, and no affixes', () => {
     const uniques = Array.from({ length: 600 }, (_, i) => rollItem(3, i + 1, 60)).filter(
       (item) => item.rarity === 'unique',
     );
@@ -496,7 +497,47 @@ describe('item rolling', () => {
     for (const item of uniques) {
       expect(item.affixes).toEqual([]);
       expect(itemEffects(item).length).toBeGreaterThan(0);
+
+      // One roll per authored effect, each inside its own range. The effects a
+      // unique carries are fixed; only their magnitudes are drawn.
+      const authored = getUnique(item.uniqueId!)!;
+      expect(item.uniqueRolls).toHaveLength(authored.effects.length);
+      authored.effects.forEach((effect, i) => {
+        expect(item.uniqueRolls![i]).toBeGreaterThanOrEqual(effect.roll.min);
+        expect(item.uniqueRolls![i]).toBeLessThanOrEqual(effect.roll.max);
+      });
     }
+
+    // Two copies of the same unique must be able to differ, or the range is
+    // decoration. Checked across the whole sample rather than on a chosen pair,
+    // since which unique repeats depends on the seed.
+    const byUnique = new Map<string, Set<string>>();
+    for (const item of uniques) {
+      const seen = byUnique.get(item.uniqueId!) ?? new Set<string>();
+      seen.add(item.uniqueRolls!.join(','));
+      byUnique.set(item.uniqueId!, seen);
+    }
+    expect([...byUnique.values()].some((rolls) => rolls.size > 1)).toBe(true);
+  });
+
+  it('drops uniques at the frequency their tier declares', () => {
+    // The tier IS the drop weight, so an ancient must be materially rarer than a
+    // lesser. Asserted as an ordering rather than a ratio: the exact share depends
+    // on how many uniques sit in each tier, and pinning it would turn adding one
+    // more lesser into a test failure.
+    const drops = Array.from({ length: 40_000 }, (_, i) => rollItem(11, i + 1, 300)).filter(
+      (item) => item.rarity === 'unique',
+    );
+    expect(drops.length).toBeGreaterThan(200);
+
+    const share = (tier: string) =>
+      drops.filter((item) => getUnique(item.uniqueId!)!.tier === tier).length / drops.length;
+
+    expect(share('lesser')).toBeGreaterThan(share('greater'));
+    expect(share('greater')).toBeGreaterThan(share('ancient'));
+    // Every tier still has to appear, or a weight is effectively zero and the
+    // roster is smaller than it reads.
+    expect(share('ancient')).toBeGreaterThan(0);
   });
 });
 
@@ -872,13 +913,49 @@ describe('currency', () => {
     expect(refused.error).toBe('unequip it first');
   });
 
-  it('refuses every currency on a unique', () => {
+  it('refuses every currency on a unique except the flame', () => {
+    // Angel Flame rerolls magnitudes and leaves identity alone, which is exactly
+    // what a unique's authored ranges are. Everything else has no affixes to reroll,
+    // no rarity to raise and no rows to trade.
     const unique = itemOfRarity('unique', 3);
     for (const currency of CURRENCIES) {
       if (currency.tier === 'fragment' || currency.tier === 'key') continue;
       const result = craft(withCurrency(unique), currency.id, unique.uid);
-      expect(result.ok, `${currency.id} was allowed on a unique`).toBe(false);
+      const allowed = currency.action.kind === 'rerollTiers';
+      expect(result.ok, `${currency.id} on a unique`).toBe(allowed);
     }
+  });
+
+  it('rerolls a unique inside its authored ranges and nowhere else', () => {
+    const unique = itemOfRarity('unique', 3);
+    const authored = getUnique(unique.uniqueId!)!;
+
+    // Every roll of every flame, not just the first: a range check that samples once
+    // passes on any bug that only shows up at one end of the interval.
+    let current = unique;
+    const seen: number[][] = [];
+    for (let i = 0; i < 40; i++) {
+      const result = craft(withCurrency(current), 'angel-flame', current.uid);
+      expect(result.ok).toBe(true);
+      if (!result.ok) break;
+      current = result.value.state.items[0];
+
+      expect(current.uniqueId).toBe(unique.uniqueId);
+      expect(current.uniqueRolls).toHaveLength(authored.effects.length);
+      authored.effects.forEach((effect, j) => {
+        const value = current.uniqueRolls![j];
+        expect(value).toBeGreaterThanOrEqual(effect.roll.min);
+        expect(value).toBeLessThanOrEqual(effect.roll.max);
+      });
+      seen.push(current.uniqueRolls!);
+    }
+
+    // A flame that returned the same numbers every time would pass every bound check
+    // above while being a currency that does nothing.
+    const varying = authored.effects.some(
+      (effect, j) => effect.roll.max > effect.roll.min && new Set(seen.map((r) => r[j])).size > 1,
+    );
+    expect(varying, 'the flame produced identical rolls every time').toBe(true);
   });
 
   it('combines ten fragments into one currency, and refuses nine', () => {
@@ -1583,6 +1660,39 @@ describe('migration', () => {
     // inventing a value would be worse than carrying a number nothing reads.
     expect(state.items[0].affixes[0]).toEqual({ affixId: 'retired-mod', tier: 0, value: 1.5 });
     expect(itemEffects(state.items[0])).toEqual([]);
+  });
+
+  it('gives an owned unique a roll inside its range', () => {
+    // A unique that predates ranges has no stored roll. itemEffects falls back to
+    // the midpoint, so it is never broken - but a stored roll is what Angel Flame
+    // rerolls and what the panel reports quality against, and leaving the field
+    // absent would hand the owner an item the new mechanics cannot see.
+    const dropped = Array.from({ length: 600 }, (_, i) => rollItem(3, i + 1, 60)).find(
+      (item) => item.rarity === 'unique',
+    )!;
+    const legacy = { ...dropped, uniqueRolls: undefined };
+    const v5 = {
+      ...newSave(3, T0),
+      contentVersion: 5,
+      items: [legacy],
+      nextItemId: 2,
+    } as SaveState;
+
+    const { state, migrated } = migrateSave(v5);
+    const [carried] = state.items;
+    const authored = getUnique(dropped.uniqueId!)!;
+
+    expect(migrated).toBe(true);
+    expect(carried.uniqueId).toBe(dropped.uniqueId);
+    expect(carried.uniqueRolls).toHaveLength(authored.effects.length);
+    authored.effects.forEach((effect, i) => {
+      expect(carried.uniqueRolls![i]).toBeGreaterThanOrEqual(effect.roll.min);
+      expect(carried.uniqueRolls![i]).toBeLessThanOrEqual(effect.roll.max);
+    });
+
+    // Deterministic, because the client migrates optimistically and the server
+    // migrates authoritatively - two different rolls would be two different items.
+    expect(migrateSave(v5).state.items[0].uniqueRolls).toEqual(carried.uniqueRolls);
   });
 
   it('leaves a current save alone', () => {

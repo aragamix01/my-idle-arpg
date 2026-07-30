@@ -130,7 +130,11 @@ export const CURRENCIES: CurrencyDefinition[] = [
     name: 'Angel Flame',
     tier: 'basic',
     sprite: 'currency.angel_flame',
-    description: 'Keeps every modifier and rerolls their tiers.',
+    // Worded for both things it acts on. A rare's magnitudes are tiers; a unique's
+    // are rolls inside an authored range, and there are no tiers to speak of. The
+    // description is the teaching surface, so it has to be true of the item in front
+    // of the player rather than of the common case.
+    description: 'Keeps every modifier and rerolls how strong each one is.',
     action: { kind: 'rerollTiers' },
   },
   {
