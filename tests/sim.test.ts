@@ -679,7 +679,11 @@ describe('currency', () => {
     const after = result.value.state.items[0];
     expect(after.rarity).toBe('magic');
     for (const before of item.affixes) expect(after.affixes).toContainEqual(before);
-    expect(after.affixes.length).toBe(item.affixes.length + 1);
+    // Read off the limits rather than written down, so widening a rarity's rows
+    // does not silently turn this into an assertion about the wrong number.
+    const rows = (r: 'common' | 'magic') => AFFIX_LIMITS[r].prefix + AFFIX_LIMITS[r].suffix;
+    expect(after.affixes.length).toBe(rows('magic'));
+    expect(after.affixes.length).toBeGreaterThan(rows('common'));
   });
 
   it('refuses an ore on the wrong rarity, with the reason the UI shows', () => {
@@ -746,7 +750,7 @@ describe('currency', () => {
     }
   });
 
-  it('bishop and devil keep the total at four rows; dune can reach five', () => {
+  it('bishop and devil trade a row; only dune adds one', () => {
     const total = (id: CurrencyId, seed: number) => {
       const item = itemOfRarity('rare', seed, 120);
       const result = craft(withCurrency(item), id, item.uid);
@@ -755,15 +759,20 @@ describe('currency', () => {
       return rows.prefix + rows.suffix;
     };
 
+    // Derived, not written down. These were literal 4s and 5s, which is exactly
+    // what broke when a rare went from 2/2 to 3/3 - the numbers were right about
+    // the old content and said nothing about the rule.
+    const rareRows = AFFIX_LIMITS.rare.prefix + AFFIX_LIMITS.rare.suffix;
+
     for (let seed = 1; seed <= 8; seed++) {
-      expect(total('bishop-spirit', seed)).toBe(4);
-      expect(total('devil-spirit', seed)).toBe(4);
+      expect(total('bishop-spirit', seed)).toBe(rareRows);
+      expect(total('devil-spirit', seed)).toBe(rareRows);
     }
-    // Dune is the only route to a fifth row - that is what makes it the
-    // rarest thing that drops, and what the craft ceiling budgets for.
+    // Dune is the only route to an extra row - that is what makes it the rarest
+    // thing that drops, and what the craft ceiling budgets for.
     const duneTotals = new Set(Array.from({ length: 24 }, (_, i) => total('dune-spirit', i + 1)));
-    expect(duneTotals).toContain(5);
-    expect(Math.max(...duneTotals)).toBe(5);
+    expect(duneTotals).toContain(rareRows + 1);
+    expect(Math.max(...duneTotals)).toBe(rareRows + 1);
   });
 
   it('refuses a spirit on anything but a rare', () => {
@@ -1190,12 +1199,16 @@ describe('power budget', () => {
    * not be measured.
    */
   const bestLoadout = (metric: (s: SaveState) => number, extraRow: boolean) => {
+    // Read off AFFIX_LIMITS rather than written down. Hard-coded shapes were the
+    // other half of how these tests went stale: widening a rare's rows would have
+    // left the search measuring a four-affix item and still calling it the ceiling.
+    const { prefix, suffix } = AFFIX_LIMITS.rare;
     const shapes: [number, number][] = extraRow
       ? [
-          [3, 2],
-          [2, 3],
+          [prefix + 1, suffix],
+          [prefix, suffix + 1],
         ]
-      : [[2, 2]];
+      : [[prefix, suffix]];
     let best = { value: 0, save: base, label: '' };
     for (const baseId of Object.keys(BASE_AFFIXES)) {
       for (const [np, ns] of shapes) {
@@ -1240,7 +1253,8 @@ describe('power budget', () => {
     // The absolute ceiling above cannot tell 2.4/2.4 from 3.4/1.7 - both are
     // 5.7x. This is the check that actually encodes the invariant, and it is
     // the one to read first when clear times move.
-    expect(Math.abs(Math.log(offence.value / defence.value))).toBeLessThan(0.15);
+    const detail = `offence ${offence.value.toFixed(3)} (${offence.label}) vs defence ${defence.value.toFixed(3)} (${defence.label})`;
+    expect(Math.abs(Math.log(offence.value / defence.value)), detail).toBeLessThan(0.15);
   });
 
   it('a fully crafted loadout is worth roughly 8x, the agreed ceiling', () => {
@@ -1268,7 +1282,8 @@ describe('power budget', () => {
     // The symmetry invariant does not stop applying because an item was
     // crafted. A fifth row that only ever went on offence would be the
     // stage-222 failure arriving by a third route.
-    expect(Math.abs(Math.log(craftedOffence.value / craftedDefence.value))).toBeLessThan(0.2);
+    const detail = `offence ${craftedOffence.value.toFixed(3)} (${craftedOffence.label}) vs defence ${craftedDefence.value.toFixed(3)} (${craftedDefence.label})`;
+    expect(Math.abs(Math.log(craftedOffence.value / craftedDefence.value)), detail).toBeLessThan(0.2);
   });
 
   it('does not let stacked uniques beat a crafted loadout on total power', () => {

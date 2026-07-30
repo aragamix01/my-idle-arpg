@@ -57,16 +57,16 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     kind: 'prefix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
-    tiers: tiers([0.008, 0.013, 0.017, 0.024]),
+    tiers: tiers([0.007, 0.01, 0.014, 0.018]),
   },
   glove: {
     id: 'implicit-attack-speed',
     kind: 'suffix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'attackSpeed', op: 'increased' },
-    // 0.025 would collide with of-Haste's weakest tier and render as the same
-    // line on an item carrying both.
-    tiers: tiers([0.007, 0.011, 0.014, 0.017]),
+    // No value here may equal one of of-Haste's, or an item carrying both renders
+    // the same line twice. validateRegistry enforces it across every tier pair.
+    tiers: tiers([0.005, 0.008, 0.01, 0.014]),
   },
   purse: {
     id: 'implicit-gold-find',
@@ -80,14 +80,14 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     kind: 'suffix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
-    tiers: tiers([0.003, 0.005, 0.007, 0.008]),
+    tiers: tiers([0.0025, 0.004, 0.006, 0.0075]),
   },
   blade: {
     id: 'implicit-crit-mult',
     kind: 'suffix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'critMult', op: 'flat' },
-    tiers: tiers([0.04, 0.065, 0.09, 0.11]),
+    tiers: tiers([0.033, 0.052, 0.073, 0.096]),
   },
   lens: {
     id: 'implicit-area',
@@ -102,14 +102,14 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     kind: 'prefix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
-    tiers: tiers([0.015, 0.021, 0.027, 0.035]),
+    tiers: tiers([0.005, 0.008, 0.011, 0.015]),
   },
   idol: {
     id: 'implicit-toughness',
     kind: 'prefix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
-    tiers: tiers([0.012, 0.017, 0.021, 0.026]),
+    tiers: tiers([0.005, 0.008, 0.011, 0.014]),
   },
 };
 

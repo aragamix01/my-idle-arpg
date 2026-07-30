@@ -15,19 +15,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.026,
+          "value": 0.021,
         },
         {
           "minStage": 15,
-          "value": 0.039,
+          "value": 0.031,
         },
         {
           "minStage": 40,
-          "value": 0.052,
+          "value": 0.041,
         },
         {
           "minStage": 80,
-          "value": 0.07,
+          "value": 0.055,
         },
       ],
     },
@@ -43,19 +43,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 1.6,
+          "value": 1.3,
         },
         {
           "minStage": 15,
-          "value": 2.6,
+          "value": 2.1,
         },
         {
           "minStage": 40,
-          "value": 3.5,
+          "value": 2.8,
         },
         {
           "minStage": 80,
-          "value": 4.2,
+          "value": 3.4,
         },
       ],
     },
@@ -71,19 +71,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.045,
+          "value": 0.018,
         },
         {
           "minStage": 15,
-          "value": 0.062,
+          "value": 0.028,
         },
         {
           "minStage": 40,
-          "value": 0.08,
+          "value": 0.038,
         },
         {
           "minStage": 80,
-          "value": 0.105,
+          "value": 0.05,
         },
       ],
     },
@@ -99,19 +99,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 3.5,
+          "value": 1.5,
         },
         {
           "minStage": 15,
-          "value": 6,
+          "value": 2.6,
         },
         {
           "minStage": 40,
-          "value": 9,
+          "value": 3.8,
         },
         {
           "minStage": 80,
-          "value": 12,
+          "value": 5,
         },
       ],
     },
@@ -127,19 +127,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.035,
+          "value": 0.017,
         },
         {
           "minStage": 15,
-          "value": 0.048,
+          "value": 0.027,
         },
         {
           "minStage": 40,
-          "value": 0.06,
+          "value": 0.036,
         },
         {
           "minStage": 80,
-          "value": 0.075,
+          "value": 0.048,
         },
       ],
     },
@@ -175,6 +175,34 @@ exports[`content registry > matches its snapshot 1`] = `
       "effect": {
         "kind": "statMod",
         "op": "increased",
+        "stat": "area",
+      },
+      "id": "titanic",
+      "kind": "prefix",
+      "nameFragment": "Titanic",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.05,
+        },
+        {
+          "minStage": 15,
+          "value": 0.08,
+        },
+        {
+          "minStage": 40,
+          "value": 0.11,
+        },
+        {
+          "minStage": 80,
+          "value": 0.14,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
         "stat": "toughness",
       },
       "id": "warded",
@@ -183,19 +211,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.04,
+          "value": 0.019,
         },
         {
           "minStage": 15,
-          "value": 0.052,
+          "value": 0.029,
         },
         {
           "minStage": 40,
-          "value": 0.065,
+          "value": 0.04,
         },
         {
           "minStage": 80,
-          "value": 0.08,
+          "value": 0.052,
         },
       ],
     },
@@ -211,19 +239,47 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.022,
+          "value": 0.015,
         },
         {
           "minStage": 15,
-          "value": 0.035,
+          "value": 0.023,
         },
         {
           "minStage": 40,
-          "value": 0.044,
+          "value": 0.031,
         },
         {
           "minStage": 80,
-          "value": 0.052,
+          "value": 0.042,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "attackSpeed",
+      },
+      "id": "of-fury",
+      "kind": "suffix",
+      "nameFragment": "of Fury",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.024,
+        },
+        {
+          "minStage": 15,
+          "value": 0.039,
+        },
+        {
+          "minStage": 40,
+          "value": 0.053,
+        },
+        {
+          "minStage": 80,
+          "value": 0.065,
         },
       ],
     },
@@ -239,19 +295,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.009,
+          "value": 0.007,
         },
         {
           "minStage": 15,
-          "value": 0.016,
+          "value": 0.013,
         },
         {
           "minStage": 40,
-          "value": 0.022,
+          "value": 0.018,
         },
         {
           "minStage": 80,
-          "value": 0.026,
+          "value": 0.022,
         },
       ],
     },
@@ -267,19 +323,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.08,
+          "value": 0.058,
         },
         {
           "minStage": 15,
-          "value": 0.12,
+          "value": 0.092,
         },
         {
           "minStage": 40,
-          "value": 0.16,
+          "value": 0.126,
         },
         {
           "minStage": 80,
-          "value": 0.2,
+          "value": 0.16,
         },
       ],
     },
@@ -295,19 +351,47 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.12,
+          "value": 0.1,
         },
         {
           "minStage": 15,
-          "value": 0.2,
+          "value": 0.16,
         },
         {
           "minStage": 40,
-          "value": 0.28,
+          "value": 0.22,
         },
         {
           "minStage": 80,
-          "value": 0.36,
+          "value": 0.29,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "critMult",
+      },
+      "id": "of-cruelty",
+      "kind": "suffix",
+      "nameFragment": "of Cruelty",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.032,
+        },
+        {
+          "minStage": 15,
+          "value": 0.052,
+        },
+        {
+          "minStage": 40,
+          "value": 0.071,
+        },
+        {
+          "minStage": 80,
+          "value": 0.092,
         },
       ],
     },
@@ -336,6 +420,62 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "minStage": 80,
           "value": 0.15,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "toughness",
+      },
+      "id": "of-stone",
+      "kind": "suffix",
+      "nameFragment": "of Stone",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.015,
+        },
+        {
+          "minStage": 15,
+          "value": 0.024,
+        },
+        {
+          "minStage": 40,
+          "value": 0.033,
+        },
+        {
+          "minStage": 80,
+          "value": 0.043,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "maxHp",
+      },
+      "id": "of-vigour",
+      "kind": "suffix",
+      "nameFragment": "of Vigour",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.016,
+        },
+        {
+          "minStage": 15,
+          "value": 0.025,
+        },
+        {
+          "minStage": 40,
+          "value": 0.034,
+        },
+        {
+          "minStage": 80,
+          "value": 0.045,
         },
       ],
     },

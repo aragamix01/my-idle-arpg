@@ -85,10 +85,13 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
         errors.push(`${affix.id}: ${stat} is a multiplier and has no meaningful flat layer`);
       }
 
-      // Crit multiplier already multiplies into DPS through critFactor. A `more`
-      // layer on top of that compounds twice over.
-      if (stat === 'critMult' && op !== 'flat') {
-        errors.push(`${affix.id}: critMult takes flat modifiers only`);
+      // Crit multiplier already multiplies into DPS through critFactor, so a
+      // `more` layer on top of that compounds twice over. `increased` is fine and
+      // Of Cruelty uses it - it widens the pool critFactor multiplies rather than
+      // multiplying the result again. The pool-wide `more` ban above already
+      // covers rollable affixes; this is the rule uniques are held to as well.
+      if (stat === 'critMult' && op === 'more') {
+        errors.push(`${affix.id}: critMult must not take a more modifier`);
       }
     }
   }

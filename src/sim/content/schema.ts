@@ -89,13 +89,26 @@ export type Rarity = z.infer<typeof RaritySchema>;
 /**
  * How many affixes each rarity carries.
  *
+ * A clean one-two-three per side. This is what the layer system bought: under the
+ * old all-multiplier model a fifth and sixth row compounded onto everything
+ * already there, so widening the rows meant either blowing the power budget or
+ * shrinking every value again. Rows that land in a *sum* have falling marginal
+ * value, so the extra ones are affordable.
+ *
+ * Note what widened and what did not. The overall power ceiling is deliberately
+ * held near where it was - the ladder is tuned against it - so per-affix values
+ * came down to pay for the new rows. What the player gains is not raw power but
+ * surface: more modifiers to read, more crafting decisions, and a much wider gap
+ * between a common and a rare. A common at 1/1 against a rare at 3/3 is a far
+ * bigger step than 1/0 against 2/2 ever was, so rarity means more than it did.
+ *
  * Uniques roll nothing - their effects are authored and fixed, which is the
  * whole point of a unique.
  */
 export const AFFIX_LIMITS: Record<Rarity, { prefix: number; suffix: number }> = {
-  common: { prefix: 1, suffix: 0 },
-  magic: { prefix: 1, suffix: 1 },
-  rare: { prefix: 2, suffix: 2 },
+  common: { prefix: 1, suffix: 1 },
+  magic: { prefix: 2, suffix: 2 },
+  rare: { prefix: 3, suffix: 3 },
   unique: { prefix: 0, suffix: 0 },
 };
 

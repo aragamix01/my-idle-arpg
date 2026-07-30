@@ -392,7 +392,7 @@ export const DUNGEON_CURRENCY_PER_CLEAR = { min: 1, max: 2 } as const;
  *
  * Priced off `goldPerKill` at the item's own level, so a stage-80 item costs
  * what a stage-80 player earns rather than what a stage-1 player does. Rarity
- * multiplies because a rare has four affixes to reroll and is worth far more
+ * multiplies because a rare has six affixes to reroll and is worth far more
  * when it lands well.
  *
  * The per-reroll escalation is the important term. Flat pricing would let a

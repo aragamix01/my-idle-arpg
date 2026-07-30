@@ -114,7 +114,7 @@ export const CURRENCIES: CurrencyDefinition[] = [
     name: 'Magic Ore',
     tier: 'basic',
     sprite: 'currency.magic_ore',
-    description: 'Upgrades a common item to magic, adding a suffix.',
+    description: 'Upgrades a common item to magic, adding a prefix and a suffix.',
     action: { kind: 'upgradeRarity', from: 'common', to: 'magic' },
   },
   {
@@ -164,7 +164,7 @@ export const CURRENCIES: CurrencyDefinition[] = [
     tier: 'spirit',
     sprite: 'currency.dune_spirit',
     description:
-      'Rare only. Removes up to one row and adds one, either side. May leave five. One spirit per item, ever.',
+      'Rare only. Removes up to one row and adds one, either side. May leave seven. One spirit per item, ever.',
     action: { kind: 'spirit', remove: 'either', add: 'either', mayRemoveNone: true },
   },
 
