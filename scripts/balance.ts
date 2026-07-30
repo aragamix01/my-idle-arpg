@@ -443,7 +443,15 @@ function maybeReroll(save: SaveState, stage: number): SaveState {
   return improveLoadout(next, stage);
 }
 
-export function runLadder(): {
+/**
+ * @param seed Account seed. Defaults to the fixed one the golden is recorded under.
+ *
+ * Parameterised because a single trajectory cannot tell a pacing CHANGE from drop
+ * luck: uniques are 2% of drops and one of them carries a large gold multiplier, so
+ * whether the agent happens to find it moves total elapsed time by a factor of two.
+ * Sweeping seeds is how that question gets answered instead of argued about.
+ */
+export function runLadder(seed = SEED): {
   rows: Row[];
   wall: number | null;
   diagnosis: string;
@@ -451,7 +459,7 @@ export function runLadder(): {
   /** Final agent state, so a probe can ask what it actually did with its loot. */
   finalSave: SaveState;
 } {
-  let save = newSave(SEED, 0);
+  let save = newSave(seed, 0);
   let elapsed = 0;
   const rows: Row[] = [];
 

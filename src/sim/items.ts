@@ -256,6 +256,14 @@ export function rollStageBossDrops(
   accountSeed: number,
   firstUid: number,
   stage: number,
+  /**
+   * Multiplier on the key chance, from equipped keyDrop effects.
+   *
+   * Passed in rather than read off the save here, because this file rolls and does
+   * not interpret loadouts - the same separation that keeps every roll a pure
+   * function of its arguments and reproducible on the server.
+   */
+  keyChanceMult = 1,
 ): CurrencyPurse {
   const rng = createRng(accountSeed).fork(firstUid * BOSS_DROP_STREAM);
   const purse: CurrencyPurse = {};
@@ -276,7 +284,10 @@ export function rollStageBossDrops(
     }
   }
 
-  if (rng.next() < KEY_DROP_CHANCE) purse['dungeon-key'] = 1;
+  // Rolled AFTER the fragments and clamped at certainty, so a key multiplier cannot
+  // shift which fragments fell: the stream position is the same whether or not a
+  // Warden's Coffer is equipped, and only this one roll's threshold moves.
+  if (rng.next() < Math.min(1, KEY_DROP_CHANCE * keyChanceMult)) purse['dungeon-key'] = 1;
   return purse;
 }
 
@@ -652,12 +663,24 @@ export function itemSprite(item: ItemInstance): string {
  * way the three become comparable: `+4.8 flat damage` and `+8% increased damage`
  * are both worth about 0.08 of a base-60 damage pool, and a naive sum of raw
  * values would rate the flat roll sixty times higher.
+ *
+ * SIGNED, and that is not a detail. This used to take absolute values, which was
+ * harmless while every downside in the game was small - and then a unique arrived
+ * that multiplies crit chance by ZERO, and `|0 - 1|` scored the worst downside
+ * available as the largest bonus any modifier could carry. The agent equipped it on
+ * purpose. A heuristic that rates a penalty as a benefit does not merely mis-rank
+ * items, it inverts them.
  */
 export function itemPower(item: ItemInstance): number {
   return itemEffects(item).reduce((power, effect) => {
     if (effect.kind === 'goldOnKill') return power + effect.multiplier;
-    if (effect.op === 'more') return power + Math.abs(effect.value - 1);
-    if (effect.op === 'increased') return power + Math.abs(effect.value);
-    return power + Math.abs(effect.value) / Math.max(BASE_STATS[effect.stat], 1e-9);
+    // A key multiplier is not power in the stat sense at all - it buys dungeon runs,
+    // not damage - so it is discounted heavily rather than counted at face value.
+    // At face value a doubled key chance was the single largest number any item
+    // could carry, above `+60% gold per kill`.
+    if (effect.kind === 'keyDrop') return power + (effect.multiplier - 1) * 0.3;
+    if (effect.op === 'more') return power + (effect.value - 1);
+    if (effect.op === 'increased') return power + effect.value;
+    return power + effect.value / Math.max(BASE_STATS[effect.stat], 1e-9);
   }, 0);
 }

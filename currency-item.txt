@@ -90,7 +90,7 @@ Stage 300 still reachable with no wall. Total elapsed shortened 4.7d -> 1.8d.
 Ladder after: stage 300 in 2.0d, clear times 18-29s, no wall.
 
 
-## [next] Phase 6a - Weapons & skills, the foundation
+## [done] Phase 6a - Weapons & skills, the foundation
 > Was "Big change gameplay", at the bottom of the file. Moved to the front of the
 > unbuilt work for the same reason Phase 5 was: it changes where damage COMES FROM,
 > and Phase 2 authors eight uniques priced against that. Authoring them first means
@@ -144,7 +144,7 @@ weapon is roughly 2.2x the base of a shallow one.
   gold track exponents down to compensate
 
 
-## [todo] Phase 6b - The magical playstyle
+## [done] Phase 6b - The magical playstyle
 > Split from 6a because mana is the only genuinely new machinery here, and it is the
 > one piece that touches the combat layer rather than the stat layer.
 
@@ -205,7 +205,27 @@ Two things to measure, not assume:
   magic's late game plays differently from its early game
 
 
-## [todo] Phase 2 - Unique items
+## [next] Phase 2 - Unique items
+> SHIPPED so far: the mechanism (tiers setting drop weight, values rolling inside an
+> authored range, Angel Flame as the only currency that touches a unique) and four of
+> the roster - Berserker's Anvil, Duelist's Visor, Warden's Coffer, Bulwark of the
+> Deep.
+>
+> STILL OPEN, and blocked on two different things:
+> - The two SLOT uniques and the "other equipped items x200-500%" one need equip
+>   slots to become a derived number instead of a constant. That is a save-shape
+>   change: loadout length, the equipItem bound, an inert-slot state in the UI, and a
+>   rule for which items may change the count at all (only ones in the first four
+>   positions, or the fixed point runs away)
+> - ART. The tile sheet has ~94 unbound tiles and almost all are floor, wall, door or
+>   fence; the free ones that read as an OBJECT at 16px are down to furniture and
+>   townsfolk. The four shipped uniques took the last four usable ones. A fifth needs
+>   a second CC0 pack as a new GridSource - the indirection exists for exactly this
+>   and no game code moves
+>
+> Also dropped deliberately: the "area is 0, attack speed x150-300%" entry, which is
+> the same trade as Berserker's Anvil with a different stat, and the dungeon-currency
+> twin of Warden's Coffer, which is the same trade as the key one.
 > Moved back behind weapons. Two of the seven uniques below grant or remove EQUIP
 > SLOTS, and 6a adds a slot - resolving that interaction once is cheaper than
 > resolving it twice. Authoring uniques that can be physical or magical is also only
@@ -318,6 +338,13 @@ four it is book-keeping.
 
 
 ## Known issues, unrelated to any phase
+- TOTAL LADDER TIME IS DOMINATED BY UNIQUE DROP LUCK, and the golden snapshot is one
+  sample of it. Swept across six account seeds after Phase 2: 5.3d, 5.5d, 6.7d,
+  14.4d, 17.9d, 18.0d. The fast runs are the ones that found Deep Delver's Idol or
+  The Whetstone; the slow ones never did. Uniques are 2% of drops split twelve ways,
+  and one of them carries `goldFind more 2.0` - so the economy hinges on a lottery.
+  Worth deciding whether that spread is the intended shape of the game before reading
+  any single "reached stage 300 in Xd" as a pacing statement
 - /api/health passes Supabase error strings straight to a public endpoint. Delete it
 - Gold passes Number.MAX_SAFE_INTEGER around stage 290 and nothing warns. The
   gentler curve after 5a-1 pushed this out but did not remove it

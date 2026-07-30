@@ -180,9 +180,9 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
       // item that works until the day someone rolls the bad end of it.
       for (const value of [effect.roll.min, effect.roll.max]) {
         const sample =
-          effect.kind === 'goldOnKill'
-            ? { kind: 'goldOnKill' as const, multiplier: value }
-            : { kind: 'statMod' as const, stat: effect.stat, op: effect.op, value };
+          effect.kind === 'statMod'
+            ? { kind: 'statMod' as const, stat: effect.stat, op: effect.op, value }
+            : { kind: effect.kind, multiplier: value };
         if (!EffectSchema.safeParse(sample).success) {
           errors.push(`${unique.id} effect ${i}: ${value} produces an invalid effect`);
         }

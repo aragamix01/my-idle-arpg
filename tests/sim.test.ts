@@ -5,7 +5,7 @@ import { report, runLadder } from '../scripts/balance';
 // The one place a test reaches into the UI layer: "two affixes must not read as
 // the same line" is a claim about rendering, and asserting it against the raw
 // numbers instead would not catch the rounding that caused it.
-import { describeRolledAffix } from '../src/ui/format';
+import { describeEffect, describeRolledAffix } from '../src/ui/format';
 import {
   AFFIXES,
   AFFIX_LIMITS,
@@ -58,6 +58,7 @@ import {
   statsDps,
   trackLayer,
   UNIQUES,
+  uniqueEffects,
   UPGRADE_TRACKS,
   upgradeCost,
   WEAPON_BASES,
@@ -518,6 +519,81 @@ describe('item rolling', () => {
       byUnique.set(item.uniqueId!, seen);
     }
     expect([...byUnique.values()].some((rolls) => rolls.size > 1)).toBe(true);
+  });
+
+  it('multiplies the key chance and leaves the fragment rolls untouched', () => {
+    // The key roll comes last in the stream on purpose, so a Warden's Coffer changes
+    // how often a key falls and nothing else about the clear. If it moved the stream
+    // position, equipping it would silently reroll which fragments dropped too.
+    const sample = (mult: number) => {
+      let keys = 0;
+      const fragments: string[] = [];
+      for (let uid = 1; uid <= 2000; uid++) {
+        const purse = rollStageBossDrops(7, uid, 60, mult);
+        keys += purse['dungeon-key'] ?? 0;
+        fragments.push(
+          Object.entries(purse)
+            .filter(([id]) => id !== 'dungeon-key')
+            .map(([id, n]) => `${id}:${n}`)
+            .join(','),
+        );
+      }
+      return { keys, fragments: fragments.join('|') };
+    };
+
+    const plain = sample(1);
+    const doubled = sample(2);
+    expect(doubled.fragments).toBe(plain.fragments);
+    expect(doubled.keys / plain.keys).toBeGreaterThan(1.6);
+    expect(doubled.keys / plain.keys).toBeLessThan(2.4);
+
+    // Clamped at certainty rather than running past it.
+    expect(sample(50).keys).toBe(2000);
+  });
+
+  it('renders every unique effect as a readable line', () => {
+    // Effect is a discriminated union, so a new kind is a type error everywhere it is
+    // consumed - except in a `.map` over strings, where a missing branch renders as
+    // "undefined" on the item and nothing complains. Both ends of every range, since
+    // a sign flip only shows at one of them.
+    for (const unique of UNIQUES) {
+      for (const bound of ['min', 'max'] as const) {
+        const rolls = unique.effects.map((e) => e.roll[bound]);
+        for (const effect of uniqueEffects(unique, rolls)) {
+          const line = describeEffect(effect);
+          expect(line, `${unique.id}`).toBeTruthy();
+          expect(line, `${unique.id}: ${line}`).not.toMatch(/undefined|NaN/);
+        }
+      }
+    }
+  });
+
+  it('carries a defensive unique, not only offence and economy', () => {
+    // A unique tier whose best items are all offensive breaks the offence/defence
+    // symmetry invariant structurally - the ceiling on one side rises and the other
+    // cannot follow. The affix pool broke exactly this way twice, both times because
+    // every entry on one side happened to be offensive. Asserted on OUTCOME rather
+    // than on a stat name, so a defensive unique built out of any stat counts.
+    const base: SaveState = { ...newSave(2, T0), bestStage: 45, currentStage: 45 };
+    const ctx = { stage: 45, isBoss: true, enemyHpFraction: 1 };
+    const baseline = effectiveHp(deriveStats(base, ctx));
+
+    const best = UNIQUES.map((unique) => {
+      const item = {
+        uid: 'test',
+        baseId: unique.id,
+        rarity: 'unique' as const,
+        itemLevel: 45,
+        affixes: [],
+        rerolls: 0,
+        crafts: 0,
+        uniqueId: unique.id,
+      };
+      const equipped: SaveState = { ...base, items: [item], loadout: [item.uid, null, null, null] };
+      return effectiveHp(deriveStats(equipped, ctx)) / baseline;
+    }).reduce((a, b) => Math.max(a, b), 0);
+
+    expect(best, 'no unique raises effective HP').toBeGreaterThan(1.3);
   });
 
   it('drops uniques at the frequency their tier declares', () => {
@@ -1955,11 +2031,23 @@ describe('clear time stays watchable', () => {
     // percent of its threshold, and duly tripped on a change that moved the
     // late mean by 1%.
     //
-    // Measured instead: clear times fall steeply at first and then flatten
-    // toward the band floor, and the shape of that flattening is what
-    // distinguishes a healthy curve from a runaway. Adjacent windows -
-    // 32.8, 23.0, 19.3, 16.1, 14.7, 13.5 - give ratios of 0.84, 0.84, 0.91,
-    // 0.91: decelerating and converging. A runaway keeps the ratio low.
+    // It then compared ADJACENT fifty-stage windows and required each to hold 80% of
+    // the one before. That instrument died when uniques started rolling their values.
+    //
+    // Total elapsed time and the shape of the clear-time curve are both dominated by
+    // unique drop luck - uniques are 2% of drops and one of them carries a large gold
+    // multiplier. Swept across six account seeds, adjacent-window ratios came out
+    // 0.72, 0.77, 0.80, 0.82, 0.84, 0.95, 1.18, 1.20, 1.32, 1.46, 1.78 - and every
+    // one of those runs reached stage 300. A floor of 0.8 on a quantity that swings
+    // between 0.72 and 1.78 in healthy runs is measuring noise, and the failure it
+    // produced said nothing about whether offence had outrun defence.
+    //
+    // Measured over the WHOLE tail instead, which is the claim that actually matters:
+    // a runaway means clear times trending toward zero across the ladder, not one
+    // window dipping below its neighbour. Last window against the first post-bootstrap
+    // window, same six seeds: 1.03, 1.07, 1.22, 1.38, 1.48, 1.88. Every healthy run
+    // ENDS SLOWER than it started, so a floor of 0.85 has real margin and still fails
+    // a genuine runaway, which halves clear times rather than nudging them.
     const mean = (from: number, to: number) =>
       rows.slice(from, to).reduce((sum, r) => sum + r.clearSeconds, 0) / (to - from);
 
@@ -1971,22 +2059,11 @@ describe('clear time stays watchable', () => {
     // bootstrap-shaped for the same reason a fresh account is - power is arriving
     // from a source that was not there before - and it says nothing about whether
     // the curve converges.
-    //
-    // Measured either way: from stage 50 the ratios are 0.77, 0.99, 1.06; from 100
-    // they are 0.99, 1.06, 1.03. The 0.77 is the handover, and everything after it
-    // is flat to rising, which is convergence and the opposite of a runaway.
-    const windows = [100, 150, 200, 250, 300];
-    const ratios: number[] = [];
-    for (let i = 1; i < windows.length - 1; i++) {
-      const previous = mean(windows[i - 1], windows[i]);
-      const next = mean(windows[i], windows[i + 1]);
-      ratios.push(next / previous);
-      expect(next, `stages ${windows[i] + 1}-${windows[i + 1]} against the window before`)
-        .toBeGreaterThan(previous * 0.8);
-    }
+    const early = mean(100, 150);
+    const late = mean(250, 300);
 
-    // And the tail must be flattening, not still falling at the earlier rate.
-    expect(ratios[ratios.length - 1]).toBeGreaterThan(0.85);
+    expect(late, `stages 251-300 (${late.toFixed(1)}s) against 101-150 (${early.toFixed(1)}s)`)
+      .toBeGreaterThan(early * 0.85);
   });
 });
 

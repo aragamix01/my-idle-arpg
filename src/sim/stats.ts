@@ -216,6 +216,10 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
   stats.maxHp = Math.max(1, stats.maxHp);
   stats.toughness = Math.max(0.1, stats.toughness);
   stats.resourceRegen = Math.max(0, stats.resourceRegen);
+  // Gold find had no floor until an item existed that reduces it. Two Warden's
+  // Coffers take it negative, and a negative multiplier does not mean "earns less" -
+  // it means the clear pays out negative gold.
+  stats.goldFind = Math.max(0, stats.goldFind);
 
   // Attack speed is capped by what the resource can sustain, and the CAP IS WRITTEN
   // INTO THE STAT rather than applied later in the damage formula.
@@ -263,6 +267,19 @@ export function isResourceBound(stats: Stats, skill: Skill): boolean {
 /** Effective HP: what the incoming damage pool is actually measured against. */
 export function effectiveHp(stats: Stats): number {
   return stats.maxHp * stats.toughness;
+}
+
+/**
+ * Multiplier on the stage boss's key chance, from equipped items.
+ *
+ * A PRODUCT, unlike goldOnKill's sum. Two copies of a doubling effect should double
+ * twice - and the chance is clamped at certainty where it is applied, so compounding
+ * has a hard ceiling rather than an unbounded one.
+ */
+export function keyDropMultiplier(save: SaveState, ctx: EffectContext): number {
+  return equippedEffects(save)
+    .filter((e) => e.kind === 'keyDrop' && conditionHolds(e, ctx))
+    .reduce((mult, e) => mult * (e.kind === 'keyDrop' ? e.multiplier : 1), 1);
 }
 
 /** Extra gold per kill, as a fraction of the stage's base gold value. */

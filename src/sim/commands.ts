@@ -41,7 +41,7 @@ import {
   rollItem,
   rollStageBossDrops,
 } from './items';
-import { findItem } from './stats';
+import { findItem, keyDropMultiplier } from './stats';
 import {
   ITEM_SLOTS,
   INVENTORY_CAP,
@@ -223,7 +223,14 @@ export function applyCommand(
 
         // Boss drops are rolled off the same clear-seeded stream, before the
         // item loop advances the uid counter past it.
-        const bossDrops = rollStageBossDrops(next.seed, firstUid, stage);
+        const bossDrops = rollStageBossDrops(
+          next.seed,
+          firstUid,
+          stage,
+          // Evaluated against the boss, since that is what drops the key - a
+          // conditional key effect gated on `isBoss` has to see the fight it names.
+          keyDropMultiplier(next, { stage, isBoss: true, enemyHpFraction: 1 }),
+        );
         next.currency = credit(next.currency, bossDrops);
         for (const [id, count] of Object.entries(bossDrops) as [CurrencyId, number][]) {
           events.push({

@@ -983,6 +983,112 @@ exports[`content registry > matches its snapshot 1`] = `
       "sprite": "item.deep_delvers_idol",
       "tier": "ancient",
     },
+    {
+      "dropStage": 15,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "more",
+          "roll": {
+            "max": 0,
+            "min": 0,
+          },
+          "stat": "critChance",
+        },
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": 1.2,
+            "min": 0.7,
+          },
+          "stat": "damage",
+        },
+      ],
+      "id": "berserkers-anvil",
+      "name": "Berserker's Anvil",
+      "sprite": "item.berserkers_anvil",
+      "tier": "greater",
+    },
+    {
+      "dropStage": 18,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": 1.4,
+            "min": 0.6,
+          },
+          "stat": "critMult",
+        },
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": -0.3,
+            "min": -0.5,
+          },
+          "stat": "critChance",
+        },
+      ],
+      "id": "duelists-visor",
+      "name": "Duelist's Visor",
+      "sprite": "item.duelists_visor",
+      "tier": "greater",
+    },
+    {
+      "dropStage": 22,
+      "effects": [
+        {
+          "kind": "keyDrop",
+          "roll": {
+            "max": 2.4,
+            "min": 1.6,
+          },
+        },
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": -0.2,
+            "min": -0.4,
+          },
+          "stat": "goldFind",
+        },
+      ],
+      "id": "wardens-coffer",
+      "name": "Warden's Coffer",
+      "sprite": "item.wardens_coffer",
+      "tier": "greater",
+    },
+    {
+      "dropStage": 30,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "more",
+          "roll": {
+            "max": 1.9,
+            "min": 1.4,
+          },
+          "stat": "toughness",
+        },
+        {
+          "kind": "statMod",
+          "op": "more",
+          "roll": {
+            "max": 0.75,
+            "min": 0.75,
+          },
+          "stat": "damage",
+        },
+      ],
+      "id": "bulwark-of-the-deep",
+      "name": "Bulwark of the Deep",
+      "sprite": "item.bulwark_of_the_deep",
+      "tier": "ancient",
+    },
   ],
 }
 `;

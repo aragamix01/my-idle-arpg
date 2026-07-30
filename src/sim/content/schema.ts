@@ -76,6 +76,23 @@ export const EffectSchema = z.discriminatedUnion('kind', [
       when: ConditionSchema.optional(),
     })
     .strict(),
+  /**
+   * Multiplies the chance a stage boss drops a dungeon key.
+   *
+   * A third kind rather than a stat, because a key is not part of any stat block -
+   * it is a drop roll, made once per clear, outside the loadout's stat maths
+   * entirely. Modelling it as a stat would mean a number on the character sheet that
+   * nothing on the character sheet uses.
+   *
+   * The chance is clamped at certainty, so stacking these has a real ceiling.
+   */
+  z
+    .object({
+      kind: z.literal('keyDrop'),
+      multiplier: z.number(),
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
 ]);
 
 export type Effect = z.infer<typeof EffectSchema>;
@@ -384,6 +401,13 @@ export const UniqueEffectSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('goldOnKill'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('keyDrop'),
       roll: RollRangeSchema,
       when: ConditionSchema.optional(),
     })

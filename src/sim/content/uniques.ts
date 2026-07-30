@@ -134,6 +134,96 @@ export const UNIQUES = [
       { kind: 'goldOnKill', roll: { min: 0.35, max: 0.65 }, when: { isBoss: true } },
     ],
   },
+  {
+    /**
+     * Crit, traded away entirely, for the largest raw multiplier in the game.
+     *
+     * `more 0` on crit chance rather than a large negative: a subtraction leaves a
+     * build free to buy the loss back, and then this is simply a damage unique with
+     * a tax. Zero is zero - the crit track, every crit affix and the skill's own base
+     * crit all stop mattering the moment it is equipped, and that is a real decision
+     * about what the rest of the loadout is for.
+     *
+     * The payoff is `increased`, and the first cut had it as `more 1.7-2.6`. Four
+     * copies of that is 45x damage from an uncrafted loadout, which the stacked-
+     * uniques test caught immediately - `more` compounds, so any large one is a
+     * stacking problem rather than an item. `increased` lands in the sum every
+     * damage affix lands in, so a second copy is worth less than the first and the
+     * ceiling is the same one the affix pool already lives under.
+     */
+    id: 'berserkers-anvil',
+    name: "Berserker's Anvil",
+    sprite: 'item.berserkers_anvil',
+    dropStage: 15,
+    tier: 'greater',
+    effects: [
+      { kind: 'statMod', stat: 'critChance', op: 'more', roll: { min: 0, max: 0 } },
+      { kind: 'statMod', stat: 'damage', op: 'increased', roll: { min: 0.7, max: 1.2 } },
+    ],
+  },
+  {
+    /**
+     * The other side of the same question: crit as the whole build.
+     *
+     * `increased` on both halves, not `more`. Crit multiplier already multiplies into
+     * DPS through critFactor, so a `more` on it compounds twice over - the rule the
+     * registry enforces on rollable affixes and holds authored content to as well.
+     */
+    id: 'duelists-visor',
+    name: "Duelist's Visor",
+    sprite: 'item.duelists_visor',
+    dropStage: 18,
+    tier: 'greater',
+    effects: [
+      { kind: 'statMod', stat: 'critMult', op: 'increased', roll: { min: 0.6, max: 1.4 } },
+      { kind: 'statMod', stat: 'critChance', op: 'increased', roll: { min: -0.5, max: -0.3 } },
+    ],
+  },
+  {
+    /**
+     * Gold traded for keys - the first unique that pays in something other than
+     * numbers on the character sheet.
+     *
+     * Keys gate dungeons, dungeons are the only source of finished currency, and
+     * currency is the only route to a crafted item. So this buys crafting throughput
+     * with farm rate, which is a different axis from every other unique in the list.
+     */
+    id: 'wardens-coffer',
+    name: "Warden's Coffer",
+    sprite: 'item.wardens_coffer',
+    dropStage: 22,
+    tier: 'greater',
+    effects: [
+      { kind: 'keyDrop', roll: { min: 1.6, max: 2.4 } },
+      // The roadmap asked for -30% to -60% gold. That is priced against a game where
+      // gold is one currency among several; here it is the engine every upgrade
+      // track runs on, so halving it costs more than doubled keys can pay back and
+      // the item would be a trap rather than a trade.
+      { kind: 'statMod', stat: 'goldFind', op: 'increased', roll: { min: -0.4, max: -0.2 } },
+    ],
+  },
+  {
+    /**
+     * The defensive chase item, and the roster fails structurally without one.
+     *
+     * Every other unique is offence or economy. A tier whose best items are all
+     * offensive breaks the offence/defence symmetry invariant the same way the affix
+     * pool broke it twice - the ceiling on one side rises and the other cannot
+     * follow, and the ladder resolves that by killing the player.
+     *
+     * The downside is a constant: this is the item you equip when you are dying, and
+     * a roll that made it better on both halves would remove the decision.
+     */
+    id: 'bulwark-of-the-deep',
+    name: 'Bulwark of the Deep',
+    sprite: 'item.bulwark_of_the_deep',
+    dropStage: 30,
+    tier: 'ancient',
+    effects: [
+      { kind: 'statMod', stat: 'toughness', op: 'more', roll: { min: 1.4, max: 1.9 } },
+      { kind: 'statMod', stat: 'damage', op: 'more', roll: { min: 0.75, max: 0.75 } },
+    ],
+  },
 ] as const satisfies readonly Unique[];
 
 export type UniqueId = (typeof UNIQUES)[number]['id'];
@@ -215,15 +305,10 @@ export function rollUniqueValues(unique: Unique, rng: Rng): number[] {
 export function uniqueEffects(unique: Unique, rolls: number[] | undefined): Effect[] {
   return unique.effects.map((effect, i) => {
     const value = rolls?.[i] ?? (effect.roll.min + effect.roll.max) / 2;
-    return effect.kind === 'goldOnKill'
-      ? { kind: 'goldOnKill', multiplier: value, ...(effect.when ? { when: effect.when } : {}) }
-      : {
-          kind: 'statMod',
-          stat: effect.stat,
-          op: effect.op,
-          value,
-          ...(effect.when ? { when: effect.when } : {}),
-        };
+    const when = effect.when ? { when: effect.when } : {};
+    if (effect.kind === 'goldOnKill') return { kind: 'goldOnKill', multiplier: value, ...when };
+    if (effect.kind === 'keyDrop') return { kind: 'keyDrop', multiplier: value, ...when };
+    return { kind: 'statMod', stat: effect.stat, op: effect.op, value, ...when };
   });
 }
 

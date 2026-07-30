@@ -111,6 +111,13 @@ export function describeEffect(effect: Effect): string {
     return `+${(effect.multiplier * 100).toFixed(0)}% gold per kill${suffix}`;
   }
 
+  // Stated as a multiplier on the chance, not as a percentage point: the base chance
+  // is not shown anywhere, so "+20% key chance" would be unreadable while "x2.0" says
+  // exactly what it does to whatever the base happens to be.
+  if (effect.kind === 'keyDrop') {
+    return `x${effect.multiplier.toFixed(2)} dungeon key drop chance${suffix}`;
+  }
+
   const { label } = STAT_LABELS[effect.stat];
 
   // The three layers must be visibly different, because they are priced
