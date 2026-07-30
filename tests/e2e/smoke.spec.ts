@@ -358,6 +358,52 @@ test('the inventory grid selects, filters and sorts', async ({ page }) => {
   await expect(panel.getByText('NaN')).toHaveCount(0);
 });
 
+test('a weapon says what its skill costs to use', async ({ page }) => {
+  await page.goto('/');
+
+  // Clear until a weapon drops rather than a fixed number of times. Weapons take a
+  // share of drops, not a reserved slot, so "clear twice" is a coin flip - the same
+  // assumption that made two other tests pass or fail on the newest tile's base.
+  const baseId = await page.evaluate(async (weaponIds: string[]) => {
+    const post = (body: unknown) =>
+      fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+
+    for (let i = 0; i < 40; i++) {
+      const result = await post({ type: 'attemptStage' });
+      const items: { baseId: string }[] = result?.state?.items ?? [];
+      const weapon = items.find((item) => weaponIds.includes(item.baseId));
+      if (weapon) return weapon.baseId;
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
+        await post({ type: 'buyUpgrade', key, count: 'max' });
+      }
+    }
+    return null;
+  }, WEAPON_BASES.map((b) => b.id));
+  expect(baseId, 'no weapon dropped in 40 clears').not.toBeNull();
+  await page.reload();
+
+  const baseName = WEAPON_BASES.find((b) => b.id === baseId)!.name;
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  await panel.locator(`[aria-label="Item grid"] button[title*="${baseName}"]`).first().click();
+
+  // The cost, and the regen it demands. Neither alone is actionable: deriveStats
+  // caps attack speed at regen/cost silently, so a bare "3.0" leaves the cap
+  // untraceable and a bare regen figure cannot say whether it is enough.
+  const detail = panel.getByRole('complementary');
+  await expect(detail).toContainText(/(Stamina|Mana) \d+\.\d\/use/);
+  await expect(detail).toContainText(/needs \d+\.\d\d\/s regen/);
+  // The skill's own bases, which are the half of a weapon's worth that is not in
+  // its affix list.
+  await expect(detail).toContainText(/base damage · \d+\.\d\d\/s · \d+ targets?/);
+});
+
 test('the craft modal explains what it refuses, and applies what it allows', async ({ page }) => {
   await page.goto('/');
 

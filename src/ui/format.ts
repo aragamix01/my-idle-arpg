@@ -10,10 +10,12 @@ import {
   affixEffect,
   displayTier,
   getAffix,
+  SKILL_LEVEL_GAIN,
   type CurrencyTier,
   type Effect,
   type Rarity,
   type RolledAffix,
+  type Skill,
   type StatKey,
   type Stats,
 } from '@/sim';
@@ -147,6 +149,35 @@ export function describeEffect(effect: Effect): string {
   const asPercent = effect.stat === 'critChance' || effect.stat === 'critMult';
   const shown = asPercent ? percent(effect.value) : String(Number(effect.value.toFixed(2)));
   return `${sign}${shown} ${label}${suffix}`;
+}
+
+/** Stamina or Mana. Which word is right depends on the weapon in your hand. */
+export function resourceName(skill: Skill): string {
+  return skill.kind === 'magical' ? 'Mana' : 'Stamina';
+}
+
+/**
+ * A skill as the player reads it before equipping the weapon that grants it.
+ *
+ * `regenToSustain` is the number that carries this: a cost of 3.0 means nothing on
+ * its own, and only becomes actionable stated as the regen needed to use the skill
+ * at its own base speed. That is the whole answer to "why does my Staff swing
+ * slower than my Axe" - deriveStats caps attackSpeed at regen/cost silently, so
+ * without this line the cap is a number the player cannot trace to a cause.
+ *
+ * Damage is quoted at the weapon's own item level because that is what equipping it
+ * would give. The other three bases are the skill's identity and do not scale.
+ */
+export function skillSummary(skill: Skill, itemLevel: number) {
+  return {
+    resource: resourceName(skill),
+    damage: compact(skill.baseDamage * Math.pow(SKILL_LEVEL_GAIN, itemLevel)),
+    speed: `${skill.baseSpeed.toFixed(2)}/s`,
+    area: `${skill.baseArea} target${skill.baseArea === 1 ? '' : 's'}`,
+    crit: percent(skill.baseCritChance),
+    cost: skill.resourceCost.toFixed(1),
+    regenToSustain: skill.baseSpeed * skill.resourceCost,
+  };
 }
 
 /** Which half of the item a line belongs to. Implicits belong to neither. */

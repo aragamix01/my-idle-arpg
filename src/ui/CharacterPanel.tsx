@@ -33,11 +33,12 @@ import {
   type ItemInstance,
   type Rarity,
   type SaveState,
+  type Skill,
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
 import { CraftModal } from './CraftModal';
 import { CurrencyStash } from './CurrencyStash';
-import { compact, RARITY_STYLE, statEntries } from './format';
+import { compact, RARITY_STYLE, resourceName, skillSummary, statEntries } from './format';
 import { ItemMods } from './ItemMods';
 
 type Tab = 'character' | 'inventory' | 'currency';
@@ -335,7 +336,7 @@ function InventoryTab({
     (weaponItem && baseSkillId(weaponItem.baseId)) || UNARMED.id,
   )!;
   const weaponSkillLevel = weaponItem ? weaponItem.itemLevel : 0;
-  const resourceName = equippedSkill.kind === 'magical' ? 'Mana' : 'Stamina';
+  const resourceLabel = resourceName(equippedSkill);
   const resourceBound = isResourceBound(hud.stats, equippedSkill);
 
   const equip = (uid: string) => {
@@ -439,7 +440,12 @@ function InventoryTab({
             <span className="text-[10px] text-neutral-500">
               {equippedSkill.name}
               {weaponItem ? ` · skill level ${weaponSkillLevel}` : ' · find a weapon'}
-              {` · ${resourceName} ${hud.stats.resourceRegen.toFixed(2)}/s`}
+              {/*
+                Cost and regen together, never one alone. The cap is regen/cost, so a
+                player shown only their regen cannot tell whether 3.40/s is generous or
+                starving - that depends entirely on what the skill in their hand charges.
+              */}
+              {` · ${resourceLabel} ${equippedSkill.resourceCost.toFixed(1)}/use, regen ${hud.stats.resourceRegen.toFixed(2)}/s`}
             </span>
             {/*
               Named here and nowhere else, because which resource it is depends on the
@@ -449,7 +455,7 @@ function InventoryTab({
             */}
             {resourceBound && (
               <span className="text-[10px] text-amber-400">
-                {resourceName} is capping your attack speed — buy Recovery
+                {resourceLabel} is capping your attack speed — buy Recovery
               </span>
             )}
           </span>
@@ -630,6 +636,9 @@ function InventoryTab({
 
         <ItemDetail
           item={selectedItem}
+          // The pane compares a weapon's demand against what you can actually pay,
+          // which is the only form in which a cost tells a player anything.
+          resourceRegen={hud.stats.resourceRegen}
           equipped={selectedItem ? isEquipped(selectedItem.uid) : false}
           slotsFull={!hud.loadout.includes(null)}
           busy={busy}
@@ -909,6 +918,7 @@ function ItemGrid({
 
 function ItemDetail({
   item,
+  resourceRegen,
   equipped,
   slotsFull,
   busy,
@@ -917,6 +927,7 @@ function ItemDetail({
   onDissemble,
 }: {
   item: ItemInstance | undefined;
+  resourceRegen: number;
   equipped: boolean;
   slotsFull: boolean;
   busy: boolean;
@@ -934,6 +945,8 @@ function ItemDetail({
 
   const style = RARITY_STYLE[item.rarity];
   const isUnique = item.rarity === 'unique';
+  const skillId = baseSkillId(item.baseId);
+  const skill = skillId ? getSkill(skillId) : undefined;
 
   return (
     <aside className={`flex flex-col gap-3 rounded border ${style.border} bg-neutral-900/70 p-3`}>
@@ -947,6 +960,8 @@ function ItemDetail({
           </p>
         </div>
       </div>
+
+      {skill && <WeaponSkill skill={skill} itemLevel={item.itemLevel} regen={resourceRegen} />}
 
       <ItemMods item={item} />
 
@@ -984,6 +999,46 @@ function ItemDetail({
         </button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * What a weapon's skill costs to use, above its modifier list.
+ *
+ * A weapon is the only item whose worth is not in its affixes, and the cost line is
+ * the part that cannot be inferred from anything else on screen: attack speed is
+ * capped at regen/cost inside deriveStats, so a Staff swings slower than an Axe for
+ * a reason that appears nowhere on either item. Quoting the cost alone would not fix
+ * that - 3.0 is only meaningful next to the regen it demands and the regen you have.
+ */
+function WeaponSkill({
+  skill,
+  itemLevel,
+  regen,
+}: {
+  skill: Skill;
+  itemLevel: number;
+  regen: number;
+}) {
+  const summary = skillSummary(skill, itemLevel);
+  const sustained = Math.min(skill.baseSpeed, regen / skill.resourceCost);
+  const short = sustained < skill.baseSpeed - 1e-9;
+
+  return (
+    <div className="rounded border border-neutral-800 bg-neutral-950/60 p-2 text-[11px]">
+      <p className="text-neutral-200">
+        {skill.name} <span className="text-neutral-500">· {skill.kind}</span>
+      </p>
+      {/* "base" is load-bearing: these are what the layers build on, not what the
+          character sheet will read once gear and upgrades are applied. */}
+      <p className="text-neutral-400">
+        {summary.damage} base damage · {summary.speed} · {summary.area} · {summary.crit} crit
+      </p>
+      <p className={short ? 'text-amber-400' : 'text-neutral-400'}>
+        {summary.resource} {summary.cost}/use · needs {summary.regenToSustain.toFixed(2)}/s regen
+        {short && `, you regen ${regen.toFixed(2)}/s — ${sustained.toFixed(2)}/s`}
+      </p>
+    </div>
   );
 }
 
