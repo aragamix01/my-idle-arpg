@@ -30,6 +30,29 @@ export const STAT_KEYS = [
 export type StatKey = (typeof STAT_KEYS)[number];
 export type Stats = Record<StatKey, number>;
 
+/**
+ * Stats with zero upgrades and no items.
+ *
+ * Lives here rather than in stats.ts because items.ts needs it to normalise flat
+ * modifiers against, and stats.ts already imports items.ts. Plain data with no
+ * dependencies, so this is its natural home anyway.
+ *
+ * `damage` is 60 rather than 6 purely so flat damage rolls read as `+4.8` instead
+ * of `+0.48`. It is a pure rescale: `TUNING.enemyHpBase` moved by the same factor,
+ * so every clear time, every gold figure and the whole ladder are unchanged.
+ */
+export const BASE_STATS: Stats = {
+  damage: 60,
+  attackSpeed: 1.5,
+  area: 2,
+  critChance: 0.05,
+  critMult: 2.0,
+  maxHp: 100,
+  /** A multiplier on effective HP, so its base is 1 and it has no flat layer. */
+  toughness: 1.0,
+  goldFind: 1.0,
+};
+
 export const UPGRADE_KEYS = [
   'damage',
   'attackSpeed',

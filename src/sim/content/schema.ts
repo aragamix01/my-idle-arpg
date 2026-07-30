@@ -28,13 +28,42 @@ export const ConditionSchema = z
   })
   .strict();
 
+/**
+ * Which of the three layers a modifier contributes to.
+ *
+ * The layer is the whole pricing model, not a formatting detail:
+ *
+ *   final = (base + Σ flat) × (1 + Σ increased) × Π more
+ *
+ * `flat` and `increased` both have **diminishing** marginal value - the tenth
+ * `+20% increased` is worth far less than the first, because it lands in a sum
+ * that is already large. Only `more` compounds.
+ *
+ * That is the fix for the problem this replaced. Every item modifier used to be
+ * a multiplier, so N modifiers multiplied into a product and modifier N+1 was
+ * worth *more* than modifier N. The budget could only be held by making every
+ * value tiny - base implicits were squeezed down to 1.038 - and every new row of
+ * content arrived into that squeeze. Now only the rare layer compounds, so the
+ * common layers can carry readable numbers and adding a row is affordable.
+ *
+ * A consequence worth stating: for stats whose base is already a multiplier
+ * (toughness, goldFind), `flat` and `increased` are the same operation. Those
+ * stats only ever carry `increased` and `more`.
+ */
+export const ModLayerSchema = z.enum(['flat', 'increased', 'more']);
+export type ModLayer = z.infer<typeof ModLayerSchema>;
+
 export const EffectSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('statMod'),
       stat: StatKeySchema,
-      /** `add` applies before all `mul`. Order within a phase does not matter. */
-      op: z.enum(['add', 'mul']),
+      /**
+       * Which layer this lands in. Layers resolve in a fixed order, so ordering
+       * within a layer never changes the result - the property that makes two
+       * loadouts comparable.
+       */
+      op: ModLayerSchema,
       value: z.number(),
       when: ConditionSchema.optional(),
     })
@@ -89,13 +118,19 @@ export type AffixKind = 'prefix' | 'suffix';
  * that can be validated and diffed; a factory closure is neither.
  */
 export type AffixEffectTemplate =
-  | { kind: 'statMod'; stat: StatKey; op: 'add' | 'mul' }
+  | { kind: 'statMod'; stat: StatKey; op: ModLayer }
   | { kind: 'goldOnKill' };
 
 export interface AffixTier {
   /** Lowest item level that may roll this tier. */
   minStage: number;
-  /** The magnitude. For `mul` templates this is the multiplier, e.g. 1.2. */
+  /**
+   * The magnitude, read according to the template's layer.
+   *
+   * `flat` - added to the stat's base, in the stat's own units.
+   * `increased` - a fraction, so 0.08 means +8%.
+   * `more` - the multiplier itself, so 1.2 means 20% more.
+   */
   value: number;
 }
 

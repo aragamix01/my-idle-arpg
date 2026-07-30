@@ -13,6 +13,7 @@ import {
   applyCommand,
   BASES,
   BASE_AFFIXES,
+  BASE_STATS,
   BULK_PURCHASE_LIMIT,
   bulkUpgradeCost,
   CLEAR_TIME_BAND_SECONDS,
@@ -33,7 +34,10 @@ import {
   getAffix,
   getBaseAffix,
   getCurrency,
+  IMPLICIT_AFFIXES,
   KEY_DROP_CHANCE,
+  PREFIXES,
+  SUFFIXES,
   sideExponents,
   newSave,
   OFFLINE_CAP_SECONDS,
@@ -48,11 +52,13 @@ import {
   rollDungeonItem,
   rollStageBossDrops,
   statsDps,
+  trackLayer,
   UNIQUES,
   UPGRADE_TRACKS,
   upgradeCost,
   validateRegistry,
   type Command,
+  type Effect,
   type CurrencyId,
   type SaveState,
 } from '../src/sim';
@@ -1144,7 +1150,7 @@ describe('power budget', () => {
   };
 
   /** Four rares on the same base, every affix and implicit at its best tier. */
-  const loadoutOf = (baseId: string, prefixes: string[], suffixes: string[]): SaveState => {
+  const loadoutOf = (baseId: string, affixIds: string[]): SaveState => {
     const implicit = BASE_AFFIXES[baseId];
     const items = [0, 1, 2, 3].map((i) => ({
       uid: `best-${i}`,
@@ -1153,21 +1159,63 @@ describe('power budget', () => {
       itemLevel: 100,
       rerolls: 0,
       crafts: 0,
-      affixes: [...prefixes, ...suffixes].map(topRoll),
+      affixes: affixIds.map(topRoll),
       baseAffix: topRoll(implicit.id),
     }));
     return { ...base, items, loadout: items.map((i) => i.uid) };
   };
 
-  // The best offensive and defensive builds a player could assemble from drops
-  // alone: best affixes, best tiers, and the base whose implicit matches.
-  const offensive = () => loadoutOf('whetstone', ['brutal', 'sweeping'], ['of-haste', 'of-precision']);
-  const defensive = () => loadoutOf('charm', ['vital', 'armoured'], ['of-ruin', 'of-avarice']);
-
   const dpsRatio = (save: SaveState) =>
     statsDps(deriveStats(save, CTX)) / statsDps(deriveStats(base, CTX));
   const ehpRatio = (save: SaveState) =>
     effectiveHp(deriveStats(save, CTX)) / effectiveHp(deriveStats(base, CTX));
+
+  const combos = <T,>(xs: T[], k: number): T[][] =>
+    k === 0
+      ? [[]]
+      : xs.flatMap((x, i) => combos(xs.slice(i + 1), k - 1).map((rest) => [x, ...rest]));
+
+  /**
+   * The strongest loadout actually assemblable, found by searching the pool.
+   *
+   * These lists used to be hand-written, and they went stale the moment the pool
+   * changed: the offensive pick paired Brutal with Sweeping, so once a flat
+   * damage prefix existed it was measuring the second-best build while claiming
+   * to measure the ceiling - and the ceiling test passed for the wrong reason.
+   * A search cannot go stale.
+   *
+   * `extraRow` is the fifth row only a dune spirit grants, taken on whichever
+   * half is worth more. Never as a duplicate: rollAffixes picks distinct affixes
+   * within an item, so a loadout carrying two Honeds is not reachable and must
+   * not be measured.
+   */
+  const bestLoadout = (metric: (s: SaveState) => number, extraRow: boolean) => {
+    const shapes: [number, number][] = extraRow
+      ? [
+          [3, 2],
+          [2, 3],
+        ]
+      : [[2, 2]];
+    let best = { value: 0, save: base, label: '' };
+    for (const baseId of Object.keys(BASE_AFFIXES)) {
+      for (const [np, ns] of shapes) {
+        for (const ps of combos(PREFIXES.map((a) => a.id), np)) {
+          for (const ss of combos(SUFFIXES.map((a) => a.id), ns)) {
+            const ids = [...ps, ...ss];
+            const save = loadoutOf(baseId, ids);
+            const value = metric(save);
+            if (value > best.value) best = { value, save, label: `${baseId}: ${ids.join('+')}` };
+          }
+        }
+      }
+    }
+    return best;
+  };
+
+  const offence = bestLoadout(dpsRatio, false);
+  const defence = bestLoadout(ehpRatio, false);
+  const craftedOffence = bestLoadout(dpsRatio, true);
+  const craftedDefence = bestLoadout(ehpRatio, true);
 
   it('a best-in-slot loadout from drops alone is worth roughly 5.7x total power', () => {
     // Measured as offence x defence, because that is what "total power" means
@@ -1176,8 +1224,8 @@ describe('power budget', () => {
     // This is the DROP ceiling. The agreed overall ceiling is ~8x, and the
     // headroom between the two is what the extra affix row spirits grant is
     // allowed to occupy - it is not spare budget for bigger affixes.
-    const total = dpsRatio(offensive()) * ehpRatio(defensive());
-    expect(total).toBeGreaterThan(5.0);
+    const total = offence.value * defence.value;
+    expect(total, `${offence.label} x ${defence.label}`).toBeGreaterThan(5.0);
     expect(total).toBeLessThan(6.5);
   });
 
@@ -1185,45 +1233,23 @@ describe('power budget', () => {
     // Clear time holds steady only while offence and defence grow together.
     // The first cut of the affix pool loaded everything onto DPS and the
     // harness caught it: stage 222 resolved in 11.9s against a 20s floor.
-    expect(dpsRatio(offensive())).toBeLessThan(2.6);
+    expect(offence.value).toBeLessThan(2.6);
   });
 
   it('grows offence and defence at matching rates', () => {
     // The absolute ceiling above cannot tell 2.4/2.4 from 3.4/1.7 - both are
     // 5.7x. This is the check that actually encodes the invariant, and it is
     // the one to read first when clear times move.
-    const offence = dpsRatio(offensive());
-    const defence = ehpRatio(defensive());
-    expect(Math.abs(Math.log(offence / defence))).toBeLessThan(0.15);
+    expect(Math.abs(Math.log(offence.value / defence.value))).toBeLessThan(0.15);
   });
-
-  /**
-   * Every item carries a dune spirit's fifth row, filled with `extra`.
-   *
-   * The two sides take the extra row on different halves, because that is
-   * where each one's third-best affix lives: offence has three useful suffixes
-   * and only two useful prefixes, and defence is the mirror of that.
-   */
-  const withFifthRow = (save: SaveState, side: 'prefix' | 'suffix', extra: string): SaveState => ({
-    ...save,
-    items: save.items.map((item) => ({
-      ...item,
-      spirit: 'dune-spirit',
-      spiritDelta: { prefix: side === 'prefix' ? 1 : 0, suffix: side === 'suffix' ? 1 : 0 },
-      affixes: [...item.affixes, topRoll(extra)],
-    })),
-  });
-
-  const craftedOffence = () => withFifthRow(offensive(), 'suffix', 'of-ruin');
-  const craftedDefence = () => withFifthRow(defensive(), 'prefix', 'warded');
 
   it('a fully crafted loadout is worth roughly 8x, the agreed ceiling', () => {
     // The craft ceiling: everything the drop ceiling has, plus the fifth affix
     // row only a dune spirit can grant. This is the number the whole currency
     // system was budgeted against, and the one that decides whether the ladder
     // still paces.
-    const total = dpsRatio(craftedOffence()) * ehpRatio(craftedDefence());
-    expect(total).toBeGreaterThan(6.5);
+    const total = craftedOffence.value * craftedDefence.value;
+    expect(total, `${craftedOffence.label} x ${craftedDefence.label}`).toBeGreaterThan(6.5);
     expect(total).toBeLessThan(9.5);
   });
 
@@ -1232,8 +1258,8 @@ describe('power budget', () => {
     // the currency would be decoration; if it beat it by too much, every
     // dropped item would be litter and the ladder would need retuning around
     // the crafted player instead of the real spread of players.
-    const dropped = dpsRatio(offensive()) * ehpRatio(defensive());
-    const crafted = dpsRatio(craftedOffence()) * ehpRatio(craftedDefence());
+    const dropped = offence.value * defence.value;
+    const crafted = craftedOffence.value * craftedDefence.value;
     expect(crafted / dropped).toBeGreaterThan(1.2);
     expect(crafted / dropped).toBeLessThan(1.9);
   });
@@ -1242,9 +1268,7 @@ describe('power budget', () => {
     // The symmetry invariant does not stop applying because an item was
     // crafted. A fifth row that only ever went on offence would be the
     // stage-222 failure arriving by a third route.
-    const offence = dpsRatio(craftedOffence());
-    const defence = ehpRatio(craftedDefence());
-    expect(Math.abs(Math.log(offence / defence))).toBeLessThan(0.2);
+    expect(Math.abs(Math.log(craftedOffence.value / craftedDefence.value))).toBeLessThan(0.2);
   });
 
   it('does not let stacked uniques beat a crafted loadout on total power', () => {
@@ -1273,22 +1297,62 @@ describe('power budget', () => {
     const bestUniqueTotal = Math.max(
       ...UNIQUES.map((u) => dpsRatio(stacked(u.id)) * ehpRatio(stacked(u.id))),
     );
-    const crafted = dpsRatio(craftedOffence()) * ehpRatio(craftedDefence());
+    const crafted = craftedOffence.value * craftedDefence.value;
     expect(bestUniqueTotal).toBeLessThan(crafted);
   });
 
-  it('gives the base implicit about a sixth of an item, not a third', () => {
-    // Implicits are guaranteed, so an oversized one makes the rolled half
-    // decorative. A first pass at 1.075/item put the drop ceiling at 8.8x on
-    // its own - the entire budget, spent before currency existed.
-    const withImplicit = dpsRatio(offensive());
-    const withoutImplicit = dpsRatio({
-      ...offensive(),
-      items: offensive().items.map((item) => ({ ...item, baseAffix: undefined })),
-    });
-    const contribution = withImplicit / withoutImplicit;
-    expect(contribution).toBeGreaterThan(1.1);
-    expect(contribution).toBeLessThan(1.25);
+  it('keeps every base implicit near a third of the rolled affix on its stat', () => {
+    // This replaces a DPS-contribution band, and the instrument was replaced
+    // rather than the threshold widened.
+    //
+    // The old check measured dps(with implicits) / dps(without) and demanded
+    // 1.1-1.25. Under the all-multiplier model that ratio was exactly the
+    // implicit's own compounding - 1.038^4 = 1.16 - because the rolled affixes
+    // multiplied too and cancelled out of the fraction. Under layers they land in
+    // the same sum, so the same design ratio now reads as 1.075: the implicit is
+    // deliberately *diluted* by the rolled half, which is the diminishing-returns
+    // property working as intended. Hitting 1.1 again would need implicits at
+    // ~43% of a rolled affix, breaking the rule this test exists to enforce.
+    //
+    // So assert the rule itself, off the tables. It is also a stronger check:
+    // independent of how many other affixes an item happens to carry, and it
+    // covers every stat rather than only the ones on one measured loadout.
+    const rolledPeers = (stat: string, op: string) =>
+      AFFIXES.filter(
+        (a) => a.effect.kind === 'statMod' && a.effect.stat === stat && a.effect.op === op,
+      );
+
+    for (const implicit of IMPLICIT_AFFIXES) {
+      if (implicit.effect.kind !== 'statMod') continue;
+      const { stat, op } = implicit.effect;
+      const peers = rolledPeers(stat, op);
+      // An implicit with no rolled counterpart cannot be priced against anything,
+      // which is how an implicit quietly becomes the strongest mod on its stat.
+      expect(peers.length, `${implicit.id} has no rolled counterpart on ${stat}`).toBeGreaterThan(0);
+
+      // Compared against the weakest peer, so the bound holds however many
+      // rolled affixes share the stat.
+      const top = (a: (typeof peers)[number]) => a.tiers[a.tiers.length - 1].value;
+      const weakest = peers.reduce((a, b) => (top(a) < top(b) ? a : b));
+
+      for (let tier = 0; tier < implicit.tiers.length; tier++) {
+        const ratio = implicit.tiers[tier].value / weakest.tiers[tier].value;
+        expect(ratio, `${implicit.id} T${tier} vs ${weakest.id}`).toBeGreaterThan(0.25);
+        expect(ratio, `${implicit.id} T${tier} vs ${weakest.id}`).toBeLessThan(0.45);
+      }
+    }
+  });
+
+  it('lets the rolled half dilute the implicit, rather than the reverse', () => {
+    // The outcome the ratio test above implies, measured end to end so the two
+    // cannot drift: guaranteed power stays a minority of an item's contribution.
+    const stripped = {
+      ...offence.save,
+      items: offence.save.items.map((item) => ({ ...item, baseAffix: undefined })),
+    };
+    const contribution = dpsRatio(offence.save) / dpsRatio(stripped);
+    expect(contribution).toBeGreaterThan(1.04);
+    expect(contribution).toBeLessThan(1.15);
   });
 });
 
@@ -1342,6 +1406,57 @@ describe('migration', () => {
     expect((state as unknown as Record<string, unknown>).artifactsOwned).toBeUndefined();
   });
 
+  it('restats v4 items onto the layer scale without changing what they are', () => {
+    // The one migration allowed to touch stored magnitudes. A v4 Brutal held
+    // `value: 1.04` under `op: 'mul'`; read as `increased` that is +104% damage,
+    // so leaving the numbers alone is the destructive option here.
+    const item = { ...rollItem(9, 1, 30), affixes: [{ affixId: 'brutal', tier: 2, value: 1.08 }] };
+    const v4 = {
+      ...newSave(9, T0),
+      ...progress,
+      contentVersion: 4,
+      items: [item],
+      loadout: [item.uid, null, null, null],
+      nextItemId: 2,
+    } as unknown as SaveState;
+
+    const { state, migrated } = migrateSave(v4);
+    const [carried] = state.items;
+
+    expect(migrated).toBe(true);
+    // Identity survives: same item, same affix, same tier. Only the number moves.
+    expect(carried.uid).toBe(item.uid);
+    expect(carried.baseId).toBe(item.baseId);
+    expect(carried.rarity).toBe(item.rarity);
+    expect(carried.affixes[0].affixId).toBe('brutal');
+    expect(carried.affixes[0].tier).toBe(2);
+    expect(carried.affixes[0].value).toBe(getAffix('brutal')!.tiers[2].value);
+    expect(carried.affixes[0].value).not.toBe(1.08);
+    // And it is still equipped, and still worth something.
+    expect(state.loadout[0]).toBe(item.uid);
+    expect(itemEffects(carried).length).toBeGreaterThan(0);
+  });
+
+  it('keeps an item whose affix no longer exists loadable', () => {
+    // A retired affix must not make the whole save unreadable. itemEffects
+    // already skips unknown ids; the restat step has to skip them too rather
+    // than dereferencing a missing definition.
+    // No baseAffix, so the only possible effect source is the retired modifier.
+    const item = {
+      ...rollItem(9, 1, 30),
+      affixes: [{ affixId: 'retired-mod', tier: 0, value: 1.5 }],
+      baseAffix: undefined,
+    };
+    const v4 = { ...newSave(9, T0), contentVersion: 4, items: [item], nextItemId: 2 } as SaveState;
+
+    const { state } = migrateSave(v4);
+
+    // Left byte-identical: there is no definition to re-resolve it against, and
+    // inventing a value would be worse than carrying a number nothing reads.
+    expect(state.items[0].affixes[0]).toEqual({ affixId: 'retired-mod', tier: 0, value: 1.5 });
+    expect(itemEffects(state.items[0])).toEqual([]);
+  });
+
   it('leaves a current save alone', () => {
     const current = { ...newSave(1, T0), gold: 500 };
     const { state, migrated } = migrateSave(current);
@@ -1377,6 +1492,92 @@ describe('derived stats', () => {
     };
     const stats = deriveStats(save, { stage: 1, isBoss: false, enemyHpFraction: 1 });
     expect(effectiveHp(stats)).toBeCloseTo(stats.maxHp * stats.toughness, 6);
+  });
+});
+
+describe('modifier layers', () => {
+  const CTX = { stage: 1, isBoss: false, enemyHpFraction: 1 };
+
+  /**
+   * The resolver's formula, written out independently.
+   *
+   * Pinned separately from deriveStats so the shape of the formula is asserted in
+   * one readable place; the last test in this suite ties it back to the real
+   * resolver so the two cannot drift apart.
+   */
+  const damageOf = (effects: Effect[]): number => {
+    const buckets = { flat: 0, increased: 0, more: 1 };
+    for (const e of effects) {
+      if (e.kind !== 'statMod') continue;
+      if (e.op === 'flat') buckets.flat += e.value;
+      else if (e.op === 'increased') buckets.increased += e.value;
+      else buckets.more *= e.value;
+    }
+    return (BASE_STATS.damage + buckets.flat) * (1 + buckets.increased) * buckets.more;
+  };
+
+  const mod = (op: 'flat' | 'increased' | 'more', value: number): Effect => ({
+    kind: 'statMod',
+    stat: 'damage',
+    op,
+    value,
+  });
+
+  it('resolves as (base + flat) x (1 + increased) x more', () => {
+    // The formula written out once, so a refactor of deriveStats that changes the
+    // order of the layers fails here rather than in the ladder six commits later.
+    expect(damageOf([mod('flat', 10), mod('increased', 0.5), mod('more', 2)])).toBeCloseTo(
+      (60 + 10) * 1.5 * 2,
+      9,
+    );
+  });
+
+  it('sums increased modifiers instead of compounding them', () => {
+    // The entire point of the layer system. Two +50% rolls are +100%, not +125%.
+    const summed = damageOf([mod('increased', 0.5), mod('increased', 0.5)]);
+    expect(summed).toBeCloseTo(60 * 2, 9);
+    expect(summed).toBeLessThan(60 * 1.5 * 1.5);
+  });
+
+  it('compounds more modifiers, which is why none of them roll', () => {
+    expect(damageOf([mod('more', 1.5), mod('more', 1.5)])).toBeCloseTo(60 * 2.25, 9);
+  });
+
+  it('has diminishing returns on increased, and that is the fix', () => {
+    // Each additional +5% is worth strictly less than the one before it. Under
+    // the old all-multiplier pool each was worth strictly *more*, which is what
+    // forced every value down to a few percent and squeezed each new content row.
+    const at = (n: number) => damageOf(Array.from({ length: n }, () => mod('increased', 0.05)));
+    const firstGain = at(1) - at(0);
+    const tenthGain = at(10) - at(9);
+    expect(tenthGain).toBeCloseTo(firstGain, 9); // absolute gain is constant...
+    expect(at(10) / at(9)).toBeLessThan(at(1) / at(0)); // ...so relative gain falls
+  });
+
+  it('is order-independent, which is what makes loadouts comparable', () => {
+    const effects = [mod('more', 1.3), mod('flat', 4), mod('increased', 0.2), mod('flat', 1)];
+    const forwards = damageOf(effects);
+    const backwards = damageOf([...effects].reverse());
+    expect(forwards).toBeCloseTo(backwards, 9);
+  });
+
+  it('applies the layers through deriveStats, not only in this test', () => {
+    // The helper above mirrors the resolver; this pins the resolver itself, so the
+    // mirror cannot quietly disagree with the code it is standing in for.
+    const save = { ...newSave(1, T0), upgrades: { ...newSave(1, T0).upgrades, damage: 3 } };
+    const stats = deriveStats(save, CTX);
+    // The damage track is uncapped and therefore `more` - see trackLayer().
+    expect(stats.damage).toBeCloseTo(BASE_STATS.damage * Math.pow(1.07, 3), 9);
+  });
+
+  it('keeps every uncapped upgrade track in the more layer', () => {
+    // Load-bearing, and the reason the plan's original shape was abandoned:
+    // `increased` sums linearly in levels bought and levels grow like log(gold),
+    // so an economy driven by increased purchases grows linearly in stage against
+    // enemy HP growing exponentially - a permanent wall at any growth rate.
+    for (const track of Object.values(UPGRADE_TRACKS)) {
+      if (track.maxLevel === null) expect(trackLayer(track)).toBe('more');
+    }
   });
 });
 

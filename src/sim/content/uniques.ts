@@ -10,6 +10,12 @@
  * unconditional by design (a condition on a random mod is very hard to price),
  * so uniques carry the interesting shapes: execute thresholds, boss-only
  * damage, stage gates.
+ *
+ * They are also the only content that uses the `more` layer. Nothing in the
+ * rollable affix pool compounds; a unique does, and that is what makes one feel
+ * like a different class of item rather than a rare with a name. It is safe here
+ * for the same reason it is safe on the gold upgrade tracks and unsafe on a
+ * rollable affix - the list is authored and finite, so the ceiling is known.
  */
 
 import type { Unique } from './schema';
@@ -20,14 +26,14 @@ export const UNIQUES = [
     name: 'The Whetstone',
     sprite: 'item.whetstone',
     dropStage: 1,
-    effects: [{ kind: 'statMod', stat: 'damage', op: 'mul', value: 1.35 }],
+    effects: [{ kind: 'statMod', stat: 'damage', op: 'more', value: 1.35 }],
   },
   {
     id: 'quickdraw-glove',
     name: 'Quickdraw Glove',
     sprite: 'item.quickdraw_glove',
     dropStage: 1,
-    effects: [{ kind: 'statMod', stat: 'attackSpeed', op: 'mul', value: 1.3 }],
+    effects: [{ kind: 'statMod', stat: 'attackSpeed', op: 'more', value: 1.3 }],
   },
   {
     id: 'coin-purse',
@@ -42,7 +48,7 @@ export const UNIQUES = [
     sprite: 'item.executioners_mark',
     dropStage: 8,
     effects: [
-      { kind: 'statMod', stat: 'damage', op: 'mul', value: 1.9, when: { enemyHpBelow: 0.3 } },
+      { kind: 'statMod', stat: 'damage', op: 'more', value: 1.9, when: { enemyHpBelow: 0.3 } },
     ],
   },
   {
@@ -51,8 +57,8 @@ export const UNIQUES = [
     sprite: 'item.giant_slayer',
     dropStage: 12,
     effects: [
-      { kind: 'statMod', stat: 'damage', op: 'mul', value: 1.7, when: { isBoss: true } },
-      { kind: 'statMod', stat: 'area', op: 'add', value: -1 },
+      { kind: 'statMod', stat: 'damage', op: 'more', value: 1.7, when: { isBoss: true } },
+      { kind: 'statMod', stat: 'area', op: 'flat', value: -1 },
     ],
   },
   {
@@ -61,8 +67,8 @@ export const UNIQUES = [
     sprite: 'item.swarm_lens',
     dropStage: 20,
     effects: [
-      { kind: 'statMod', stat: 'area', op: 'add', value: 4 },
-      { kind: 'statMod', stat: 'damage', op: 'mul', value: 0.8 },
+      { kind: 'statMod', stat: 'area', op: 'flat', value: 4 },
+      { kind: 'statMod', stat: 'damage', op: 'more', value: 0.8 },
     ],
   },
   {
@@ -71,9 +77,9 @@ export const UNIQUES = [
     sprite: 'item.bloodstone',
     dropStage: 25,
     effects: [
-      { kind: 'statMod', stat: 'critChance', op: 'add', value: 0.18 },
-      { kind: 'statMod', stat: 'critMult', op: 'add', value: 0.6 },
-      { kind: 'statMod', stat: 'maxHp', op: 'mul', value: 0.75 },
+      { kind: 'statMod', stat: 'critChance', op: 'flat', value: 0.18 },
+      { kind: 'statMod', stat: 'critMult', op: 'flat', value: 0.6 },
+      { kind: 'statMod', stat: 'maxHp', op: 'more', value: 0.75 },
     ],
   },
   {
@@ -82,7 +88,7 @@ export const UNIQUES = [
     sprite: 'item.deep_delvers_idol',
     dropStage: 40,
     effects: [
-      { kind: 'statMod', stat: 'goldFind', op: 'mul', value: 2, when: { stageAtLeast: 40 } },
+      { kind: 'statMod', stat: 'goldFind', op: 'more', value: 2, when: { stageAtLeast: 40 } },
       { kind: 'goldOnKill', multiplier: 0.5, when: { isBoss: true } },
     ],
   },

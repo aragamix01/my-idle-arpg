@@ -92,21 +92,42 @@ export function describeEffect(effect: Effect): string {
   }
 
   const { label } = STAT_LABELS[effect.stat];
-  if (effect.op === 'mul') {
+
+  // The three layers must be visibly different, because they are priced
+  // differently and stack differently. "more" is the rare compounding layer and
+  // says so in words; "increased" is the common percentage that sums with its
+  // peers; "flat" is a raw amount. A player comparing two items cannot make a
+  // sensible choice if all three render as a bare percentage.
+  if (effect.op === 'more') {
     // A multiplier below 1 is a real design tool - Swarm Lens trades damage for
     // area - and must not read as a bonus.
     const delta = (effect.value - 1) * 100;
-    const sign = delta >= 0 ? '+' : '';
-    // Toughness mods live in the 1.5-4% range, where whole percents collapse
-    // distinct tiers onto the same number and two different affixes render as
-    // the same line. One decimal below 10% is enough to keep them apart.
     const digits = Math.abs(delta) < 10 ? 1 : 0;
-    return `${sign}${delta.toFixed(digits)}% ${label}${suffix}`;
+    return delta >= 0
+      ? `${delta.toFixed(digits)}% more ${label}${suffix}`
+      : `${Math.abs(delta).toFixed(digits)}% less ${label}${suffix}`;
   }
 
+  if (effect.op === 'increased') {
+    const delta = effect.value * 100;
+    // Implicits live in the 1-3% range, where whole percents collapse distinct
+    // tiers onto the same number and two different affixes render as the same
+    // line. One decimal below 10% is enough to keep them apart.
+    const digits = Math.abs(delta) < 10 ? 1 : 0;
+    const word = delta >= 0 ? 'increased' : 'reduced';
+    return `${Math.abs(delta).toFixed(digits)}% ${word} ${label}${suffix}`;
+  }
+
+  // "increased" rather than a bare sign is load-bearing on the percentage
+  // layers. Crit chance is the case that proves it: of-Focus grants 20% of a 5%
+  // base and of-Precision grants 3 percentage points, and rendered as "+20%" and
+  // "+3%" the weaker one looks like the stronger one.
   const sign = effect.value >= 0 ? '+' : '';
-  const shown =
-    effect.stat === 'critChance' ? percent(effect.value) : effect.value.toFixed(2).replace(/\.00$/, '');
+  // Crit chance and crit damage are fractions of a whole the player never sees as
+  // a raw number - the sheet quotes crit damage as "x2.00", so a flat roll shown
+  // as "+0.04 Crit Damage" reads like a rounding error rather than +4%.
+  const asPercent = effect.stat === 'critChance' || effect.stat === 'critMult';
+  const shown = asPercent ? percent(effect.value) : String(Number(effect.value.toFixed(2)));
   return `${sign}${shown} ${label}${suffix}`;
 }
 

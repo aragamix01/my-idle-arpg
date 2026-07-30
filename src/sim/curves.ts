@@ -6,13 +6,19 @@
  * (tests/__snapshots__/balance.golden.txt) before committing.
  */
 
-import type { Rarity } from './content/schema';
+import type { ModLayer, Rarity } from './content/schema';
 import type { UpgradeKey } from './types';
 
 /** The tuned constants. Keep this list short — if it grows past ~12, the model is too loose. */
 export const TUNING = {
-  /** Trash HP at stage 1. */
-  enemyHpBase: 12,
+  /**
+   * Trash HP at stage 1.
+   *
+   * Moved from 12 to 120 alongside BASE_STATS.damage moving from 6 to 60. Only
+   * the ratio of the two matters to any outcome, so this pair is a rescale and
+   * nothing else - it exists so flat damage affixes are readable numbers.
+   */
+  enemyHpBase: 120,
   /**
    * Per-stage multiplicative HP growth. The single most sensitive number here.
    * Must stay below the achievable damage growth per stage or the game walls
@@ -115,6 +121,24 @@ export function bossGold(stage: number): number {
   return goldPerKill(stage) * 25;
 }
 
+/**
+ * Why flat modifiers need no item-level scaling.
+ *
+ * A flat roll lands *inside* the multiplicative envelope: `(base + flat) × more`,
+ * where `more` carries the exponential upgrade tracks. So a flat modifier is
+ * amplified by every damage upgrade the player ever buys and stays worth the same
+ * *fraction* of their power forever, with no pegging and no ten-digit numbers on
+ * item tooltips.
+ *
+ * That only holds while the uncapped upgrade tracks stay in the `more` layer -
+ * see trackLayer(). If they ever move to `increased`, flat tables go dead within
+ * twenty stages and would have to be pegged to a reference curve instead.
+ *
+ * Flat and increased are still genuinely different purchases, because they
+ * multiply each other: a flat roll is worth more to a player carrying a lot of
+ * `increased`, and vice versa. That is the tension the two layers exist for.
+ */
+
 /** Sparse hand overrides for stages that should feel like walls. */
 const STAGE_OVERRIDES: Record<number, { hpMult?: number; goldMult?: number }> = {
   10: { hpMult: 1.25, goldMult: 1.4 },
@@ -201,6 +225,26 @@ export const UPGRADE_TRACKS: Record<UpgradeKey, UpgradeTrack> = {
     baseCost: 35, costGrowth: 1.14, valueGrowth: 1.04, valueAdd: null, maxLevel: null, affectsIncome: false,
   },
 };
+
+/**
+ * Which layer a track's levels land in.
+ *
+ * Derived rather than declared. A `layer` field beside `valueGrowth`/`valueAdd`
+ * would be a second copy of the same fact and would drift the first time a track
+ * was retuned from additive to multiplicative.
+ *
+ * Note what this says: **every uncapped track is `more`.** That is not an
+ * oversight, it is the only arrangement that works. Enemy HP grows
+ * exponentially in stage, so the player's engine has to be exponential too;
+ * `increased` sums linearly in levels bought and levels grow like log(gold), so
+ * an economy driven by `increased` purchases walls permanently at any growth
+ * rate above 1. Compounding is safe *here* because Σα < 1 bounds it - see
+ * feedbackExponent(). It was never safe on item modifiers, which have no such
+ * bound and no cost curve, and that is the split this layer system draws.
+ */
+export function trackLayer(track: UpgradeTrack): ModLayer {
+  return track.valueGrowth !== null ? 'more' : 'flat';
+}
 
 /**
  * Σα over the uncapped tracks that feed the income loop.

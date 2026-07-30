@@ -50,3 +50,54 @@ New uniqe item
 	- gold drop - (30% - 60%) / whike equip this item each currency drop from dungeon boss are twice
 	- equip item slot - (1-2) / effect of other equip item is * (200% - 500%)
 - if u have any idea just add it. one rule unique item may have downside stats then have fantasy stats following
+
+#Phase3
+Make more loot
+- Now monster wave can drop some item but rarely/ compare to amount of monster
+	- dungeon key
+	- some unique item
+	- some item soon that rarely get from this monster wave
+- It effect to offline gameplay
+- So if inventory full make a temporary inventory that user need to check and clear or take it before other gameplay
+- Improve UI add description cleary show it effect on currency menu
+
+#Phase4
+Tablet mechanic & Abyssal dungeon
+- Monster wave now drop new currency
+	- Tablet drop rate around 0.1% rare but not hard to obtain / compare to amount of monster defeat per seconds
+- Tablet are use for enter Abyssal dungeon
+- Need to clear (n) wave of monster then defeat boss
+- Tablet are have tier (common, magic, rare) same as item
+- Tablet have mod including implicit, Explicit Mods
+- Implicit mod are enchane loot, drop rate, gold found and etc.
+- Explicit is have prefix , suffix like general item but it buff to monster wave and boss
+- More Explicit is harder also enchant Implicit for more loot. High risk high return
+- More tier of tablet it need to clear more wave of monster
+- While enter Abyssal dungeon user have limited HP if it reach zero, leave it to normal gameplay with nothing reward
+- Tablet are new tab in character modal
+- Tablet can use mostly currency on it like item for Crafting
+- Tablet can keep 200ea like item
+
+
+#Phase5
+Rework stats, item stats, upgrade button
+- Now it percentage and it scaling too fast
+- Add Flat stats modifier Now modifier have flat & percentage stats Percentage stats are more rarely to obtain
+- Rework Crit formular to use flat crit combie with percentage crit
+- Add element to modifers (fire, cold, lightning, darkness) use it for scaling damage (addon)
+- Defensive layer also have element resistant
+- Add new penetration toughness to formular this can obtain item modifier
+- Rework stats upgrade button
+- Create new damage formular and defensive formular base on flat & multiplier
+- Add new modifier list to modifier pool for Crafting
+- Add more row of modifier depend on item tiear ->
+	- Common -> 1 prefix, 1 suffix
+	- Magic -> 2 prefix, 2 suffix
+	- Rare -> 3 prefix, 3 suffix
+- Rework some currency base on above new modifier row for each tier
+- Add new item type [Accessory] including ring, amulet
+- Accessory have it tier like other item, can use mostly craft currency like item
+- Modifier on Accessory always percentage
+- Add a slot to character 2 ring slot and 1 amulet
+- Accessory only drop from Abyssal dungeon (maybe dev later if u pick this phase before phase4) make it guarantee drop around 1-2ea relate to Tablet Implicit
+- Discuss and suggest me about damage & defensive formular

@@ -9,7 +9,7 @@
  * Gold, stage and upgrades are never touched by any step.
  */
 
-import { CONTENT_VERSION } from './content';
+import { CONTENT_VERSION, getAffix, type RolledAffix } from './content';
 import { ITEM_SLOTS, type SaveState } from './types';
 
 /** First version whose saves use rolled item instances. */
@@ -20,6 +20,9 @@ export const IMPLICITS_VERSION = 3;
 
 /** First version with a currency purse and per-item craft counters. */
 export const CURRENCY_VERSION = 4;
+
+/** First version where modifiers carry a layer instead of add/mul. */
+export const LAYERS_VERSION = 5;
 
 export interface MigrationResult {
   state: SaveState;
@@ -79,6 +82,33 @@ export function migrateSave(state: SaveState): MigrationResult {
     next.items = next.items.map((item) =>
       typeof item.crafts === 'number' ? item : { ...item, crafts: item.rerolls ?? 0 },
     );
+    migrated = true;
+  }
+
+  if ((state.contentVersion ?? 0) < LAYERS_VERSION && next.items.length > 0) {
+    // The one migration that is *allowed* to restat existing items.
+    //
+    // RolledAffix stores its magnitude rather than looking it up, precisely so a
+    // retuned tier table cannot silently change an item someone already owns.
+    // A change of formula is the exception that rule was written against: an old
+    // Brutal stored 1.04 under `op: 'mul'`, and reading 1.04 as `increased` means
+    // +104% damage. Leaving the numbers alone would be far more destructive than
+    // re-resolving them.
+    //
+    // Identity survives - same affix id, same tier index, same item - so a player
+    // keeps the item they earned and only its numbers move onto the new scale.
+    // Affixes whose id no longer exists resolve to nothing, which itemEffects
+    // already tolerates.
+    const restat = (rolled: RolledAffix): RolledAffix => {
+      const affix = getAffix(rolled.affixId);
+      const tier = affix?.tiers[rolled.tier];
+      return tier ? { ...rolled, value: tier.value } : rolled;
+    };
+    next.items = next.items.map((item) => ({
+      ...item,
+      affixes: item.affixes.map(restat),
+      baseAffix: item.baseAffix ? restat(item.baseAffix) : undefined,
+    }));
     migrated = true;
   }
 

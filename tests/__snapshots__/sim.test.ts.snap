@@ -6,7 +6,7 @@ exports[`content registry > matches its snapshot 1`] = `
     {
       "effect": {
         "kind": "statMod",
-        "op": "mul",
+        "op": "increased",
         "stat": "damage",
       },
       "id": "brutal",
@@ -15,26 +15,54 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 1.04,
+          "value": 0.026,
         },
         {
           "minStage": 15,
-          "value": 1.06,
+          "value": 0.039,
         },
         {
           "minStage": 40,
-          "value": 1.08,
+          "value": 0.052,
         },
         {
           "minStage": 80,
-          "value": 1.1,
+          "value": 0.07,
         },
       ],
     },
     {
       "effect": {
         "kind": "statMod",
-        "op": "mul",
+        "op": "flat",
+        "stat": "damage",
+      },
+      "id": "honed",
+      "kind": "prefix",
+      "nameFragment": "Honed",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1.6,
+        },
+        {
+          "minStage": 15,
+          "value": 2.6,
+        },
+        {
+          "minStage": 40,
+          "value": 3.5,
+        },
+        {
+          "minStage": 80,
+          "value": 4.2,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
         "stat": "maxHp",
       },
       "id": "vital",
@@ -43,26 +71,54 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 1.07,
+          "value": 0.045,
         },
         {
           "minStage": 15,
-          "value": 1.1,
+          "value": 0.062,
         },
         {
           "minStage": 40,
-          "value": 1.13,
+          "value": 0.08,
         },
         {
           "minStage": 80,
-          "value": 1.16,
+          "value": 0.105,
         },
       ],
     },
     {
       "effect": {
         "kind": "statMod",
-        "op": "mul",
+        "op": "flat",
+        "stat": "maxHp",
+      },
+      "id": "bulwark",
+      "kind": "prefix",
+      "nameFragment": "Bulwark",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 3.5,
+        },
+        {
+          "minStage": 15,
+          "value": 6,
+        },
+        {
+          "minStage": 40,
+          "value": 9,
+        },
+        {
+          "minStage": 80,
+          "value": 12,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
         "stat": "toughness",
       },
       "id": "armoured",
@@ -71,26 +127,26 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 1.015,
+          "value": 0.035,
         },
         {
           "minStage": 15,
-          "value": 1.02,
+          "value": 0.048,
         },
         {
           "minStage": 40,
-          "value": 1.025,
+          "value": 0.06,
         },
         {
           "minStage": 80,
-          "value": 1.03,
+          "value": 0.075,
         },
       ],
     },
     {
       "effect": {
         "kind": "statMod",
-        "op": "add",
+        "op": "flat",
         "stat": "area",
       },
       "id": "sweeping",
@@ -118,7 +174,7 @@ exports[`content registry > matches its snapshot 1`] = `
     {
       "effect": {
         "kind": "statMod",
-        "op": "mul",
+        "op": "increased",
         "stat": "toughness",
       },
       "id": "warded",
@@ -127,26 +183,26 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 1.022,
+          "value": 0.04,
         },
         {
           "minStage": 15,
-          "value": 1.029,
+          "value": 0.052,
         },
         {
           "minStage": 40,
-          "value": 1.036,
+          "value": 0.065,
         },
         {
           "minStage": 80,
-          "value": 1.043,
+          "value": 0.08,
         },
       ],
     },
     {
       "effect": {
         "kind": "statMod",
-        "op": "mul",
+        "op": "increased",
         "stat": "attackSpeed",
       },
       "id": "of-haste",
@@ -155,26 +211,26 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 1.025,
+          "value": 0.022,
         },
         {
           "minStage": 15,
-          "value": 1.04,
+          "value": 0.035,
         },
         {
           "minStage": 40,
-          "value": 1.05,
+          "value": 0.044,
         },
         {
           "minStage": 80,
-          "value": 1.06,
+          "value": 0.052,
         },
       ],
     },
     {
       "effect": {
         "kind": "statMod",
-        "op": "add",
+        "op": "flat",
         "stat": "critChance",
       },
       "id": "of-precision",
@@ -183,26 +239,54 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.01,
+          "value": 0.009,
         },
         {
           "minStage": 15,
-          "value": 0.018,
+          "value": 0.016,
         },
         {
           "minStage": 40,
-          "value": 0.025,
+          "value": 0.022,
         },
         {
           "minStage": 80,
-          "value": 0.03,
+          "value": 0.026,
         },
       ],
     },
     {
       "effect": {
         "kind": "statMod",
-        "op": "add",
+        "op": "increased",
+        "stat": "critChance",
+      },
+      "id": "of-focus",
+      "kind": "suffix",
+      "nameFragment": "of Focus",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.08,
+        },
+        {
+          "minStage": 15,
+          "value": 0.12,
+        },
+        {
+          "minStage": 40,
+          "value": 0.16,
+        },
+        {
+          "minStage": 80,
+          "value": 0.2,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
         "stat": "critMult",
       },
       "id": "of-ruin",
@@ -211,26 +295,26 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 0.08,
+          "value": 0.12,
         },
         {
           "minStage": 15,
-          "value": 0.13,
+          "value": 0.2,
         },
         {
           "minStage": 40,
-          "value": 0.18,
+          "value": 0.28,
         },
         {
           "minStage": 80,
-          "value": 0.22,
+          "value": 0.36,
         },
       ],
     },
     {
       "effect": {
         "kind": "statMod",
-        "op": "mul",
+        "op": "increased",
         "stat": "goldFind",
       },
       "id": "of-avarice",
@@ -239,19 +323,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 1,
-          "value": 1.06,
+          "value": 0.06,
         },
         {
           "minStage": 15,
-          "value": 1.09,
+          "value": 0.09,
         },
         {
           "minStage": 40,
-          "value": 1.12,
+          "value": 0.12,
         },
         {
           "minStage": 80,
-          "value": 1.15,
+          "value": 0.15,
         },
       ],
     },
@@ -304,7 +388,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "effects": [
         {
           "kind": "statMod",
-          "op": "mul",
+          "op": "more",
           "stat": "damage",
           "value": 1.35,
         },
@@ -318,7 +402,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "effects": [
         {
           "kind": "statMod",
-          "op": "mul",
+          "op": "more",
           "stat": "attackSpeed",
           "value": 1.3,
         },
@@ -344,7 +428,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "effects": [
         {
           "kind": "statMod",
-          "op": "mul",
+          "op": "more",
           "stat": "damage",
           "value": 1.9,
           "when": {
@@ -361,7 +445,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "effects": [
         {
           "kind": "statMod",
-          "op": "mul",
+          "op": "more",
           "stat": "damage",
           "value": 1.7,
           "when": {
@@ -370,7 +454,7 @@ exports[`content registry > matches its snapshot 1`] = `
         },
         {
           "kind": "statMod",
-          "op": "add",
+          "op": "flat",
           "stat": "area",
           "value": -1,
         },
@@ -384,13 +468,13 @@ exports[`content registry > matches its snapshot 1`] = `
       "effects": [
         {
           "kind": "statMod",
-          "op": "add",
+          "op": "flat",
           "stat": "area",
           "value": 4,
         },
         {
           "kind": "statMod",
-          "op": "mul",
+          "op": "more",
           "stat": "damage",
           "value": 0.8,
         },
@@ -404,19 +488,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "effects": [
         {
           "kind": "statMod",
-          "op": "add",
+          "op": "flat",
           "stat": "critChance",
           "value": 0.18,
         },
         {
           "kind": "statMod",
-          "op": "add",
+          "op": "flat",
           "stat": "critMult",
           "value": 0.6,
         },
         {
           "kind": "statMod",
-          "op": "mul",
+          "op": "more",
           "stat": "maxHp",
           "value": 0.75,
         },
@@ -430,7 +514,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "effects": [
         {
           "kind": "statMod",
-          "op": "mul",
+          "op": "more",
           "stat": "goldFind",
           "value": 2,
           "when": {

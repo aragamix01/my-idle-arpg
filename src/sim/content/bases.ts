@@ -13,18 +13,18 @@
  *
  * ## Sizing
  *
- * The values below are set from the power budget, not from feel. Four items,
- * top tier, must multiply to about 1.16 per side:
+ * The values below are set from the power budget, not from feel: roughly a third
+ * of the rolled affix on the same stat, matching the "weaker than a rolled affix"
+ * rule above. Four items of one base, top tier:
  *
- *   offence   affixes 2.06x  x  implicit 1.038^4 = 1.16x  ~= 2.39x
- *   defence   affixes 2.04x  x  implicit 1.040^4 = 1.17x  ~= 2.39x
- *   -----------------------------------------------------------------
- *   combined                                              ~= 5.7x
+ *   offence   affixes 2.25x  x  implicit (1+4x0.026) = 1.10x  ~= 2.48x
+ *   defence   affixes 2.31x  x  implicit (1+4x0.040) = 1.16x  ~= 2.68x
  *
- * That leaves headroom under the 8x ceiling for the extra affix row spirits
- * grant. A first pass at these numbers used ~1.075 per item and landed the
- * combined ceiling at 8.8x on its own, which would have spent the entire budget
- * before the currency system existed.
+ * These are now `increased` and `flat` like everything else, so four copies sum
+ * to `1 + 4v` rather than compounding to `(1+v)^4`. That is what let them come
+ * *up* off the old 1.038 ceiling and become readable numbers again: under the old
+ * all-multiplier model a first pass at ~1.075 per item put the combined ceiling
+ * at 8.8x on its own, spending the whole budget before currency existed.
  *
  * Names are plain nouns so composition reads: "Brutal Whetstone of Haste"
  * works, "Brutal Executioner's Mark of Haste" does not.
@@ -56,44 +56,44 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-damage',
     kind: 'prefix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'damage', op: 'mul' },
-    tiers: tiers([1.015, 1.022, 1.03, 1.038]),
+    effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
+    tiers: tiers([0.008, 0.013, 0.017, 0.024]),
   },
   glove: {
     id: 'implicit-attack-speed',
     kind: 'suffix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'attackSpeed', op: 'mul' },
-    // 1.025 would collide with of-Haste's weakest tier and render as the same
+    effect: { kind: 'statMod', stat: 'attackSpeed', op: 'increased' },
+    // 0.025 would collide with of-Haste's weakest tier and render as the same
     // line on an item carrying both.
-    tiers: tiers([1.01, 1.015, 1.019, 1.023]),
+    tiers: tiers([0.007, 0.011, 0.014, 0.017]),
   },
   purse: {
     id: 'implicit-gold-find',
     kind: 'suffix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'goldFind', op: 'mul' },
-    tiers: tiers([1.02, 1.03, 1.04, 1.05]),
+    effect: { kind: 'statMod', stat: 'goldFind', op: 'increased' },
+    tiers: tiers([0.02, 0.03, 0.04, 0.05]),
   },
   sigil: {
     id: 'implicit-crit-chance',
     kind: 'suffix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'critChance', op: 'add' },
-    tiers: tiers([0.004, 0.007, 0.009, 0.011]),
+    effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
+    tiers: tiers([0.003, 0.005, 0.007, 0.008]),
   },
   blade: {
     id: 'implicit-crit-mult',
     kind: 'suffix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'critMult', op: 'add' },
-    tiers: tiers([0.03, 0.05, 0.07, 0.085]),
+    effect: { kind: 'statMod', stat: 'critMult', op: 'flat' },
+    tiers: tiers([0.04, 0.065, 0.09, 0.11]),
   },
   lens: {
     id: 'implicit-area',
     kind: 'prefix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'area', op: 'add' },
+    effect: { kind: 'statMod', stat: 'area', op: 'flat' },
     // Likewise 0.3 would collide with Sweeping's weakest tier.
     tiers: tiers([0.1, 0.16, 0.22, 0.28]),
   },
@@ -101,15 +101,15 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-max-hp',
     kind: 'prefix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'maxHp', op: 'mul' },
-    tiers: tiers([1.015, 1.024, 1.032, 1.04]),
+    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
+    tiers: tiers([0.015, 0.021, 0.027, 0.035]),
   },
   idol: {
     id: 'implicit-toughness',
     kind: 'prefix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'toughness', op: 'mul' },
-    tiers: tiers([1.006, 1.008, 1.01, 1.012]),
+    effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
+    tiers: tiers([0.012, 0.017, 0.021, 0.026]),
   },
 };
 
