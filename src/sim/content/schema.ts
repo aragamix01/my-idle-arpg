@@ -153,6 +153,14 @@ export interface AffixDefinition {
   /** Composes item names: 'Brutal' + base, or base + 'of Haste'. */
   nameFragment: string;
   effect: AffixEffectTemplate;
+  /**
+   * Restricts this affix to weapons of one kind. Absent means "rolls on anything".
+   *
+   * What makes a physical item and a magical item different objects rather than the
+   * same item with different numbers: `+2 to Physical Skill Levels` on a wand would
+   * be a dead row, so it never rolls there.
+   */
+  weapons?: SkillKind;
   /** Ascending by strength. Index 0 is the weakest and always available. */
   tiers: AffixTier[];
 }
@@ -231,7 +239,63 @@ export interface ItemBase {
   name: string;
   /** Logical sprite ID — never a filename. Resolved via the atlas sprite map. */
   sprite: string;
+  /**
+   * The skill this base grants, for weapons. Absent on gear.
+   *
+   * Presence of this field is what makes a base a weapon - there is no separate
+   * `slot` flag to keep in agreement with it.
+   */
+  skillId?: string;
 }
+
+// --- Skills ---------------------------------------------------------------
+
+export const SkillKindSchema = z.enum(['physical', 'magical']);
+export type SkillKind = z.infer<typeof SkillKindSchema>;
+
+/**
+ * A skill, granted by the equipped weapon.
+ *
+ * Skills supply the `base` the three layers build on, which is why introducing them
+ * is a small change rather than another formula rework: `base` was only ever a
+ * constant sitting in BASE_STATS, and a skill replacing that constant leaves the
+ * layers, the affix pool and the currency untouched.
+ *
+ * The four bases below are exactly the four stats a skill owns. Everything else -
+ * max HP, toughness, gold find, crit damage - stays global, because none of them
+ * describe how you attack.
+ */
+export const SkillSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    kind: SkillKindSchema,
+    /** Damage per hit before any modifier. */
+    baseDamage: z.number().positive(),
+    /** Hits or casts per second before any modifier. */
+    baseSpeed: z.number().positive(),
+    /**
+     * Chance to crit before any modifier.
+     *
+     * This is where the two playstyles diverge without a mechanic being removed.
+     * Physical skills carry a real base; spells carry near-zero. Both can still use
+     * every crit affix in the pool - four of the nine suffixes are crit affixes, and
+     * making those dead for casters would halve a caster's suffix pool.
+     */
+    baseCritChance: z.number().min(0).max(1),
+    /**
+     * Enemies struck at once.
+     *
+     * The axis the whole design turns on. resolveStage multiplies damage by
+     * min(area, enemyCount) through the trash phase and ignores area entirely on the
+     * boss, so a wide skill clears waves and duels badly, and a narrow one does the
+     * reverse. The 75s limit applies to the total, so each is a real failure mode.
+     */
+    baseArea: z.number().positive(),
+  })
+  .strict();
+
+export type Skill = z.infer<typeof SkillSchema>;
 
 /** An authored unique. Fixed effects, never rolled, never rerolled. */
 export const UniqueSchema = z

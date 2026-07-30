@@ -27,6 +27,7 @@ export * from './schema';
 export * from './affixes';
 export * from './bases';
 export * from './currency';
+export * from './skills';
 export * from './uniques';
 
 /**

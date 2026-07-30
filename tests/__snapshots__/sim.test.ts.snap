@@ -479,6 +479,64 @@ exports[`content registry > matches its snapshot 1`] = `
         },
       ],
     },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "physicalSkillLevel",
+      },
+      "id": "of-mastery",
+      "kind": "suffix",
+      "nameFragment": "of Mastery",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1,
+        },
+        {
+          "minStage": 15,
+          "value": 2,
+        },
+        {
+          "minStage": 40,
+          "value": 3,
+        },
+        {
+          "minStage": 80,
+          "value": 4,
+        },
+      ],
+      "weapons": "physical",
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "magicalSkillLevel",
+      },
+      "id": "of-attunement",
+      "kind": "suffix",
+      "nameFragment": "of Attunement",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1,
+        },
+        {
+          "minStage": 15,
+          "value": 2,
+        },
+        {
+          "minStage": 40,
+          "value": 3,
+        },
+        {
+          "minStage": 80,
+          "value": 4,
+        },
+      ],
+      "weapons": "magical",
+    },
   ],
   "bases": [
     {
@@ -520,6 +578,18 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "idol",
       "name": "Idol",
       "sprite": "item.deep_delvers_idol",
+    },
+    {
+      "id": "axe",
+      "name": "Axe",
+      "skillId": "sunder",
+      "sprite": "item.axe",
+    },
+    {
+      "id": "wand",
+      "name": "Wand",
+      "skillId": "fireball",
+      "sprite": "item.wand",
     },
   ],
   "uniques": [

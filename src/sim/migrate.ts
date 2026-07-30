@@ -24,6 +24,9 @@ export const CURRENCY_VERSION = 4;
 /** First version where modifiers carry a layer instead of add/mul. */
 export const LAYERS_VERSION = 5;
 
+/** First version with a weapon slot and skills. */
+export const WEAPONS_VERSION = 6;
+
 export interface MigrationResult {
   state: SaveState;
   /** True when anything was reset, so the caller can tell the player. */
@@ -109,6 +112,22 @@ export function migrateSave(state: SaveState): MigrationResult {
       affixes: item.affixes.map(restat),
       baseAffix: item.baseAffix ? restat(item.baseAffix) : undefined,
     }));
+    migrated = true;
+  }
+
+  if (next.weapon === undefined) {
+    // v5 -> v6 adds the weapon slot, and this step is deliberately POWER-NEUTRAL.
+    //
+    // Unarmed's bases are the exact BASE_STATS values every save derived before
+    // skills existed, so a migrated character's stats do not move by a single point
+    // on load. Nothing is rerolled, nothing is granted, and no gear is disturbed.
+    //
+    // What does change is what happens next: the gold upgrade tracks were retuned on
+    // the assumption that a weapon carries two thirds of the ladder, so a migrated
+    // player needs a weapon drop before they can push further. They can still farm
+    // the stage they are on, and weapons take a healthy share of drops, so this
+    // resolves itself within a few clears rather than becoming a wall.
+    next.weapon = null;
     migrated = true;
   }
 

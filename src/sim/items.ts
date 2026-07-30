@@ -18,7 +18,8 @@ import {
   type RolledAffix,
 } from './content/schema';
 import { availableTiers, getAffix, PREFIXES, SUFFIXES } from './content/affixes';
-import { BASES, getBase, getBaseAffix } from './content/bases';
+import { GEAR_BASES, WEAPON_BASES, getBase, getBaseAffix } from './content/bases';
+import { getSkill } from './content/skills';
 import {
   CURRENCY_DROP_WEIGHTS,
   FRAGMENT_GATES,
@@ -35,6 +36,7 @@ import {
   DUNGEON_CURRENCY_PER_CLEAR,
   FRAGMENTS_PER_CLEAR,
   KEY_DROP_CHANCE,
+  WEAPON_DROP_SHARE,
 } from './curves';
 import { createRng, type Rng } from './rng';
 import { BASE_STATS } from './types';
@@ -74,6 +76,23 @@ function weightedRarity(rng: Rng): Rarity {
 }
 
 /**
+ * The affixes a given base may roll.
+ *
+ * An affix with a `weapons` kind rolls only on weapons of that kind - so a wand never
+ * rolls `+ to Physical Skill Levels`, and no gear rolls either. An affix without the
+ * tag rolls anywhere, which is every affix that existed before weapons did.
+ *
+ * `baseId` is optional so the reroll and spirit paths that already know they are
+ * working on a real item can pass it, and the handful of callers that do not have it
+ * fall back to the unrestricted pool rather than silently rolling nothing.
+ */
+export function eligibleAffixes(pool: AffixDefinition[], baseId?: string): AffixDefinition[] {
+  const kind = baseId ? getBase(baseId)?.skillId : undefined;
+  const skill = kind ? getSkill(kind) : undefined;
+  return pool.filter((affix) => !affix.weapons || affix.weapons === skill?.kind);
+}
+
+/**
  * Pick `count` distinct affixes from a pool and roll a tier for each.
  *
  * Distinct within an item, deliberately. Allowing duplicates would let a rare
@@ -84,8 +103,9 @@ function rollAffixes(
   count: number,
   itemLevel: number,
   rng: Rng,
+  baseId?: string,
 ): RolledAffix[] {
-  const candidates = [...pool];
+  const candidates = eligibleAffixes(pool, baseId);
   const rolled: RolledAffix[] = [];
 
   for (let i = 0; i < count && candidates.length > 0; i++) {
@@ -120,15 +140,21 @@ function rollAffixesForRows(
   rows: { prefix: number; suffix: number },
   itemLevel: number,
   rng: Rng,
+  baseId: string,
 ): RolledAffix[] {
   return [
-    ...rollAffixes(PREFIXES, rows.prefix, itemLevel, rng),
-    ...rollAffixes(SUFFIXES, rows.suffix, itemLevel, rng),
+    ...rollAffixes(PREFIXES, rows.prefix, itemLevel, rng, baseId),
+    ...rollAffixes(SUFFIXES, rows.suffix, itemLevel, rng, baseId),
   ];
 }
 
-function rollAffixesForRarity(rarity: Rarity, itemLevel: number, rng: Rng): RolledAffix[] {
-  return rollAffixesForRows(AFFIX_LIMITS[rarity], itemLevel, rng);
+function rollAffixesForRarity(
+  rarity: Rarity,
+  itemLevel: number,
+  rng: Rng,
+  baseId: string,
+): RolledAffix[] {
+  return rollAffixesForRows(AFFIX_LIMITS[rarity], itemLevel, rng, baseId);
 }
 
 /** Which side of the pool an affix id belongs to. */
@@ -182,13 +208,18 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
     }
   }
 
-  const base = BASES[rng.int(BASES.length)];
+  // Weapon-or-gear is decided before the base, and by its own roll rather than by
+  // weapons simply being two entries in one list. A weapon carries most of the
+  // ladder now, so how often one drops is a tuning dial that has to be settable
+  // without adding or removing weapon types to move it.
+  const pool = rng.next() < WEAPON_DROP_SHARE ? WEAPON_BASES : GEAR_BASES;
+  const base = pool[rng.int(pool.length)];
   return {
     uid: String(uid),
     baseId: base.id,
     rarity,
     itemLevel,
-    affixes: rollAffixesForRarity(rarity, itemLevel, rng),
+    affixes: rollAffixesForRarity(rarity, itemLevel, rng, base.id),
     baseAffix: rollBaseAffix(base.id, itemLevel, rng),
     rerolls: 0,
     crafts: 0,
@@ -295,7 +326,7 @@ export function rollDungeonItem(accountSeed: number, uid: number, itemLevel: num
   return {
     ...item,
     rarity: upgraded,
-    affixes: rollAffixesForRarity(upgraded, itemLevel, rng),
+    affixes: rollAffixesForRarity(upgraded, itemLevel, rng, item.baseId),
   };
 }
 
@@ -320,7 +351,7 @@ export function rerollAffixes(accountSeed: number, item: ItemInstance): ItemInst
     // affixRows, not the rarity limits: a spirited item must keep the rows its
     // spirit gave it. Rerolling one back to 2/2 would make gold a way to undo
     // a permanent, one-shot change.
-    affixes: rollAffixesForRows(affixRows(item), item.itemLevel, rng),
+    affixes: rollAffixesForRows(affixRows(item), item.itemLevel, rng, item.baseId),
     rerolls: item.rerolls + 1,
     crafts,
   };
@@ -436,7 +467,7 @@ export function applyCurrencyToItem(
       const kept = item.affixes.filter((a) => sideOf(a.affixId) !== action.only);
       const pool = action.only === 'prefix' ? PREFIXES : SUFFIXES;
       const count = affixRows(item)[action.only];
-      next.affixes = [...kept, ...rollAffixes(pool, count, item.itemLevel, rng)];
+      next.affixes = [...kept, ...rollAffixes(pool, count, item.itemLevel, rng, item.baseId)];
       return { item: next, transmuted: false };
     }
 
@@ -520,7 +551,7 @@ export function applyCurrencyToItem(
         const pool = (side === 'prefix' ? PREFIXES : SUFFIXES).filter(
           (a) => !current.some((r) => r.affixId === a.id),
         );
-        return rollAffixes(pool, rows[side] - current.length, item.itemLevel, rng);
+        return rollAffixes(pool, rows[side] - current.length, item.itemLevel, rng, item.baseId);
       };
 
       next.affixes = [

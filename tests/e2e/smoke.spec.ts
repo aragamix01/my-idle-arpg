@@ -518,22 +518,26 @@ test('dissembling a common yields a fragment without a confirmation', async ({ p
 test('fragments combine into ore, and the ore upgrades a common', async ({ page }) => {
   await page.goto('/');
 
-  // Enough clears that ten Magic Ore Shards have accumulated. Fragments are a
-  // slow trickle by design, so this is the shortest honest route to a craft.
+  // Clear UNTIL ten Magic Ore Shards have accumulated, rather than a fixed number
+  // of attempts. Fragments come from stage bosses, so they only arrive on a clear -
+  // and a fixed attempt count silently assumes every attempt succeeds. It stopped
+  // being true when the upgrade tracks were slowed for weapon scaling: the same 25
+  // attempts now include failures, the shards fell short, and the test timed out
+  // waiting for a Combine button that was never going to appear.
   await page.evaluate(async () => {
-    for (let i = 0; i < 25; i++) {
-      await fetch('/api/command', {
+    const post = (body: unknown) =>
+      fetch('/api/command', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'attemptStage' }),
-      });
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+
+    for (let i = 0; i < 120; i++) {
+      const result = await post({ type: 'attemptStage' });
       for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
-        await fetch('/api/command', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ type: 'buyUpgrade', key, count: 'max' }),
-        });
+        await post({ type: 'buyUpgrade', key, count: 'max' });
       }
+      if ((result?.state?.currency?.['magic-ore-shard'] ?? 0) >= 10) return;
     }
   });
   await page.reload();
@@ -566,7 +570,10 @@ test('fragments combine into ore, and the ore upgrades a common', async ({ page 
   // One fewer common, because it became a magic. The arming clears itself, so
   // the next click inspects rather than crafting again.
   await expect(tiles).toHaveCount(commonsBefore - 1);
-  await expect(panel.getByText(/armed/)).toHaveCount(0);
+  // Word-bounded, because the weapon slot renders "Unarmed" when empty and a bare
+  // /armed/ matches the middle of it. The banner this is asserting the absence of
+  // reads "Magic Ore armed".
+  await expect(panel.getByText(/\barmed\b/)).toHaveCount(0);
   await expect(page.getByText(/used Magic Ore/)).toBeVisible();
 });
 
@@ -656,7 +663,13 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
   expect(total).toBeGreaterThan(4);
 
   // Equip one, so select mode has something it must refuse to offer.
-  await tiles.first().click();
+  //
+  // Explicitly a piece of GEAR, not just the first tile. A fifth of drops are
+  // weapons now and a weapon goes to its own slot, so "Equipped (1/4)" would never
+  // appear - and since the newest item is a weapon only sometimes, taking the first
+  // tile made this pass or fail depending on the account seed.
+  const gear = tiles.filter({ hasNotText: /Axe|Wand/ }).first();
+  await gear.click();
   await panel.getByRole('button', { name: 'Equip', exact: true }).click();
   await expect(panel.getByText('Equipped (1/4)')).toBeVisible();
 

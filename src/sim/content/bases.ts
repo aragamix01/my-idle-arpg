@@ -111,9 +111,52 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
     tiers: tiers([0.005, 0.008, 0.011, 0.014]),
   },
+
+  /**
+   * Weapon implicits.
+   *
+   * A weapon already carries by far the largest guaranteed contribution on any item -
+   * its skill, and the skill level its own item level grants. So its implicit is
+   * deliberately ordinary and on the stat that fits the weapon's role rather than
+   * being a second headline: crit for the duelling weapon, area for the wide one.
+   */
+  axe: {
+    id: 'implicit-axe-crit',
+    kind: 'suffix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
+    // Must collide with neither the Sigil's crit implicit nor of-Precision at any
+    // tier. 0.007 was of-Precision's weakest roll, and the guard caught it.
+    tiers: tiers([0.002, 0.0035, 0.005, 0.0065]),
+  },
+  wand: {
+    id: 'implicit-wand-area',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'area', op: 'increased' },
+    // 0.05 was Titanic's weakest roll, so a Wand carrying both rendered "5.0%
+    // increased Area" twice. Caught by the guard, and by a rendering test.
+    tiers: tiers([0.018, 0.028, 0.038, 0.048]),
+  },
 };
 
-export const BASES: ItemBase[] = [
+/**
+ * Weapon bases.
+ *
+ * Kept in their own list because they roll into a different slot and because
+ * `rollItem` needs to decide gear-or-weapon before it picks a base. A `skillId` is
+ * what makes a base a weapon - there is no second flag that could disagree with it.
+ */
+export const WEAPON_BASES: ItemBase[] = [
+  // An Axe rather than a Sword because the tile sheet has no free sword: 104 is the
+  // player's swing animation and 105-107 are already bound. A base whose name and
+  // icon disagree is the kind of defect only a screenshot catches, so the name
+  // followed the art.
+  { id: 'axe', name: 'Axe', sprite: 'item.axe', skillId: 'sunder' },
+  { id: 'wand', name: 'Wand', sprite: 'item.wand', skillId: 'fireball' },
+];
+
+export const GEAR_BASES: ItemBase[] = [
   { id: 'whetstone', name: 'Whetstone', sprite: 'item.whetstone' },
   { id: 'glove', name: 'Glove', sprite: 'item.quickdraw_glove' },
   { id: 'purse', name: 'Purse', sprite: 'item.coin_purse' },
@@ -124,6 +167,14 @@ export const BASES: ItemBase[] = [
   { id: 'idol', name: 'Idol', sprite: 'item.deep_delvers_idol' },
 ];
 
+/**
+ * Every base, gear and weapon.
+ *
+ * Kept as the flat list it always was, so validation, sprite checks and the display
+ * path do not have to know the split exists. Only the roll path does.
+ */
+export const BASES: ItemBase[] = [...GEAR_BASES, ...WEAPON_BASES];
+
 const byId = new Map(BASES.map((b) => [b.id, b]));
 
 export function getBase(id: string): ItemBase | undefined {
@@ -133,4 +184,13 @@ export function getBase(id: string): ItemBase | undefined {
 /** The implicit affix definition for a base, or undefined for uniques. */
 export function getBaseAffix(baseId: string): AffixDefinition | undefined {
   return BASE_AFFIXES[baseId];
+}
+
+/** The skill a base grants, or undefined when the base is gear. */
+export function baseSkillId(baseId: string): string | undefined {
+  return getBase(baseId)?.skillId;
+}
+
+export function isWeaponBase(baseId: string): boolean {
+  return baseSkillId(baseId) !== undefined;
 }

@@ -249,6 +249,7 @@ export function Game() {
           hud={hud}
           busy={pending}
           onEquip={(slot, itemId) => void send({ type: 'equipItem', slot, itemId })}
+          onEquipWeapon={(itemId) => void send({ type: 'equipWeapon', itemId })}
           onReroll={(uid) => void send({ type: 'rerollItem', uid })}
           onDissemble={(uids) => void send({ type: 'dissembleItems', uids })}
           onApplyCurrency={(currencyId, uid) => void send({ type: 'applyCurrency', currencyId, uid })}

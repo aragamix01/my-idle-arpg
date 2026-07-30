@@ -258,6 +258,35 @@ export const SUFFIXES: AffixDefinition[] = [
     // Must not collide with Vital at any tier.
     tiers: tiers([0.016, 0.025, 0.034, 0.045]),
   },
+  {
+    /**
+     * The weapon mods, and the only affixes in the pool locked to a base type.
+     *
+     * A skill level raises the equipped skill's BASE damage, which is a position no
+     * other affix occupies - flat adds to base, increased and more multiply it, and
+     * this moves the thing they all act on. So it is worth more than any single
+     * affix, and being weapon-locked is what bounds it: only one item in a loadout is
+     * a weapon, so a build carries one of these rather than four.
+     *
+     * Locked rather than merely weak on the wrong weapon. `+3 to Physical Skill
+     * Levels` on a wand would be a row that renders as a bonus and does nothing at
+     * all, which is worse than a row that is a poor pick.
+     */
+    id: 'of-mastery',
+    kind: 'suffix',
+    nameFragment: 'of Mastery',
+    effect: { kind: 'statMod', stat: 'physicalSkillLevel', op: 'flat' },
+    weapons: 'physical',
+    tiers: tiers([1, 2, 3, 4]),
+  },
+  {
+    id: 'of-attunement',
+    kind: 'suffix',
+    nameFragment: 'of Attunement',
+    effect: { kind: 'statMod', stat: 'magicalSkillLevel', op: 'flat' },
+    weapons: 'magical',
+    tiers: tiers([1, 2, 3, 4]),
+  },
 ];
 
 /** The rollable pool. Implicits are deliberately not in here - they never roll. */

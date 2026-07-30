@@ -50,7 +50,22 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   maxHp: { label: 'Max HP', format: compact },
   toughness: { label: 'Toughness', format: (v) => `x${v.toFixed(2)}` },
   goldFind: { label: 'Gold Find', format: (v) => `x${v.toFixed(2)}` },
+  // "to" is part of the label so the line reads "+1 to Magical Skill Levels" rather
+  // than "+1 Magical Skill Levels", which parses as a count of levels you own
+  // instead of a bonus to the skill you are wielding.
+  physicalSkillLevel: { label: 'to Physical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
+  magicalSkillLevel: { label: 'to Magical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
 };
+
+/**
+ * Stats the character sheet does not list.
+ *
+ * The two skill-level stats are modifier *inputs* - they feed the equipped skill's
+ * base and are shown on the weapon, where a player can act on them. Listing them
+ * beside Damage would imply they are a stat you own rather than a bonus to a skill
+ * you might not even be wielding.
+ */
+const SHEET_HIDDEN: StatKey[] = ['physicalSkillLevel', 'magicalSkillLevel'];
 
 /**
  * Border and text colours per rarity.
@@ -194,9 +209,11 @@ export const CURRENCY_TIER_STYLE: Record<CurrencyTier, { border: string; text: s
 
 /** Ordered stat list for the character sheet. */
 export function statEntries(stats: Stats): { key: StatKey; label: string; value: string }[] {
-  return (Object.keys(STAT_LABELS) as StatKey[]).map((key) => ({
-    key,
-    label: STAT_LABELS[key].label,
-    value: STAT_LABELS[key].format(stats[key]),
-  }));
+  return (Object.keys(STAT_LABELS) as StatKey[])
+    .filter((key) => !SHEET_HIDDEN.includes(key))
+    .map((key) => ({
+      key,
+      label: STAT_LABELS[key].label,
+      value: STAT_LABELS[key].format(stats[key]),
+    }));
 }

@@ -71,6 +71,14 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     'item.bloodstone': 115,
     'item.deep_delvers_idol': 129,
 
+    // Weapon bases. Picked by rendering the sheet at 6x and reading it, not by
+    // guessing indices - 117 is the double axe and 131 the staff, and both were the
+    // only free tiles that read unmistakably as a weapon at 16px. There is no free
+    // sword: 104 is the player's swing animation and 105-107 are bound to
+    // giant_slayer and two shards.
+    'item.axe': 117,
+    'item.wand': 131,
+
     // Currency. Tiny Dungeon has no purpose-drawn crafting icons, so these are
     // the closest readable stand-ins from what the pack ships: potions for the
     // ores, torches for the flames, chests and tomes for the rest. The colour

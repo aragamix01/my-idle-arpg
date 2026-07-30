@@ -10,7 +10,7 @@
  * player actually selected.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ITEM_SLOTS,
   DISSEMBLE_YIELD,
@@ -20,6 +20,10 @@ import {
   itemName,
   itemPower,
   itemSprite,
+  isWeaponBase,
+  baseSkillId,
+  getSkill,
+  UNARMED,
   killsPerSecond,
   statsDps,
   critFactor,
@@ -54,6 +58,7 @@ interface Props {
   hud: HudSnapshot;
   busy: boolean;
   onEquip: (slot: number, itemId: string | null) => void;
+  onEquipWeapon: (itemId: string | null) => void;
   onReroll: (uid: string) => void;
   onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
@@ -66,6 +71,7 @@ export function CharacterPanel({
   hud,
   busy,
   onEquip,
+  onEquipWeapon,
   onReroll,
   onDissemble,
   onApplyCurrency,
@@ -131,6 +137,7 @@ export function CharacterPanel({
               busy={busy}
               armed={armed}
               onEquip={onEquip}
+              onEquipWeapon={onEquipWeapon}
               onReroll={onReroll}
               onDissemble={onDissemble}
               onApplyCurrency={(currencyId, uid) => {
@@ -229,6 +236,7 @@ function InventoryTab({
   busy,
   armed,
   onEquip,
+  onEquipWeapon,
   onReroll,
   onDissemble,
   onApplyCurrency,
@@ -237,6 +245,7 @@ function InventoryTab({
   busy: boolean;
   armed: CurrencyId | null;
   onEquip: (slot: number, itemId: string | null) => void;
+  onEquipWeapon: (itemId: string | null) => void;
   onReroll: (uid: string) => void;
   onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
@@ -277,10 +286,21 @@ function InventoryTab({
 
   const byUid = useMemo(() => new Map(hud.items.map((item) => [item.uid, item])), [hud.items]);
 
+  /**
+   * Worn anywhere, gear slot or weapon slot.
+   *
+   * A useCallback because the filter memo below depends on it, and a plain
+   * function would be a new value every render and defeat the memo entirely.
+   */
+  const isEquipped = useCallback(
+    (uid: string) => hud.loadout.includes(uid) || hud.weapon === uid,
+    [hud.loadout, hud.weapon],
+  );
+
   const visible = useMemo(() => {
     const filtered = hud.items.filter((item) => {
       if (rarityFilter.length > 0 && !rarityFilter.includes(item.rarity)) return false;
-      if (equippedOnly && !hud.loadout.includes(item.uid)) return false;
+      if (equippedOnly && !isEquipped(item.uid)) return false;
       return true;
     });
 
@@ -300,7 +320,7 @@ function InventoryTab({
           return Number(b.uid) - Number(a.uid);
       }
     });
-  }, [hud.items, hud.loadout, rarityFilter, equippedOnly, sort]);
+  }, [hud.items, isEquipped, rarityFilter, equippedOnly, sort]);
 
   const selectedItem = selected ? byUid.get(selected) : undefined;
 
@@ -309,7 +329,19 @@ function InventoryTab({
       current.includes(rarity) ? current.filter((r) => r !== rarity) : [...current, rarity],
     );
 
+  const weaponItem = hud.weapon ? byUid.get(hud.weapon) : undefined;
+  const equippedSkill = getSkill(
+    (weaponItem && baseSkillId(weaponItem.baseId)) || UNARMED.id,
+  )!;
+  const weaponSkillLevel = weaponItem ? weaponItem.itemLevel : 0;
+
   const equip = (uid: string) => {
+    const item = byUid.get(uid);
+    // A weapon never goes in a gear slot. There is one weapon slot, so equipping is
+    // a straight swap rather than a hunt for a free space.
+    if (item && isWeaponBase(item.baseId)) {
+      return onEquipWeapon(hud.weapon === uid ? null : uid);
+    }
     const equippedSlot = hud.loadout.indexOf(uid);
     if (equippedSlot !== -1) return onEquip(equippedSlot, null);
     const free = hud.loadout.indexOf(null);
@@ -318,6 +350,7 @@ function InventoryTab({
     if (free === -1) return;
     onEquip(free, uid);
   };
+
 
   /**
    * A grid click means one of three things, and the order matters.
@@ -332,7 +365,7 @@ function InventoryTab({
       // Equipped items are not selectable at all. The command refuses them
       // anyway, but offering a checkbox that cannot be honoured is worse than
       // not offering one.
-      if (hud.loadout.includes(uid)) return;
+      if (isEquipped(uid)) return;
       return setChosen((current) => {
         const next = new Set(current);
         if (!next.delete(uid)) next.add(uid);
@@ -351,7 +384,7 @@ function InventoryTab({
    * disclose a selection that reaches beyond the current view.
    */
   const selection = hud.items.filter(
-    (item) => chosen.has(item.uid) && !hud.loadout.includes(item.uid),
+    (item) => chosen.has(item.uid) && !isEquipped(item.uid),
   );
 
   const leaveSelectMode = () => {
@@ -373,6 +406,41 @@ function InventoryTab({
 
   return (
     <div className="flex flex-col gap-4">
+      {/*
+        The weapon sits above the gear row and on its own, because it is not one of
+        five equal slots. It decides the skill, and the skill decides which stats
+        matter at all - so putting it in line with four Charms would read as though
+        swapping it were the same kind of choice.
+      */}
+      <Section title="Weapon">
+        <button
+          type="button"
+          disabled={busy || !weaponItem}
+          onClick={() => weaponItem && setSelected(weaponItem.uid)}
+          title={weaponItem ? itemName(weaponItem) : 'No weapon - fighting unarmed'}
+          className={`flex w-full items-center gap-3 rounded border p-2 text-left ${
+            weaponItem
+              ? `${RARITY_STYLE[weaponItem.rarity].border} bg-neutral-900 hover:bg-neutral-800`
+              : 'border-dashed border-neutral-800 bg-neutral-900/50'
+          }`}
+        >
+          <AtlasSprite id={weaponItem ? itemSprite(weaponItem) : 'item.axe'} scale={2} />
+          <span className="flex flex-col gap-0.5">
+            <span
+              className={`text-xs leading-tight ${
+                weaponItem ? RARITY_STYLE[weaponItem.rarity].text : 'text-neutral-600'
+              }`}
+            >
+              {weaponItem ? itemName(weaponItem) : 'Unarmed'}
+            </span>
+            <span className="text-[10px] text-neutral-500">
+              {equippedSkill.name}
+              {weaponItem ? ` · skill level ${weaponSkillLevel}` : ' · find a weapon'}
+            </span>
+          </span>
+        </button>
+      </Section>
+
       <Section title={`Equipped (${hud.loadout.filter(Boolean).length}/${ITEM_SLOTS})`}>
         <div className="grid grid-cols-4 gap-2">
           {hud.loadout.map((uid, slot) => {
@@ -496,7 +564,7 @@ function InventoryTab({
               setChosen((current) => {
                 const next = new Set(current);
                 for (const item of visible) {
-                  if (!hud.loadout.includes(item.uid)) next.add(item.uid);
+                  if (!isEquipped(item.uid)) next.add(item.uid);
                 }
                 return next;
               })
@@ -536,6 +604,7 @@ function InventoryTab({
         <ItemGrid
           items={visible}
           loadout={hud.loadout}
+          weapon={hud.weapon}
           selected={selected}
           armed={armed !== null}
           selecting={selecting}
@@ -546,7 +615,7 @@ function InventoryTab({
 
         <ItemDetail
           item={selectedItem}
-          equipped={selectedItem ? hud.loadout.includes(selectedItem.uid) : false}
+          equipped={selectedItem ? isEquipped(selectedItem.uid) : false}
           slotsFull={!hud.loadout.includes(null)}
           busy={busy}
           onEquip={() => selectedItem && equip(selectedItem.uid)}
@@ -729,6 +798,7 @@ function Actions({
 function ItemGrid({
   items,
   loadout,
+  weapon,
   selected,
   armed,
   selecting,
@@ -738,6 +808,7 @@ function ItemGrid({
 }: {
   items: ItemInstance[];
   loadout: (string | null)[];
+  weapon: string | null;
   selected: string | null;
   armed: boolean;
   selecting: boolean;
@@ -767,7 +838,9 @@ function ItemGrid({
     >
       {items.map((item) => {
         const style = RARITY_STYLE[item.rarity];
-        const isEquipped = loadout.includes(item.uid);
+        // The weapon slot counts too, or the grid would offer the weapon you are
+        // holding as a dissemble candidate that the command then refuses.
+        const isEquipped = loadout.includes(item.uid) || weapon === item.uid;
         // Equipped items cannot be dissembled, so in select mode they are not
         // candidates at all rather than candidates that would be refused.
         const selectable = selecting && !isEquipped;

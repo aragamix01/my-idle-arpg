@@ -18,7 +18,7 @@ export const TUNING = {
    * the ratio of the two matters to any outcome, so this pair is a rescale and
    * nothing else - it exists so flat damage affixes are readable numbers.
    */
-  enemyHpBase: 120,
+  enemyHpBase: 132,
   /**
    * Per-stage multiplicative HP growth. The single most sensitive number here.
    * Must stay below the achievable damage growth per stage or the game walls
@@ -139,6 +139,61 @@ export function bossGold(stage: number): number {
  * `increased`, and vice versa. That is the tension the two layers exist for.
  */
 
+/**
+ * What one skill level multiplies the skill's base damage by.
+ *
+ * Skill level comes from the weapon's item level, so this number decides how much of
+ * the ladder the WEAPON carries rather than the gold upgrade tracks. That is the
+ * expensive decision in this release:
+ *
+ *   enemy HP grows      enemyHpGrowth        per stage  = 1.12
+ *   a weapon grows      SKILL_LEVEL_GAIN     per stage  (item level rises 1 per stage)
+ *
+ * At 1.06 a weapon carries ln(1.06)/ln(1.12) = about **half** the exponent, which
+ * makes it the single largest source of a player's power. The offensive gold tracks
+ * are slowed to carry the other half - see their costGrowth values, which is why
+ * they no longer match the defensive ones.
+ *
+ * ## Why half and not two thirds
+ *
+ * Two thirds was the target and it does not fit. Measured, in order:
+ *
+ *   weapons at 1.0765, gold untouched   -> stage 300 in 16 MINUTES, 0.0s clears
+ *   weapons at 1.0765, gold slowed 65%  -> WALL at stage 117
+ *   weapons at 1.06,   gold slowed 51%  -> holds: 15-56s clears, no wall, ~21h
+ *
+ * The squeeze is that the gold tracks are both the power source AND the income
+ * driver: dG/dt is proportional to power, so slowing them to make room for the
+ * weapon term starves the economy that funds everything, defence included. There is
+ * a ceiling on how much of the ladder can move off gold without the loop stalling,
+ * and it sits near half. Raising this number again means finding power for defence
+ * somewhere other than gold - gear item level scaling effective HP the way weapon
+ * item level scales damage would be the symmetric answer.
+ *
+ * The consequence to keep in mind is that a stale weapon now hurts, and no
+ * parametrisation avoids it - falling behind costs SKILL_LEVEL_GAIN per stage
+ * whatever units the level is counted in. An earlier draft claimed counting levels
+ * as itemLevel/2 would soften it; that is wrong, because the per-stage rate is what
+ * matters and halving the units halves nothing. The real mitigation is drop
+ * frequency: see WEAPON_DROP_SHARE.
+ */
+export const SKILL_LEVEL_GAIN = 1.05;
+
+/**
+ * Share of item drops that are weapons.
+ *
+ * This is the mitigation for the paragraph above, and it is the whole of it. Since a
+ * weapon carries most of the ladder, a player holding a stale one falls behind at
+ * SKILL_LEVEL_GAIN per stage, so the fix has to be that they are rarely holding a
+ * stale one. At one in five, and one to three drops per clear, a fresh weapon arrives
+ * roughly every other clear - never more than a couple of stages behind.
+ *
+ * The consequence is deliberate: a weapon's item level stops being the chase and its
+ * ROLLS become the chase. Finding a weapon is routine; finding a rare one with three
+ * good prefixes is not.
+ */
+export const WEAPON_DROP_SHARE = 0.2;
+
 /** Sparse hand overrides for stages that should feel like walls. */
 const STAGE_OVERRIDES: Record<number, { hpMult?: number; goldMult?: number }> = {
   10: { hpMult: 1.25, goldMult: 1.4 },
@@ -198,12 +253,26 @@ export interface UpgradeTrack {
 export const UPGRADE_TRACKS: Record<UpgradeKey, UpgradeTrack> = {
   damage: {
     key: 'damage', label: 'Damage',
-    baseCost: 10, costGrowth: 1.213, valueGrowth: 1.07, valueAdd: null, maxLevel: null, affectsIncome: true,
+    baseCost: 10, costGrowth: 1.405, valueGrowth: 1.07, valueAdd: null, maxLevel: null, affectsIncome: true,
   },
   attackSpeed: {
     key: 'attackSpeed', label: 'Attack Speed',
-    baseCost: 25, costGrowth: 1.14, valueGrowth: 1.04, valueAdd: null, maxLevel: null, affectsIncome: true,
+    baseCost: 25, costGrowth: 1.26, valueGrowth: 1.04, valueAdd: null, maxLevel: null, affectsIncome: true,
   },
+  /**
+   * The defensive tracks are NOT slowed to match the offensive ones, and that is
+   * deliberate rather than an oversight.
+   *
+   * Skill level scales damage and nothing else, so a weapon carries two thirds of the
+   * offensive exponent and none of the defensive one. Matching the TOTALS therefore
+   * requires unmatched TRACKS: offence needs only the last third from gold, defence
+   * needs all of it. Slowing both by the same factor is what the first attempt did,
+   * and it produced 0.3s clear times against a player who was dying anyway - offence
+   * outrunning defence for a fourth time, by a fourth route.
+   *
+   * Note this makes sideExponents() measure the wrong thing on its own: it compares
+   * track exponents, and the weapon term now sits outside the track system entirely.
+   */
   health: {
     key: 'health', label: 'Health',
     baseCost: 15, costGrowth: 1.181, valueGrowth: 1.06, valueAdd: null, maxLevel: null, affectsIncome: false,

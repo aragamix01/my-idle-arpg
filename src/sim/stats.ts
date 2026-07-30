@@ -6,8 +6,15 @@
  * item pool without executing arbitrary code.
  */
 
-import type { Effect, ItemInstance } from './content';
-import { UPGRADE_TRACKS } from './curves';
+import {
+  baseSkillId,
+  getSkill,
+  UNARMED,
+  type Effect,
+  type ItemInstance,
+  type Skill,
+} from './content';
+import { SKILL_LEVEL_GAIN, UPGRADE_TRACKS } from './curves';
 import { itemEffects } from './items';
 import {
   BASE_STATS,
@@ -102,16 +109,85 @@ export function findItem(save: SaveState, uid: string): ItemInstance | undefined
   return save.items.find((item) => item.uid === uid);
 }
 
-/** Effects from currently equipped items only — owned-but-unequipped do nothing. */
+/** The equipped weapon, or undefined when unarmed. */
+export function equippedWeapon(save: SaveState): ItemInstance | undefined {
+  return save.weapon ? findItem(save, save.weapon) : undefined;
+}
+
+/**
+ * Effects from currently equipped items only — owned-but-unequipped do nothing.
+ *
+ * The weapon counts. It is an ordinary item that happens to also grant a skill, so
+ * its affixes and implicit contribute exactly like any other equipped item's.
+ */
 export function equippedEffects(save: SaveState): Effect[] {
   const out: Effect[] = [];
-  for (const uid of save.loadout) {
+  for (const uid of [...save.loadout, save.weapon]) {
     if (!uid) continue;
     const item = findItem(save, uid);
     if (!item) continue; // loadout referencing a discarded or migrated-away item
     out.push(...itemEffects(item));
   }
   return out;
+}
+
+/**
+ * The skill the equipped weapon grants, or Unarmed.
+ *
+ * Unarmed's bases are the pre-weapon BASE_STATS values, so a save with an empty
+ * weapon slot derives exactly what it derived before skills existed.
+ */
+export function equippedSkill(save: SaveState): Skill {
+  const weapon = equippedWeapon(save);
+  const id = weapon ? baseSkillId(weapon.baseId) : undefined;
+  return (id ? getSkill(id) : undefined) ?? UNARMED;
+}
+
+/**
+ * The equipped skill's level.
+ *
+ * Item level is the source, which is what makes depth matter again: the tier gates
+ * stop at stage 80, so before this an item level 226 drop rolled from the same table
+ * as an item level 80 one and pushing deeper bought nothing but gold.
+ *
+ * Modifiers add to it, and only ones matching the skill's kind - a wand gains
+ * nothing from `+2 to Physical Skill Levels`. Unarmed is level zero and never
+ * scales; it is a fallback, not a build.
+ */
+export function skillLevel(save: SaveState, ctx: EffectContext): number {
+  const weapon = equippedWeapon(save);
+  if (!weapon) return 0;
+  const skill = equippedSkill(save);
+  const stat = skill.kind === 'physical' ? 'physicalSkillLevel' : 'magicalSkillLevel';
+
+  let bonus = 0;
+  for (const e of equippedEffects(save)) {
+    if (e.kind === 'statMod' && e.stat === stat && conditionHolds(e, ctx)) bonus += e.value;
+  }
+  return Math.max(0, weapon.itemLevel + bonus);
+}
+
+/**
+ * The base each stat resolves from.
+ *
+ * Four stats come from the skill and scale with its level; the rest are global. The
+ * skill-level term multiplies the BASE, which is a distinct position from the three
+ * layers - see the note on physicalSkillLevel in types.ts.
+ */
+function baseStats(save: SaveState, ctx: EffectContext): Stats {
+  const skill = equippedSkill(save);
+  return {
+    ...BASE_STATS,
+    // Skill level scales DAMAGE ONLY. Speed, crit and area are the skill's identity
+    // and stay fixed: scaling speed as well would make a weapon deliver its growth
+    // rate squared per stage, which is double what the rate was sized to carry, and
+    // the player would outrun the ladder on weapons alone. Crit and area are bounded
+    // by their own meaning anyway - a probability and a target count.
+    damage: skill.baseDamage * Math.pow(SKILL_LEVEL_GAIN, skillLevel(save, ctx)),
+    attackSpeed: skill.baseSpeed,
+    critChance: skill.baseCritChance,
+    area: skill.baseArea,
+  };
 }
 
 /**
@@ -130,8 +206,9 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
     equippedEffects(save).filter((e) => conditionHolds(e, ctx)),
   );
 
-  const stats = { ...BASE_STATS };
-  for (const key of STAT_KEYS) stats[key] = resolve(BASE_STATS[key], buckets[key]);
+  const base = baseStats(save, ctx);
+  const stats = { ...base };
+  for (const key of STAT_KEYS) stats[key] = resolve(base[key], buckets[key]);
 
   stats.area = Math.max(1, stats.area);
   stats.critChance = Math.min(1, Math.max(0, stats.critChance));
