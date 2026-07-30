@@ -44,6 +44,46 @@ to move the registry into Postgres later without rewriting anything.
 Every save stamps `CONTENT_VERSION`. The server recomputes progress from saves
 that may be weeks old; without the stamp a balance patch silently corrupts them.
 
+## The three modifier layers
+
+Every modifier lands in exactly one layer, and stats resolve as
+
+```
+final = (base + Σ flat) × (1 + Σ increased) × Π more
+```
+
+`flat` and `increased` accumulate in a **sum**, so their marginal value falls:
+the tenth `+5% increased` is worth less than the first. Only `more` compounds.
+
+This replaced a model where every item modifier was a multiplier. There, N
+modifiers multiplied into a product and modifier N+1 was worth *more* than
+modifier N, so the budget could only be held by shrinking every value — base
+implicits were squeezed to `1.038` — and each new row of content arrived into
+that squeeze. A first pass at 1.075 per item put the drop ceiling at 8.8x on its
+own, spending the whole budget before currency existed.
+
+**Where each layer is allowed to live is the load-bearing part:**
+
+| layer | who uses it | why it is safe there |
+|---|---|---|
+| `flat`, `increased` | the rollable affix pool, base implicits | no compounding, so no bound needed |
+| `more` | uniques, gold upgrade tracks | bounded by an authored list, or by a cost curve |
+
+A rollable `more` affix is bounded by nothing. `validateRegistry()` rejects one.
+
+**Every uncapped upgrade track must stay `more`.** Enemy HP grows exponentially
+in stage, so the player's engine has to be exponential too. `increased` sums
+linearly in levels bought and levels grow like `log(gold)`, so an economy driven
+by `increased` purchases grows linearly in stage against exponential enemy HP —
+a permanent wall at any growth rate above 1.0, unfixable by retuning. Compounding
+is safe on the tracks because `Σα < 1` bounds it; see below. `trackLayer()`
+derives the layer rather than declaring it, and a test asserts this.
+
+A corollary worth knowing: because `flat` sits inside the multiplicative envelope,
+a flat roll is amplified by every upgrade bought and never goes stale. That is why
+flat tier tables need no item-level scaling and item tooltips carry no ten-digit
+numbers. It stops being true the moment an uncapped track leaves `more`.
+
 ## What the balance harness taught us
 
 `pnpm balance` runs a greedy agent up the stage ladder. Three findings that were

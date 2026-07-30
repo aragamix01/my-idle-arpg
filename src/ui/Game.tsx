@@ -277,8 +277,11 @@ const EFFECT_NOUNS: Record<string, { noun: string; percent: boolean }> = {
 function effectText(key: string): string {
   const track = UPGRADE_TRACKS[key as keyof typeof UPGRADE_TRACKS];
   const { noun, percent } = EFFECT_NOUNS[key];
+  // Uncapped tracks are the `more` layer, so they compound and must say so - a
+  // bare "+7% damage" reads like an affix that sums with its peers, and these do
+  // not. See trackLayer() in src/sim/curves.ts.
   if (track.valueGrowth !== null) {
-    return `+${((track.valueGrowth - 1) * 100).toFixed(0)}% ${noun}`;
+    return `${((track.valueGrowth - 1) * 100).toFixed(0)}% more ${noun}`;
   }
   const add = track.valueAdd ?? 0;
   return percent ? `+${(add * 100).toFixed(1)}% ${noun}` : `+${add} ${noun}`;

@@ -37,6 +37,7 @@ import {
   KEY_DROP_CHANCE,
 } from './curves';
 import { createRng, type Rng } from './rng';
+import { BASE_STATS } from './types';
 
 /** Arbitrary large odd multiplier, so reroll streams never collide with drops. */
 const REROLL_STREAM = 0x9e3779b1;
@@ -579,10 +580,17 @@ export function itemSprite(item: ItemInstance): string {
  * Only used by the balance harness and by "discard the worst" logic - the real
  * comparison is what deriveStats produces, which depends on the rest of the
  * build. This is a heuristic and is not shown to players.
+ *
+ * Every layer is normalised to "fraction of the stat's base", which is the only
+ * way the three become comparable: `+4.8 flat damage` and `+8% increased damage`
+ * are both worth about 0.08 of a base-60 damage pool, and a naive sum of raw
+ * values would rate the flat roll sixty times higher.
  */
 export function itemPower(item: ItemInstance): number {
   return itemEffects(item).reduce((power, effect) => {
     if (effect.kind === 'goldOnKill') return power + effect.multiplier;
-    return power + (effect.op === 'mul' ? Math.abs(effect.value - 1) : Math.abs(effect.value) * 0.1);
+    if (effect.op === 'more') return power + Math.abs(effect.value - 1);
+    if (effect.op === 'increased') return power + Math.abs(effect.value);
+    return power + Math.abs(effect.value) / Math.max(BASE_STATS[effect.stat], 1e-9);
   }, 0);
 }

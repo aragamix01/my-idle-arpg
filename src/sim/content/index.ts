@@ -15,11 +15,13 @@ import { BASE_AFFIXES, BASES } from './bases';
 import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
 import { UNIQUES } from './uniques';
 import { EffectSchema, UniqueSchema } from './schema';
+import { BASE_STATS } from '../types';
 
 /** 2: artifacts became rolled item instances with prefixes and suffixes. */
 /** 3: bases carry implicits, drops come in threes, and "artifact" became "item". */
 /** 4: crafting currency, fragments, spirits, and dissembling. */
-export const CONTENT_VERSION = 4;
+/** 5: modifiers carry a layer - flat, increased, more - instead of add/mul. */
+export const CONTENT_VERSION = 5;
 
 export * from './schema';
 export * from './affixes';
@@ -65,6 +67,33 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
           };
     const parsed = EffectSchema.safeParse(sample);
     if (!parsed.success) errors.push(`${affix.id}: produces an invalid effect`);
+
+    if (affix.effect.kind === 'statMod') {
+      const { stat, op } = affix.effect;
+
+      // The rollable pool must not compound. A `more` affix multiplies rather
+      // than summing, so N copies grow as a product and the marginal value of the
+      // next roll rises with the last - which is the pathology the layer system
+      // was introduced to remove. `more` is reserved for content bounded by
+      // something: an authored unique list, or a gold cost curve.
+      if (op === 'more') errors.push(`${affix.id}: rollable affixes may not use the more layer`);
+
+      // For a stat whose base is already a multiplier, adding to the base *is*
+      // increasing it, so a flat table would be a second name for one operation
+      // and would render as a duplicate line.
+      if (op === 'flat' && BASE_STATS[stat] === 1) {
+        errors.push(`${affix.id}: ${stat} is a multiplier and has no meaningful flat layer`);
+      }
+
+      // Crit multiplier already multiplies into DPS through critFactor, so a
+      // `more` layer on top of that compounds twice over. `increased` is fine and
+      // Of Cruelty uses it - it widens the pool critFactor multiplies rather than
+      // multiplying the result again. The pool-wide `more` ban above already
+      // covers rollable affixes; this is the rule uniques are held to as well.
+      if (stat === 'critMult' && op === 'more') {
+        errors.push(`${affix.id}: critMult must not take a more modifier`);
+      }
+    }
   }
 
   const seenBase = new Set<string>();

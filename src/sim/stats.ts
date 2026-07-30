@@ -9,19 +9,17 @@
 import type { Effect, ItemInstance } from './content';
 import { UPGRADE_TRACKS } from './curves';
 import { itemEffects } from './items';
-import type { EffectContext, SaveState, StatKey, Stats, UpgradeLevels } from './types';
+import {
+  BASE_STATS,
+  STAT_KEYS,
+  type EffectContext,
+  type SaveState,
+  type StatKey,
+  type Stats,
+  type UpgradeLevels,
+} from './types';
 
-/** Stats with zero upgrades and no artifacts. */
-export const BASE_STATS: Stats = {
-  damage: 6,
-  attackSpeed: 1.5,
-  area: 2,
-  critChance: 0.05,
-  critMult: 2.0,
-  maxHp: 100,
-  toughness: 1.0,
-  goldFind: 1.0,
-};
+export { BASE_STATS };
 
 /** Which stat each upgrade track drives. */
 const TRACK_STAT: Record<keyof UpgradeLevels, StatKey> = {
@@ -34,21 +32,60 @@ const TRACK_STAT: Record<keyof UpgradeLevels, StatKey> = {
   toughness: 'toughness',
 };
 
+/** The three layers, accumulated per stat before anything is resolved. */
+interface Layers {
+  flat: number;
+  increased: number;
+  more: number;
+}
+
+type Buckets = Record<StatKey, Layers>;
+
+function emptyBuckets(): Buckets {
+  return Object.fromEntries(
+    STAT_KEYS.map((key) => [key, { flat: 0, increased: 0, more: 1 }]),
+  ) as Buckets;
+}
+
 /**
  * Growth rates live in UPGRADE_TRACKS, not here — the feedback exponent that
  * governs the whole economy is computed from those same numbers, and two copies
  * would drift.
+ *
+ * Upgrades fill the same buckets item effects do. That is the point of bucketing
+ * rather than pre-multiplying a Stats: upgrades and items become commensurable,
+ * so the power budget can compare an affix against a purchase instead of against
+ * an already-collapsed number.
  */
-function applyUpgrades(base: Stats, levels: UpgradeLevels): Stats {
-  const s: Stats = { ...base };
+function collectUpgrades(buckets: Buckets, levels: UpgradeLevels): void {
   for (const [key, track] of Object.entries(UPGRADE_TRACKS)) {
     const level = levels[key as keyof UpgradeLevels];
     if (level <= 0) continue;
-    const stat = TRACK_STAT[key as keyof UpgradeLevels];
-    if (track.valueGrowth !== null) s[stat] *= Math.pow(track.valueGrowth, level);
-    else if (track.valueAdd !== null) s[stat] += track.valueAdd * level;
+    const layers = buckets[TRACK_STAT[key as keyof UpgradeLevels]];
+    if (track.valueGrowth !== null) layers.more *= Math.pow(track.valueGrowth, level);
+    else if (track.valueAdd !== null) layers.flat += track.valueAdd * level;
   }
-  return s;
+}
+
+function collectEffects(buckets: Buckets, effects: Effect[]): void {
+  for (const e of effects) {
+    if (e.kind !== 'statMod') continue;
+    const layers = buckets[e.stat as StatKey];
+    if (e.op === 'flat') layers.flat += e.value;
+    else if (e.op === 'increased') layers.increased += e.value;
+    else layers.more *= e.value;
+  }
+}
+
+/**
+ * Collapse the layers of one stat.
+ *
+ * `(base + flat) × (1 + increased) × more`. The sum in the middle is why the
+ * common layers have diminishing returns and why a sixth affix row is now
+ * affordable - see ModLayer in src/sim/content/schema.ts.
+ */
+function resolve(base: number, layers: Layers): number {
+  return (base + layers.flat) * (1 + layers.increased) * layers.more;
 }
 
 function conditionHolds(effect: Effect, ctx: EffectContext): boolean {
@@ -80,23 +117,21 @@ export function equippedEffects(save: SaveState): Effect[] {
 /**
  * Derive final stats for a given combat context.
  *
- * All `add` operations apply before all `mul`, so ordering within the loadout
- * never changes the result. That property is what makes loadouts comparable.
+ * Every contribution is bucketed by layer first and the layers resolve in a
+ * fixed order, so ordering within the loadout never changes the result. That
+ * property is what makes loadouts comparable, and it survived the move from
+ * two passes to three.
  */
 export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
-  const stats = applyUpgrades(BASE_STATS, save.upgrades);
-  const effects = equippedEffects(save).filter((e) => conditionHolds(e, ctx));
+  const buckets = emptyBuckets();
+  collectUpgrades(buckets, save.upgrades);
+  collectEffects(
+    buckets,
+    equippedEffects(save).filter((e) => conditionHolds(e, ctx)),
+  );
 
-  for (const e of effects) {
-    if (e.kind === 'statMod' && e.op === 'add') {
-      stats[e.stat as StatKey] += e.value;
-    }
-  }
-  for (const e of effects) {
-    if (e.kind === 'statMod' && e.op === 'mul') {
-      stats[e.stat as StatKey] *= e.value;
-    }
-  }
+  const stats = { ...BASE_STATS };
+  for (const key of STAT_KEYS) stats[key] = resolve(BASE_STATS[key], buckets[key]);
 
   stats.area = Math.max(1, stats.area);
   stats.critChance = Math.min(1, Math.max(0, stats.critChance));

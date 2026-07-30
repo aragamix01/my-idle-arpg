@@ -1,52 +1,192 @@
-#Phase1
-Crafting item & new gameplay dungeon
-- Each stage can drop multiple items random between 1 to 3
-- increase inventory item to 100 with sorting and filtering / also improve ui i don't need to scroll so far
-- add a new currency that drop from new mechanic
+# Roadmap
+
+Reordered after Phase 1 shipped. The original order was 1-2-3-4-5; the formula
+rework moved to the front because every other phase authors numbers priced against
+the damage formula, and authoring them before the rework meant pricing them twice.
+
+Status: [done] shipped and verified  [next] in progress or up next  [todo] not started
+
+
+## [done] Phase 1 - Crafting items & the dungeon
+- Each stage drops 1 to 3 items at random
+- Inventory raised to 200 (later than planned; started at 100) with sorting and filtering
+- New currency dropping from the dungeon
+- Bulk dissemble by explicit multi-select, not by filter sweep
 currency
 	basic
-	- sacred idol -> next reroll will roll only prefix
-	- dark idol -> next reroll will roll only suffix
-	- magic ore -> upgrade common item to magic item and add suffix
-	- rare ore -> upgrade magic to rare item and add 1 prefix/ 1 suffix
-	- angel flame -> reroll tier of each prefix/suffix not change the stats just roll number tier
-	- angel droplet -> randomly upgrade common item to unique item or destroy it? (success rate around 10%)
+	- sacred idol -> next reroll rolls only prefixes
+	- dark idol -> next reroll rolls only suffixes
+	- magic ore -> upgrade common to magic
+	- rare ore -> upgrade magic to rare
+	- angel flame -> reroll the tier of each modifier, not which modifiers
+	- angel droplet -> common becomes unique, or is destroyed (10% success)
 
 	spirit
-	> spirit currency are can use one on item not valid with other spirit that applied before. if use bishop spirit it mean item have 1 prefix with 3 suffix
-	- bishop spirit -> can use only on rare item. remove 1 prefix and add suffix row can use once per item. mark spirit modifier 1/1 can not use with all spirit item
-	- devil spirit -> can use only on rare item. remove 1 suffix and add prefix row can use once per item. mark spirit modifier 1/1 can not use with all spirit item
-	- dune spirit -> can use only on rare item. remove (0 - 1) suffix or prefix and + 1 prefix or suffix row. can use once per item. mark spirit modifier 1/1 can not use with all spirit item
+	> one spirit per item, ever, and never alongside another
+	- bishop spirit -> rare only. trades a prefix row for a suffix row
+	- devil spirit -> rare only. trades a suffix row for a prefix row
+	- dune spirit -> rare only. removes 0-1 rows and adds 1, either side. the only route to an extra row
 
-	flagment
-	> fragment are not drop from boss dungeon but drop from stage boss randomly 0-3 flagment
-	> fragment also can obtain from dissemble item also change discard to dissemble (common item -> magic ore flagment, magic item -> rare ore flagment, rare item -> angel flame flagment, unique item -> angel droplet flagment)
-	- magic ore flagment -> collect this 10ea to combie to magic ore
-	- rare ore flagment -> collect this 10ea to combine to rare ore
-	- angel flame flagment -> collect this 10ea to combine to angel flame
-	- angel droplet flagment -> collect this 10ea to combine to angel droplet
+	fragment
+	> not from the dungeon boss - from stage bosses, 0-3 per clear
+	> also from dissembling (common -> magic ore, magic -> rare ore, rare -> angel flame, unique -> angel droplet)
+	- 10 fragments combine into the currency they name
 
-- new mechanic from above is dungeon fighting. it a boss fight with guarantee drop item above with scaling boss stats random drop from 1 to 2 currency
-- spirit currency are much rarer compare to other currency
-- dungeon have boss with scaling power and need key to attempt
-- key drop from normal wave boss random drop around 20% (u decide)
-- new currency can see in inventory (fix slot like currency stash tab on POE) and can click to activate and use gold to reroll
-- create new reroll modal with list of currency that can click to activate after user click reroll in inventory
-- move character button away from other stats and make it easy to see with new style button and add some icon
-- make unable to discard equip item / add confirmation of dissemble rare/unique item
-- add base affix of each item that can not roll with gold
-- rename artifact to item (if it still artifact)
+- Dungeon: a boss fight with a guaranteed item drop, scaling boss stats, 1-2 currency
+- Spirits are far rarer than everything else
+- Dungeon needs a key; keys drop from stage bosses at 20%
+- Currency has its own stash tab, click to arm, gold to reroll
+- Craft modal listing the armed currency; stays open so a player can reroll until satisfied
+- Character button moved out and restyled
+- Equipped items cannot be dissembled; rare/unique dissembles need confirmation
+- Base implicit per item, never rerollable by gold or by any currency
+- "artifact" renamed to "item" throughout
 
 
+## [done] Phase 5a-1 - The three modifier layers
+> Was Phase 5. Moved first: it replaces the damage formula, and Phase 2 and 4 both
+> author numbers against that formula.
 
-#Phase2
-New uniqe item
-- new unique items think the naming for me below are base affix and it special mechanic
-	- area + (0.25 - 2) / while equip this add 1-3 slot of equip item
-	- attack + (2% - 10%) / while equip this u have no crit chance but attack * (150% - 300%)
-	- attack + (2% - 10%) / while equip this area is 0 and attack speed * (150% - 300%)
-	- crit rate - (30% - 50%) / while equip this crit damage multiple (3 - 5) times
-	- gold drop - (30% - 60%) / while equip this item key drop from stage boss are twice
-	- gold drop - (30% - 60%) / whike equip this item each currency drop from dungeon boss are twice
-	- equip item slot - (1-2) / effect of other equip item is * (200% - 500%)
-- if u have any idea just add it. one rule unique item may have downside stats then have fantasy stats following
+- Every modifier now declares a layer, and stats resolve as
+      final = (base + sum flat) x (1 + sum increased) x product more
+- flat and increased accumulate in a SUM, so their marginal value falls instead of
+  rising. This is the fix for "it scales too fast": the old pool was all
+  multipliers, so modifier N+1 was worth more than modifier N
+- `more` is the only compounding layer. Reserved for uniques and the gold upgrade
+  tracks, both bounded by something. A rollable `more` affix is rejected by
+  validateRegistry
+- Crit reworked: critChance = (base + flat) x (1 + increased), critMult additive
+- Migration re-resolves every stored modifier value onto the new scale
+
+Two things from the original plan turned out to be wrong and were dropped:
+- Upgrade tracks CANNOT move to the `increased` layer. Enemy HP grows exponentially
+  in stage; `increased` grows linearly in levels bought, and levels grow like
+  log(gold). Linear against exponential walls permanently at any growth rate above
+  1.0, and no retune fixes it. Tracks stay `more`
+- Item-level-scaled flat tables are therefore unnecessary. A flat roll sits inside
+  the multiplicative envelope, so every upgrade amplifies it and it never goes
+  stale. No pegging, no ten-digit tooltips
+
+Measured: drop ceiling 5.4x, craft 8.6x, offence/defence symmetry 0.008.
+Stage 300 still reachable with no wall. Total elapsed shortened 4.7d -> 1.8d.
+
+
+## [done] Phase 5a-2 - Modifier rows and the wider pool
+- Rows per rarity: common 1 prefix 1 suffix, magic 2/2, rare 3/3
+- The power ceiling deliberately did NOT move (5.4x drop, 8.6x craft). Per-affix
+  values came down to pay for the rows. The gain is surface, not power: six
+  modifiers to read instead of four, and a much wider gap between rarities
+- Added a flat and an increased variant for each stat, since the two multiply each
+  other - holding a lot of one makes the other the better pick
+- Added defensive SUFFIXES. Widening the rows broke the offence/defence invariant
+  structurally: offence could use 5 of its 6 rows, defence only 3, because every
+  defensive affix was a prefix. Measured 0.47 asymmetry against a 0.15 bound
+- Magic Ore and Dune Spirit descriptions corrected for the new row counts
+
+Ladder after: stage 300 in 2.0d, clear times 18-29s, no wall.
+
+
+## [next] Phase 2 - Unique items
+> Now priced against the finished formula rather than the old one.
+
+- Unique TIER first, setting drop weight - how hard each one is to obtain. Build the
+  mechanism now, fill it in as more uniques are added
+- Uniques roll their values within an authored range; Angel Flame is the only
+  currency that touches them
+- One rule: a unique may carry a downside, and then a fantasy payoff on top
+- The seven from the original list:
+	- area + (0.25 - 2) / grants 1-3 extra equip slots
+	- attack + (2% - 10%) / no crit chance at all, but attack x (150% - 300%)
+	- attack + (2% - 10%) / area is 0, but attack speed x (150% - 300%)
+	- crit rate - (30% - 50%) / crit damage x (3 - 5)
+	- gold drop - (30% - 60%) / stage boss key drops doubled
+	- gold drop - (30% - 60%) / dungeon boss currency doubled
+	- equip slots - (1-2) / other equipped items' effects x (200% - 500%)
+- Add a defensive unique too. Every one above is offence or economy, and a unique
+  tier with no defensive chase item fails the symmetry invariant structurally - the
+  same fault that hit Phase 1's affix pool and again in 5a-2
+
+Uniques are already the only content using the `more` layer, which is what makes
+one feel like a different class of item rather than a rare with a name.
+
+
+## [todo] Phase 5a-3 - Elements, resistances, penetration
+> Deferred. The layer system and the wider pool are worth having in players' hands
+> before the stat surface triples.
+
+- Damage splits into pools: physical plus fire, cold, lightning, darkness
+- Each pool carries its own flat and increased layers; the gold damage track
+  multiplies all of them, or an elemental build has no exponential engine and walls
+- Defensive layer gets resistance
+- Penetration, subtracted from a target's resistance before it applies
+
+Open design question to settle before starting: four elements against a single
+constant enemy resistance would be four NAMES for one stat - identical math, four
+times the balance surface, and no decision anywhere. So enemy resistance has to
+vary by stage, which means damage swings as you climb and the clear-time band has to
+survive it. That is the thing to measure first.
+
+Also unresolved: one penetration stat and one resistance stat, or four of each. Four
+of each is a gearing tax that makes sense across a dozen equipment slots; across
+four it is book-keeping.
+
+
+## [todo] Phase 3 - More loot
+- Monster waves drop items rarely, relative to how many monsters die
+	- dungeon keys
+	- some uniques
+	- other rare drops later
+- This affects offline play
+- If the inventory is full, overflow into a temporary inventory the player has to
+  check and clear before continuing
+- Currency menu needs clear effect descriptions
+
+> Cheapest remaining phase and almost formula-independent, so it can slot in
+> anywhere. The currency descriptions are already a known gap.
+
+
+## [todo] Phase 4 - Tablets & the Abyssal dungeon
+- Monster waves drop a new currency
+	- Tablet, around 0.1% - rare but not hard to obtain given the kill rate
+- Tablets are the entry to the Abyssal dungeon
+- Clear (n) waves, then the boss
+- Tablets have tiers like items (common, magic, rare)
+- Tablets carry implicit and explicit modifiers
+- Implicit enhances loot, drop rate, gold found
+- Explicit is prefix/suffix like an item, but buffs the monsters and the boss
+- More explicits is harder and also enhances the implicit. High risk, high return
+- Higher tablet tier needs more waves cleared
+- Limited HP inside; at zero you leave with nothing
+- Tablets get their own tab in the character modal, holding 200 like items
+- Most crafting currency works on a tablet
+
+> Needs Phase 5a-3 finished first if tablet modifiers are to use elements, and it
+> authors a whole second affix pool - so it comes after the formula is settled.
+
+
+## [todo] Phase 5b - Accessories
+> Split out of the original Phase 5. Its drop source is the Abyssal dungeon, so it
+> belongs with Phase 4 rather than with the formula rework.
+
+- New item type: ring and amulet
+- Accessories have tiers and take most crafting currency like any item
+- Accessory modifiers are always percentage
+- 2 ring slots and 1 amulet slot on the character
+- Drop only from the Abyssal dungeon, 1-2 guaranteed, related to the tablet implicit
+
+
+## [todo] Phase 5c - The upgrade panel
+> Also split out of Phase 5. Independent of everything else.
+
+- Rework the stat upgrade buttons
+- Each track now declares which layer it feeds, so the panel can say "7% more
+  damage" for a compounding track and "+0.25 targets" for a flat one - it already
+  does, but the panel is otherwise unchanged from before layers existed
+
+
+## Known issues, unrelated to any phase
+- /api/health passes Supabase error strings straight to a public endpoint. Delete it
+- Gold passes Number.MAX_SAFE_INTEGER around stage 290 and nothing warns. The
+  gentler curve after 5a-1 pushed this out but did not remove it
+- Prestige vs big numbers is still undecided, and stage 300 in ~2 days of optimal
+  play suggests the pacing dial (upgrade costGrowth) is worth a look

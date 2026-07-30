@@ -1,24 +1,66 @@
 /**
  * The affix pool.
  *
- * Prefixes carry body stats, suffixes carry utility - the split is arbitrary in
- * isolation but it is what makes "1 prefix" and "1 prefix + 1 suffix" mean
+ * Prefixes lean toward the big pools - damage, max HP, area - and suffixes toward
+ * the multipliers and utility - attack speed, crit, gold. The split is arbitrary
+ * in isolation but it is what makes "1 prefix" and "1 prefix + 1 suffix" mean
  * different things rather than just different counts.
  *
- * An item never rolls the same affix twice, so with four prefixes in the pool a
- * rare (2 prefixes) must take two different ones. That bounds stacking: the
+ * It is a lean and not a rule, deliberately: **each half has to carry both
+ * offensive and defensive options**, for the reason below.
+ *
+ * An item never rolls the same affix twice, so with eight prefixes in the pool a
+ * rare (3 prefixes) must take three different ones. That bounds stacking: the
  * best possible loadout is four items each carrying at most one Brutal, not
- * eight Brutals.
+ * twelve Brutals.
+ *
+ * ## Both sides must be able to build defensively
+ *
+ * The rows went to 3/3, and that broke the offence/defence invariant
+ * *structurally* before a single number changed. Count the rows each side can
+ * actually use: offence had two useful prefixes (Brutal, Honed - area does not
+ * enter statsDps) and every suffix, so five of its six rows did something.
+ * Defence had four useful prefixes to fit in three rows and **no useful suffix at
+ * all**, so three. Three against five is the stage-222 failure arriving
+ * structurally, which is exactly how the Warded fault arrived in Phase 1.
+ *
+ * Hence Of Stone and Of Vigour: defensive suffixes, so defence also reaches five
+ * useful rows. A half that can only build one side caps that side's usable rows,
+ * and no amount of retuning the values fixes a row that has nothing to put in it.
+ *
+ * ## Layers
+ *
+ * Every affix here is `flat` or `increased`. **Nothing in the rollable pool is
+ * `more`** - the compounding layer belongs to uniques and to the gold upgrade
+ * tracks, both of which are bounded by something (an authored list, a cost
+ * curve). A rollable `more` affix is bounded by nothing, which is precisely how
+ * the old all-multiplier pool ended up squeezing every value down to a few
+ * percent. See ModLayer in ./schema.ts.
+ *
+ * Most stats carry a flat variant *and* an increased variant, deliberately. The
+ * two multiply each other, so a player holding a lot of `increased damage` wants
+ * flat next and vice versa - which is a real decision, where two multipliers on
+ * the same stat were interchangeable.
+ *
+ * Two stats have no flat variant: `toughness` and `goldFind` are multipliers
+ * already, so adding to their base of 1.0 *is* an increase. Offering both would
+ * be two names for one operation.
  *
  * ## Tier values and the power budget
  *
- * The budget is ~4x total power, and it is deliberately **split across offence
- * and defence** rather than loaded onto damage.
+ * Because a layer sums rather than multiplies, "four copies of the same affix" is
+ * `1 + 4v`, not `(1+v)^4` - which is the whole reason six affix rows are
+ * affordable at all.
  *
- *   offence   damage 1.10^4 x attackSpeed 1.06^4 x crit  ~= 2.06x
- *   defence   maxHp  1.16^4 x toughness    1.03^4        ~= 2.04x
- *   ------------------------------------------------------------
- *   combined                                             ~= 4.2x
+ * The rows widened from 2/2 to 3/3 and the **ceiling deliberately did not move**:
+ * roughly 5.4x from drops and 8.6x fully crafted, which is what the ladder is
+ * tuned against. So these values came *down* to pay for the new rows. Do not read
+ * a smaller number here as a nerf - a rare carries six of them now.
+ *
+ * The exact figures are not written out any more, because they were wrong within
+ * one commit of being written and a stale worked example is worse than none. Run
+ * the power-budget suite in tests/sim.test.ts: it searches the pool for the real
+ * best-in-slot loadout and prints it on failure.
  *
  * The split is not cosmetic. Clear time holds steady only while offence and
  * defence grow together - that is the invariant recorded in src/sim/README.md,
@@ -48,29 +90,62 @@ export const PREFIXES: AffixDefinition[] = [
     id: 'brutal',
     kind: 'prefix',
     nameFragment: 'Brutal',
-    effect: { kind: 'statMod', stat: 'damage', op: 'mul' },
-    tiers: tiers([1.04, 1.06, 1.08, 1.1]),
+    effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
+    tiers: tiers([0.021, 0.031, 0.041, 0.055]),
+  },
+  {
+    /**
+     * The flat counterpart to Brutal.
+     *
+     * Flat damage is added to a base of 60 before any percentage applies, so it
+     * is amplified by every damage upgrade the player buys and never goes stale.
+     * That is also why it needs no item-level scaling - see the note in
+     * src/sim/curves.ts.
+     */
+    id: 'honed',
+    kind: 'prefix',
+    nameFragment: 'Honed',
+    effect: { kind: 'statMod', stat: 'damage', op: 'flat' },
+    tiers: tiers([1.3, 2.1, 2.8, 3.4]),
   },
   {
     id: 'vital',
     kind: 'prefix',
     nameFragment: 'Vital',
-    effect: { kind: 'statMod', stat: 'maxHp', op: 'mul' },
-    tiers: tiers([1.07, 1.1, 1.13, 1.16]),
+    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
+    // Sized level with the toughness affixes on purpose. maxHp and toughness both
+    // multiply straight into effective HP, so a magnitude gap between them would
+    // make one strictly better and the other dead content.
+    tiers: tiers([0.018, 0.028, 0.038, 0.05]),
+  },
+  {
+    id: 'bulwark',
+    kind: 'prefix',
+    nameFragment: 'Bulwark',
+    effect: { kind: 'statMod', stat: 'maxHp', op: 'flat' },
+    tiers: tiers([1.5, 2.6, 3.8, 5]),
   },
   {
     id: 'armoured',
     kind: 'prefix',
     nameFragment: 'Armoured',
-    effect: { kind: 'statMod', stat: 'toughness', op: 'mul' },
-    tiers: tiers([1.015, 1.02, 1.025, 1.03]),
+    effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
+    tiers: tiers([0.017, 0.027, 0.036, 0.048]),
   },
   {
     id: 'sweeping',
     kind: 'prefix',
     nameFragment: 'Sweeping',
-    effect: { kind: 'statMod', stat: 'area', op: 'add' },
+    effect: { kind: 'statMod', stat: 'area', op: 'flat' },
     tiers: tiers([0.3, 0.5, 0.65, 0.8]),
+  },
+  {
+    /** The increased counterpart to Sweeping, on a base of 2 targets. */
+    id: 'titanic',
+    kind: 'prefix',
+    nameFragment: 'Titanic',
+    effect: { kind: 'statMod', stat: 'area', op: 'increased' },
+    tiers: tiers([0.05, 0.08, 0.11, 0.14]),
   },
   {
     /**
@@ -82,21 +157,21 @@ export const PREFIXES: AffixDefinition[] = [
      * defence failure again, arriving structurally rather than through tuning,
      * and the craft-ceiling symmetry test caught it.
      *
-     * There are only two defensive *stats* - maxHp and toughness - so a third
-     * defensive affix necessarily shares one of them. That is fine, and common
-     * in the genre, but the two must not be interchangeable: an item carrying
-     * Armoured and Warded at the same magnitude renders two identical lines and
-     * reads as a rendering bug. Warded is deliberately the stronger of the pair
-     * so the two are always visibly different.
+     * Now that Bulwark and the defensive suffixes exist the structural fault is
+     * gone - but the affix stays. It is what makes "increase toughness" a choice
+     * between magnitudes rather than a single forced pick, and removing it would
+     * silently re-narrow the defensive pool.
      */
     id: 'warded',
     kind: 'prefix',
     nameFragment: 'Warded',
-    effect: { kind: 'statMod', stat: 'toughness', op: 'mul' },
-    // No value here may equal one of Armoured's, at any tier - not just at the
-    // same tier. Armoured T2 and Warded T4 both landing on 1.02 rendered the
-    // same line as surely as two identical affixes would.
-    tiers: tiers([1.022, 1.029, 1.036, 1.043]),
+    effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
+    // No value here may equal Armoured's or Of Stone's, at any tier - not just at
+    // the same tier. All three toughness affixes land in the `increased` layer and
+    // sum, so an item carrying Armoured T3 and Warded T2 at the same value would
+    // render the identical line twice and read as a bug. validateRegistry checks
+    // it, because three overlapping tables are past what anyone eyeballs.
+    tiers: tiers([0.019, 0.029, 0.04, 0.052]),
   },
 ];
 
@@ -105,29 +180,83 @@ export const SUFFIXES: AffixDefinition[] = [
     id: 'of-haste',
     kind: 'suffix',
     nameFragment: 'of Haste',
-    effect: { kind: 'statMod', stat: 'attackSpeed', op: 'mul' },
-    tiers: tiers([1.025, 1.04, 1.05, 1.06]),
+    effect: { kind: 'statMod', stat: 'attackSpeed', op: 'increased' },
+    tiers: tiers([0.015, 0.023, 0.031, 0.042]),
+  },
+  {
+    /** Flat attack speed, on a base of 1.5 swings per second. */
+    id: 'of-fury',
+    kind: 'suffix',
+    nameFragment: 'of Fury',
+    effect: { kind: 'statMod', stat: 'attackSpeed', op: 'flat' },
+    tiers: tiers([0.024, 0.039, 0.053, 0.065]),
   },
   {
     id: 'of-precision',
     kind: 'suffix',
     nameFragment: 'of Precision',
-    effect: { kind: 'statMod', stat: 'critChance', op: 'add' },
-    tiers: tiers([0.01, 0.018, 0.025, 0.03]),
+    effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
+    tiers: tiers([0.007, 0.013, 0.018, 0.022]),
+  },
+  {
+    /**
+     * Increased crit chance, which multiplies the flat pool rather than adding
+     * to it. Worthless on its own at a 5% base and strong beside Precision - the
+     * clearest example in the pool of the two layers needing each other.
+     */
+    id: 'of-focus',
+    kind: 'suffix',
+    nameFragment: 'of Focus',
+    effect: { kind: 'statMod', stat: 'critChance', op: 'increased' },
+    tiers: tiers([0.058, 0.092, 0.126, 0.16]),
   },
   {
     id: 'of-ruin',
     kind: 'suffix',
     nameFragment: 'of Ruin',
-    effect: { kind: 'statMod', stat: 'critMult', op: 'add' },
-    tiers: tiers([0.08, 0.13, 0.18, 0.22]),
+    effect: { kind: 'statMod', stat: 'critMult', op: 'flat' },
+    tiers: tiers([0.1, 0.16, 0.22, 0.29]),
+  },
+  {
+    /**
+     * Increased crit damage, scaling the whole x2.00 base rather than adding to
+     * it. Legal where a `more` crit multiplier is not: critMult already multiplies
+     * into DPS through critFactor, so a `more` layer on it would compound twice
+     * over, but an `increased` layer just widens the pool it multiplies.
+     */
+    id: 'of-cruelty',
+    kind: 'suffix',
+    nameFragment: 'of Cruelty',
+    effect: { kind: 'statMod', stat: 'critMult', op: 'increased' },
+    tiers: tiers([0.032, 0.052, 0.071, 0.092]),
   },
   {
     id: 'of-avarice',
     kind: 'suffix',
     nameFragment: 'of Avarice',
-    effect: { kind: 'statMod', stat: 'goldFind', op: 'mul' },
-    tiers: tiers([1.06, 1.09, 1.12, 1.15]),
+    effect: { kind: 'statMod', stat: 'goldFind', op: 'increased' },
+    tiers: tiers([0.06, 0.09, 0.12, 0.15]),
+  },
+  {
+    /**
+     * The defensive suffixes. Without these, defence has nothing to put in a
+     * suffix row and caps at three useful rows against offence's five - see the
+     * header. They are the structural fix, not flavour.
+     */
+    id: 'of-stone',
+    kind: 'suffix',
+    nameFragment: 'of Stone',
+    effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
+    // Must not collide with Armoured or Warded at any tier.
+    tiers: tiers([0.015, 0.024, 0.033, 0.043]),
+  },
+  {
+    id: 'of-vigour',
+    kind: 'suffix',
+    nameFragment: 'of Vigour',
+    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
+    // Must not collide with Vital at any tier.
+    tiers: tiers([0.016, 0.025, 0.034, 0.045]),
   },
 ];
 
