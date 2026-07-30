@@ -110,23 +110,51 @@ export function describeEffect(effect: Effect): string {
   return `${sign}${shown} ${label}${suffix}`;
 }
 
+/** Which half of the item a line belongs to. Implicits belong to neither. */
+export type AffixSlot = 'prefix' | 'suffix' | 'implicit';
+
+export interface AffixLine {
+  text: string;
+  tier: string;
+  slot: AffixSlot;
+  /** One letter for the badge: P, S, or a dash for an implicit. */
+  badge: string;
+}
+
 /**
- * A rolled affix as one line: the effect, plus which tier it landed on.
+ * A rolled affix as one line: the effect, its tier, and which half it occupies.
  *
- * The tier is the part that matters once a player has a full loadout - two
- * items can carry the same affix and be worth very different amounts, and
- * without the tier shown there is no way to see that at a glance.
+ * The tier matters once a player has a full loadout - two items can carry the
+ * same affix and be worth very different amounts. The prefix/suffix marker
+ * matters as soon as currency exists: a Sacred Idol rerolls one half and leaves
+ * the other alone, and without the marker there is no way to tell which lines a
+ * given currency is about to replace.
+ *
+ * `implicit` is passed by the caller rather than read off the affix, because an
+ * implicit's `kind` is inert - it is neither prefix nor suffix for row counting.
  */
-export function describeRolledAffix(rolled: RolledAffix): { text: string; tier: string } {
+export function describeRolledAffix(rolled: RolledAffix, implicit = false): AffixLine {
   const affix = getAffix(rolled.affixId);
-  if (!affix) return { text: 'unknown modifier', tier: '' };
+  if (!affix) {
+    return { text: 'unknown modifier', tier: '', slot: 'implicit', badge: '-' };
+  }
 
   const effect = affixEffect(rolled);
+  const slot: AffixSlot = implicit ? 'implicit' : affix.kind;
   return {
     text: effect ? describeEffect(effect) : 'unknown modifier',
     tier: `T${displayTier(affix, rolled.tier)}`,
+    slot,
+    badge: slot === 'implicit' ? '-' : slot === 'prefix' ? 'P' : 'S',
   };
 }
+
+/** Badge colour per half, so the two are separable at a glance. */
+export const AFFIX_SLOT_STYLE: Record<AffixSlot, string> = {
+  prefix: 'text-sky-400',
+  suffix: 'text-emerald-400',
+  implicit: 'text-neutral-600',
+};
 
 /**
  * Colour per currency tier.

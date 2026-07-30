@@ -13,11 +13,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ITEM_SLOTS,
-  affixRows,
   effectiveHp,
   enemyCount,
   getCurrency,
-  itemEffects,
   itemName,
   itemPower,
   itemSprite,
@@ -33,13 +31,8 @@ import {
 import { AtlasSprite } from './atlasSprite';
 import { CraftModal } from './CraftModal';
 import { CurrencyStash } from './CurrencyStash';
-import {
-  compact,
-  describeEffect,
-  describeRolledAffix,
-  RARITY_STYLE,
-  statEntries,
-} from './format';
+import { compact, RARITY_STYLE, statEntries } from './format';
+import { ItemMods } from './ItemMods';
 
 type Tab = 'character' | 'inventory' | 'currency';
 type SortKey = 'newest' | 'rarity' | 'itemLevel' | 'power';
@@ -446,14 +439,13 @@ function InventoryTab({
           gold={hud.gold}
           equipped={hud.loadout.includes(craftingItem.uid)}
           busy={busy}
-          onApply={(currencyId) => {
-            onApplyCurrency(currencyId, craftingItem.uid);
-            setCrafting(null);
-          }}
-          onReroll={() => {
-            onReroll(craftingItem.uid);
-            setCrafting(null);
-          }}
+          dps={statsDps(hud.stats)}
+          effectiveHp={effectiveHp(hud.stats)}
+          // Neither of these closes the modal. Crafting is roll-look-roll, and
+          // closing after each application made a player reopen it to continue
+          // the loop they were already in.
+          onApply={(currencyId) => onApplyCurrency(currencyId, craftingItem.uid)}
+          onReroll={() => onReroll(craftingItem.uid)}
           onClose={() => setCrafting(null)}
         />
       )}
@@ -621,9 +613,6 @@ function ItemDetail({
 
   const style = RARITY_STYLE[item.rarity];
   const isUnique = item.rarity === 'unique';
-  const implicit = item.baseAffix ? describeRolledAffix(item.baseAffix) : null;
-  const spirit = item.spirit ? getCurrency(item.spirit) : undefined;
-  const rows = affixRows(item);
 
   return (
     <aside className={`flex flex-col gap-3 rounded border ${style.border} bg-neutral-900/70 p-3`}>
@@ -635,40 +624,10 @@ function ItemDetail({
             {style.label} · iLvl {item.itemLevel}
             {item.rerolls > 0 ? ` · ${item.rerolls} rerolls` : ''}
           </p>
-          {/* A spirit is permanent and one-shot, so the item has to say so
-              plainly - a player must never spend a second one to find out. */}
-          {spirit && (
-            <p className="text-[10px] text-fuchsia-300">
-              {spirit.name} · {rows.prefix}p/{rows.suffix}s · 1/1
-            </p>
-          )}
         </div>
       </div>
 
-      {/* The implicit sits above a rule, the way an item's fixed half reads in
-          the game this borrows from - it is the part a reroll cannot touch. */}
-      {implicit && (
-        <ul className="border-b border-neutral-800 pb-2 text-[11px] text-neutral-300">
-          <li className="flex gap-2">
-            <span className="w-7 shrink-0 font-mono text-neutral-600">{implicit.tier}</span>
-            <span>{implicit.text}</span>
-          </li>
-        </ul>
-      )}
-
-      <ul className="text-[11px] text-neutral-400">
-        {isUnique
-          ? itemEffects(item).map((effect, i) => <li key={i}>{describeEffect(effect)}</li>)
-          : item.affixes.map((rolled, i) => {
-              const line = describeRolledAffix(rolled);
-              return (
-                <li key={i} className="flex gap-2">
-                  <span className="w-7 shrink-0 font-mono text-neutral-600">{line.tier}</span>
-                  <span>{line.text}</span>
-                </li>
-              );
-            })}
-      </ul>
+      <ItemMods item={item} />
 
       <div className="mt-auto flex flex-col gap-1">
         <button

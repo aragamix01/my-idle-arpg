@@ -11,12 +11,25 @@
  * The reason string comes from `currencyLegality`, the same function
  * applyCommand refuses with. A player therefore learns the rule from the exact
  * sentence the server enforces, and the two cannot drift apart.
+ *
+ * ## It stays open, and it shows the item
+ *
+ * Crafting is a loop: roll, look, roll again until it lands. An earlier version
+ * closed on every application and covered the detail pane while open, so the one
+ * screen where modifiers are actively changing was the one screen that did not
+ * show them - a player had to shut the modal to find out what they had just
+ * done, then reopen it to do it again.
+ *
+ * `item` comes from the live store, so every line here updates in place as the
+ * command round-trips. When an Angel Droplet destroys the item the parent stops
+ * finding it and this unmounts, which is the correct exit.
  */
 
 import {
   CURRENCIES,
   currencyLegality,
   itemName,
+  itemSprite,
   rerollCost,
   type CurrencyDefinition,
   type CurrencyId,
@@ -25,6 +38,7 @@ import {
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
 import { compact, CURRENCY_TIER_STYLE, RARITY_STYLE } from './format';
+import { ItemMods } from './ItemMods';
 
 interface Props {
   item: ItemInstance;
@@ -32,6 +46,9 @@ interface Props {
   gold: number;
   equipped: boolean;
   busy: boolean;
+  /** Live character figures, so the effect of an equipped item's roll is visible. */
+  dps: number;
+  effectiveHp: number;
   onApply: (currencyId: CurrencyId) => void;
   onReroll: () => void;
   onClose: () => void;
@@ -43,6 +60,8 @@ export function CraftModal({
   gold,
   equipped,
   busy,
+  dps,
+  effectiveHp,
   onApply,
   onReroll,
   onClose,
@@ -74,19 +93,45 @@ export function CraftModal({
         aria-modal="true"
         aria-label="Craft"
       >
-        <header className="flex shrink-0 items-center gap-2 border-b border-neutral-800 px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wide text-neutral-500">Craft</p>
-            <p className={`truncate text-sm font-medium ${style.text}`}>{itemName(item)}</p>
+        <header className="shrink-0 border-b border-neutral-800 px-4 py-3">
+          <div className="flex items-start gap-2">
+            <AtlasSprite id={itemSprite(item)} scale={2} className="mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className={`truncate text-sm font-medium ${style.text}`}>{itemName(item)}</p>
+              <p className="text-[10px] uppercase tracking-wide text-neutral-500">
+                {style.label} · iLvl {item.itemLevel}
+                {item.rerolls > 0 ? ` · ${item.rerolls} rerolls` : ''}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close craft"
+              className="ml-auto shrink-0 rounded px-2 py-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+            >
+              ✕
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close craft"
-            className="ml-auto rounded px-2 py-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
-          >
-            ✕
-          </button>
+
+          {/* The modifiers being changed, in the window doing the changing. */}
+          <div className="mt-2">
+            <ItemMods item={item} />
+          </div>
+
+          {equipped && (
+            <dl className="mt-2 flex gap-4 border-t border-neutral-800 pt-2 text-[11px]">
+              <div className="flex gap-1.5">
+                <dt className="text-neutral-500">DPS</dt>
+                <dd className="font-mono text-neutral-200">{compact(dps)}</dd>
+              </div>
+              <div className="flex gap-1.5">
+                <dt className="text-neutral-500">Effective HP</dt>
+                <dd className="font-mono text-neutral-200">{compact(effectiveHp)}</dd>
+              </div>
+              {/* Only while equipped: an item on the bench changes nothing, and
+                  showing unmoving numbers would suggest the roll did nothing. */}
+            </dl>
+          )}
         </header>
 
         <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">

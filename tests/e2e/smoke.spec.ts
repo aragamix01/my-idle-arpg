@@ -392,6 +392,74 @@ test('the craft modal explains what it refuses, and applies what it allows', asy
   await expect(panel.getByText('NaN')).toHaveCount(0);
 });
 
+test('the craft modal shows the mods and stays open across rolls', async ({ page }) => {
+  await page.goto('/');
+
+  await page.evaluate(async () => {
+    const post = (body: unknown) =>
+      fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    // Climb first, spending everything on upgrades so item levels rise.
+    for (let i = 0; i < 25; i++) {
+      await post({ type: 'attemptStage' });
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness', 'greed']) {
+        await post({ type: 'buyUpgrade', key, count: 'max' });
+      }
+    }
+    // Then bank. Reroll cost scales with item level, and a climb that spends
+    // every coin on upgrades leaves nothing to craft with - which is how this
+    // test first failed, on a disabled Gold Reroll.
+    for (let i = 0; i < 10; i++) await post({ type: 'attemptStage' });
+  });
+  await page.reload();
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+
+  const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
+  await tiles.first().click();
+  await panel.getByRole('button', { name: 'Craft…' }).click();
+
+  const craft = page.getByRole('dialog', { name: 'Craft' });
+  await expect(craft).toBeVisible();
+
+  // The modifiers are visible in the window that changes them - a prefix or
+  // suffix badge beside every rolled line.
+  const badges = craft.locator('li span').filter({ hasText: /^[PS]$/ });
+  await expect(badges.first()).toBeVisible();
+
+  // The rolled affixes live in the last list in the header; the implicit has
+  // its own above it, separated by a rule.
+  const rolled = craft.locator('header ul').last();
+  const implicit = craft.locator('header ul').first();
+
+  const rolledBefore = await rolled.textContent();
+  const implicitBefore = await implicit.textContent();
+
+  // Roll, and the modal must survive it: crafting is roll-look-roll, and
+  // closing on each application forced a reopen to continue the same loop.
+  const reroll = craft.getByRole('button', { name: /^Gold Reroll/ });
+  await expect(reroll).toBeEnabled();
+  await reroll.click();
+
+  await expect(craft).toBeVisible();
+  await expect.poll(async () => rolled.textContent()).not.toBe(rolledBefore);
+  // The implicit is the guaranteed half and no roll may touch it.
+  expect(await implicit.textContent()).toBe(implicitBefore);
+
+  // And again, without touching anything else.
+  await reroll.click();
+  await expect(craft).toBeVisible();
+
+  await craft.getByRole('button', { name: /Close craft/ }).click();
+  await expect(craft).toBeHidden();
+});
+
 test('dissembling a common yields a fragment without a confirmation', async ({ page }) => {
   await page.goto('/');
 
