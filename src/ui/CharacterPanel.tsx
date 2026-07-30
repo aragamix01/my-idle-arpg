@@ -249,11 +249,31 @@ function InventoryTab({
   /**
    * Items awaiting a dissemble confirmation.
    *
-   * One list for one item and for two hundred. A single rare and a bulk sweep
-   * are the same irreversible action at different scales, and giving them
-   * separate dialogs would mean two places to keep the wording honest.
+   * One list for one item and for two hundred. A single rare and a bulk
+   * selection are the same irreversible action at different scales, and giving
+   * them separate dialogs would mean two places to keep the wording honest.
    */
   const [confirming, setConfirming] = useState<string[] | null>(null);
+  /**
+   * Multi-select mode, and what is in the selection.
+   *
+   * An explicit mode rather than a modifier-click, because a modifier is
+   * invisible until you already know about it and does not exist on touch. It
+   * replaced a button that dissembled everything the filter showed - which was
+   * fast, and far too easy to fire at the wrong filter.
+   */
+  const [selectRequested, setSelectRequested] = useState(false);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+
+  /**
+   * Arming a currency suspends select mode.
+   *
+   * Both claim the grid click, so rather than deciding what a click means when
+   * both are on, only one can be. Derived rather than synchronised into state:
+   * an effect that flipped `selectRequested` off would fight whichever of the
+   * two the player touched last, and the selection survives disarming.
+   */
+  const selecting = selectRequested && armed === null;
 
   const byUid = useMemo(() => new Map(hud.items.map((item) => [item.uid, item])), [hud.items]);
 
@@ -300,13 +320,43 @@ function InventoryTab({
   };
 
   /**
-   * A grid click means "use the armed currency" when one is armed, and
-   * "inspect" otherwise. The armed banner above the grid is what makes the
-   * mode visible - a silent mode switch here would be a trap.
+   * A grid click means one of three things, and the order matters.
+   *
+   * Arming a currency wins, then multi-select, then inspect. Each mode has a
+   * visible banner or a pressed button above the grid, because a silent mode
+   * switch on a click that can destroy things is a trap.
    */
   const onTileClick = (uid: string) => {
     if (armed) return onApplyCurrency(armed, uid);
+    if (selecting) {
+      // Equipped items are not selectable at all. The command refuses them
+      // anyway, but offering a checkbox that cannot be honoured is worse than
+      // not offering one.
+      if (hud.loadout.includes(uid)) return;
+      return setChosen((current) => {
+        const next = new Set(current);
+        if (!next.delete(uid)) next.add(uid);
+        return next;
+      });
+    }
     setSelected(uid);
+  };
+
+  /**
+   * Only what is both selected and still owned - and never what is worn.
+   *
+   * Taken over the whole inventory rather than only what the filter shows, so
+   * narrowing the filter after picking does not silently drop items from the
+   * selection. The count on the button and the breakdown in the dialog are what
+   * disclose a selection that reaches beyond the current view.
+   */
+  const selection = hud.items.filter(
+    (item) => chosen.has(item.uid) && !hud.loadout.includes(item.uid),
+  );
+
+  const leaveSelectMode = () => {
+    setSelectRequested(false);
+    setChosen(new Set());
   };
 
   /** Rares and uniques are worth a confirmation; commons and magics are not. */
@@ -315,17 +365,6 @@ function InventoryTab({
     onDissemble([item.uid]);
     setSelected(null);
   };
-
-  /**
-   * Everything the current filter shows, minus what is equipped.
-   *
-   * Equipped items are dropped here rather than refused by the command, because
-   * the player chose a filter, not a list - and losing a worn item to a sweep
-   * would be the exact misclick the single-item rule exists to prevent. The
-   * dialog says how many were kept.
-   */
-  const sweepable = visible.filter((item) => !hud.loadout.includes(item.uid));
-  const keptEquipped = visible.length - sweepable.length;
 
   const craftingItem = crafting ? byUid.get(crafting) : undefined;
   const confirmingItems = confirming
@@ -420,23 +459,72 @@ function InventoryTab({
           Equipped
         </button>
 
-        {/* Acts on the filter, which is what makes it useful: "dissemble every
-            common" is a rarity chip plus this button, with no per-item
-            clicking. Always confirms - a sweep is irreversible at scale. */}
         <button
           type="button"
-          disabled={busy || sweepable.length === 0}
-          onClick={() => setConfirming(sweepable.map((item) => item.uid))}
-          title="Dissembles everything the current filter shows, keeping equipped items"
-          className="rounded border border-red-900/70 px-2 py-1 text-red-400 hover:bg-red-950/40 disabled:opacity-40"
+          aria-pressed={selecting}
+          disabled={busy}
+          onClick={() => (selecting ? leaveSelectMode() : setSelectRequested(true))}
+          className={`rounded border px-2 py-1 ${
+            selecting
+              ? 'border-sky-500/60 bg-sky-500/15 text-sky-100'
+              : 'border-neutral-800 text-neutral-500 hover:text-neutral-300'
+          }`}
         >
-          Dissemble {sweepable.length}
+          Select
         </button>
 
         <span className="ml-auto font-mono text-neutral-500">
           {visible.length}/{hud.items.length}
         </span>
       </div>
+
+      {/* The selection toolbar only exists in select mode, so the destructive
+          button cannot be clicked by someone who never opted in. */}
+      {selecting && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-sky-500/40 bg-sky-500/5 px-3 py-2 text-xs">
+          <span className="text-sky-100">
+            {selection.length} selected
+            {/* Says so when the selection reaches past what is on screen -
+                otherwise the count looks wrong against the visible grid. */}
+            {selection.length > visible.filter((i) => chosen.has(i.uid)).length &&
+              ' (some hidden by the filter)'}
+          </span>
+
+          <button
+            type="button"
+            onClick={() =>
+              setChosen((current) => {
+                const next = new Set(current);
+                for (const item of visible) {
+                  if (!hud.loadout.includes(item.uid)) next.add(item.uid);
+                }
+                return next;
+              })
+            }
+            className="rounded border border-neutral-700 px-2 py-1 hover:bg-neutral-800"
+          >
+            Select shown
+          </button>
+
+          <button
+            type="button"
+            disabled={chosen.size === 0}
+            onClick={() => setChosen(new Set())}
+            className="rounded border border-neutral-700 px-2 py-1 hover:bg-neutral-800 disabled:opacity-40"
+          >
+            Clear
+          </button>
+
+          <button
+            type="button"
+            disabled={busy || selection.length === 0}
+            onClick={() => setConfirming(selection.map((item) => item.uid))}
+            className="ml-auto rounded border border-red-900/70 px-2 py-1 text-red-400 hover:bg-red-950/40 disabled:opacity-40"
+          >
+            Dissemble {selection.length}
+          </button>
+        </div>
+      )}
 
       {armed && (
         <p className="rounded border border-emerald-500/60 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
@@ -450,6 +538,8 @@ function InventoryTab({
           loadout={hud.loadout}
           selected={selected}
           armed={armed !== null}
+          selecting={selecting}
+          chosen={chosen}
           onSelect={onTileClick}
           empty={hud.items.length === 0}
         />
@@ -486,12 +576,14 @@ function InventoryTab({
       {confirmingItems.length > 0 && (
         <ConfirmDissemble
           items={confirmingItems}
-          keptEquipped={confirmingItems.length > 1 ? keptEquipped : 0}
           onCancel={() => setConfirming(null)}
           onConfirm={() => {
             onDissemble(confirmingItems.map((item) => item.uid));
             setConfirming(null);
             setSelected(null);
+            // Selection cleared, mode kept. A player clearing out an inventory
+            // is usually not done after one batch.
+            setChosen(new Set());
           }}
         />
       )}
@@ -513,12 +605,10 @@ function InventoryTab({
  */
 function ConfirmDissemble({
   items,
-  keptEquipped,
   onCancel,
   onConfirm,
 }: {
   items: ItemInstance[];
-  keptEquipped: number;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -553,12 +643,6 @@ function ConfirmDissemble({
             .join(', ')}
           .
         </p>
-
-        {keptEquipped > 0 && (
-          <p className="mt-1 text-xs text-emerald-400">
-            {keptEquipped} equipped {keptEquipped === 1 ? 'item' : 'items'} will be kept.
-          </p>
-        )}
 
         <p className="mt-2 text-xs text-neutral-500">
           The items are destroyed. This cannot be undone.
@@ -647,6 +731,8 @@ function ItemGrid({
   loadout,
   selected,
   armed,
+  selecting,
+  chosen,
   onSelect,
   empty,
 }: {
@@ -654,6 +740,8 @@ function ItemGrid({
   loadout: (string | null)[];
   selected: string | null;
   armed: boolean;
+  selecting: boolean;
+  chosen: Set<string>;
   onSelect: (uid: string) => void;
   empty: boolean;
 }) {
@@ -680,24 +768,48 @@ function ItemGrid({
       {items.map((item) => {
         const style = RARITY_STYLE[item.rarity];
         const isEquipped = loadout.includes(item.uid);
+        // Equipped items cannot be dissembled, so in select mode they are not
+        // candidates at all rather than candidates that would be refused.
+        const selectable = selecting && !isEquipped;
+        const isChosen = selecting && chosen.has(item.uid);
+
         return (
           <li key={item.uid}>
             <button
               type="button"
               onClick={() => onSelect(item.uid)}
-              title={`${itemName(item)} — iLvl ${item.itemLevel}`}
-              aria-pressed={selected === item.uid}
-              className={`relative grid aspect-square w-full place-items-center rounded border bg-neutral-900/70 ${
-                style.border
-              } ${armed ? 'cursor-crosshair hover:bg-emerald-900/40' : 'hover:bg-neutral-800'} ${
-                selected === item.uid ? 'ring-2 ring-neutral-100' : ''
-              }`}
+              disabled={selecting && isEquipped}
+              title={
+                selecting && isEquipped
+                  ? `${itemName(item)} — equipped, cannot be dissembled`
+                  : `${itemName(item)} — iLvl ${item.itemLevel}`
+              }
+              aria-pressed={selecting ? isChosen : selected === item.uid}
+              className={[
+                'relative grid aspect-square w-full place-items-center rounded border bg-neutral-900/70',
+                style.border,
+                armed ? 'cursor-crosshair hover:bg-emerald-900/40' : '',
+                selectable ? 'hover:bg-sky-900/40' : '',
+                !armed && !selecting ? 'hover:bg-neutral-800' : '',
+                selecting && isEquipped ? 'cursor-not-allowed opacity-30' : '',
+                // A red ring rather than the neutral inspect ring: these are the
+                // items about to be destroyed, and the colour should say so.
+                isChosen ? 'ring-2 ring-red-400' : '',
+                !selecting && selected === item.uid ? 'ring-2 ring-neutral-100' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
             >
               <AtlasSprite id={itemSprite(item)} scale={2} />
               {/* A dot rather than a word: at this tile size there is no room
                   for a label, and the equipped row above is the full answer. */}
-              {isEquipped && (
+              {isEquipped && !selecting && (
                 <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              )}
+              {isChosen && (
+                <span className="absolute right-0.5 top-0.5 rounded bg-red-500 px-1 text-[9px] font-bold leading-tight text-white">
+                  ✓
+                </span>
               )}
             </button>
           </li>

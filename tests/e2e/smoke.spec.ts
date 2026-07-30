@@ -628,7 +628,7 @@ test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) =>
     .toBe(keysBefore - 1);
 });
 
-test('bulk dissemble sweeps the filter and keeps equipped items', async ({ page }) => {
+test('multi-select dissembles exactly what was picked', async ({ page }) => {
   await page.goto('/');
 
   await page.evaluate(async () => {
@@ -652,41 +652,61 @@ test('bulk dissemble sweeps the filter and keeps equipped items', async ({ page 
   await panel.getByRole('button', { name: /^Inventory/ }).click();
 
   const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
+  const total = await tiles.count();
+  expect(total).toBeGreaterThan(4);
 
-  // Filter to commons, then equip one of them so the sweep has something it
-  // must refuse to destroy.
-  await panel.getByRole('button', { name: 'Common', exact: true }).click();
-  const commons = await tiles.count();
-  expect(commons).toBeGreaterThan(1);
-
+  // Equip one, so select mode has something it must refuse to offer.
   await tiles.first().click();
   await panel.getByRole('button', { name: 'Equip', exact: true }).click();
   await expect(panel.getByText('Equipped (1/4)')).toBeVisible();
 
-  // The button counts only what it will actually destroy.
+  // No destructive bulk button exists until the player opts into select mode.
+  await expect(panel.getByRole('button', { name: /^Dissemble \d+$/ })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Select', exact: true }).click();
+  await expect(panel.getByText('0 selected')).toBeVisible();
+
+  // The equipped tile cannot be picked at all.
+  await expect(tiles.first()).toBeDisabled();
+
+  // Pick three, then unpick one - the toggle has to work both ways.
+  await tiles.nth(1).click();
+  await tiles.nth(2).click();
+  await tiles.nth(3).click();
+  await expect(panel.getByText('3 selected')).toBeVisible();
+  await tiles.nth(3).click();
+  await expect(panel.getByText('2 selected')).toBeVisible();
+
   const sweep = panel.getByRole('button', { name: /^Dissemble \d+$/ });
-  await expect(sweep).toHaveText(`Dissemble ${commons - 1}`);
+  await expect(sweep).toHaveText('Dissemble 2');
+
+  // Cancelling must destroy nothing and keep the selection.
   await sweep.click();
-
-  // A sweep always confirms, whatever is in it, and says what it keeps.
-  const confirm = page.getByRole('alertdialog');
-  await expect(confirm).toBeVisible();
-  await expect(confirm.getByText(`Dissemble ${commons - 1} items?`)).toBeVisible();
-  await expect(confirm.getByText(/1 equipped item will be kept/)).toBeVisible();
-
-  await confirm.getByRole('button', { name: /^Dissemble \d+$/ }).click();
-
-  // Only the equipped common survives.
-  await expect(tiles).toHaveCount(1);
-  await expect(page.getByText(new RegExp(`dissembled ${commons - 1} items`))).toBeVisible();
-
-  // Cancelling must destroy nothing.
-  await panel.getByRole('button', { name: 'Common', exact: true }).click();
-  const remaining = await tiles.count();
-  await panel.getByRole('button', { name: /^Dissemble \d+$/ }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
-  await expect(tiles).toHaveCount(remaining);
+  await expect(tiles).toHaveCount(total);
+  await expect(panel.getByText('2 selected')).toBeVisible();
+
+  await sweep.click();
+  const confirm = page.getByRole('alertdialog');
+  await expect(confirm.getByText('Dissemble 2 items?')).toBeVisible();
+  await confirm.getByRole('button', { name: /^Dissemble \d+$/ }).click();
+
+  // Exactly the two picked, and nothing else.
+  await expect(tiles).toHaveCount(total - 2);
+  await expect(page.getByText(/dissembled 2 items/)).toBeVisible();
+  // Selection cleared, mode kept: clearing an inventory takes more than one batch.
+  await expect(panel.getByText('0 selected')).toBeVisible();
+
+  // Select shown picks everything visible except what is worn.
+  await panel.getByRole('button', { name: 'Select shown' }).click();
+  await expect(panel.getByText(`${total - 3} selected`)).toBeVisible();
+
+  await panel.getByRole('button', { name: 'Clear' }).click();
+  await expect(panel.getByText('0 selected')).toBeVisible();
+
+  // Leaving select mode takes the toolbar with it.
+  await panel.getByRole('button', { name: 'Select', exact: true }).click();
+  await expect(panel.getByText(/selected/)).toHaveCount(0);
 });
 
 test('progress survives a reload', async ({ page }) => {
