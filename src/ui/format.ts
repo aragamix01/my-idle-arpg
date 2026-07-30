@@ -10,10 +10,12 @@ import {
   affixEffect,
   displayTier,
   getAffix,
+  SKILL_LEVEL_GAIN,
   type CurrencyTier,
   type Effect,
   type Rarity,
   type RolledAffix,
+  type Skill,
   type StatKey,
   type Stats,
 } from '@/sim';
@@ -50,7 +52,25 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   maxHp: { label: 'Max HP', format: compact },
   toughness: { label: 'Toughness', format: (v) => `x${v.toFixed(2)}` },
   goldFind: { label: 'Gold Find', format: (v) => `x${v.toFixed(2)}` },
+  // Named for the mechanic rather than for stamina or mana, because which one it is
+  // depends on the weapon in your hand and the label has to be right for both.
+  resourceRegen: { label: 'Resource Regen', format: (v) => `${v.toFixed(2)}/s` },
+  // "to" is part of the label so the line reads "+1 to Magical Skill Levels" rather
+  // than "+1 Magical Skill Levels", which parses as a count of levels you own
+  // instead of a bonus to the skill you are wielding.
+  physicalSkillLevel: { label: 'to Physical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
+  magicalSkillLevel: { label: 'to Magical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
 };
+
+/**
+ * Stats the character sheet does not list.
+ *
+ * The two skill-level stats are modifier *inputs* - they feed the equipped skill's
+ * base and are shown on the weapon, where a player can act on them. Listing them
+ * beside Damage would imply they are a stat you own rather than a bonus to a skill
+ * you might not even be wielding.
+ */
+const SHEET_HIDDEN: StatKey[] = ['physicalSkillLevel', 'magicalSkillLevel'];
 
 /**
  * Border and text colours per rarity.
@@ -91,6 +111,13 @@ export function describeEffect(effect: Effect): string {
     return `+${(effect.multiplier * 100).toFixed(0)}% gold per kill${suffix}`;
   }
 
+  // Stated as a multiplier on the chance, not as a percentage point: the base chance
+  // is not shown anywhere, so "+20% key chance" would be unreadable while "x2.0" says
+  // exactly what it does to whatever the base happens to be.
+  if (effect.kind === 'keyDrop') {
+    return `x${effect.multiplier.toFixed(2)} dungeon key drop chance${suffix}`;
+  }
+
   const { label } = STAT_LABELS[effect.stat];
 
   // The three layers must be visibly different, because they are priced
@@ -129,6 +156,35 @@ export function describeEffect(effect: Effect): string {
   const asPercent = effect.stat === 'critChance' || effect.stat === 'critMult';
   const shown = asPercent ? percent(effect.value) : String(Number(effect.value.toFixed(2)));
   return `${sign}${shown} ${label}${suffix}`;
+}
+
+/** Stamina or Mana. Which word is right depends on the weapon in your hand. */
+export function resourceName(skill: Skill): string {
+  return skill.kind === 'magical' ? 'Mana' : 'Stamina';
+}
+
+/**
+ * A skill as the player reads it before equipping the weapon that grants it.
+ *
+ * `regenToSustain` is the number that carries this: a cost of 3.0 means nothing on
+ * its own, and only becomes actionable stated as the regen needed to use the skill
+ * at its own base speed. That is the whole answer to "why does my Staff swing
+ * slower than my Axe" - deriveStats caps attackSpeed at regen/cost silently, so
+ * without this line the cap is a number the player cannot trace to a cause.
+ *
+ * Damage is quoted at the weapon's own item level because that is what equipping it
+ * would give. The other three bases are the skill's identity and do not scale.
+ */
+export function skillSummary(skill: Skill, itemLevel: number) {
+  return {
+    resource: resourceName(skill),
+    damage: compact(skill.baseDamage * Math.pow(SKILL_LEVEL_GAIN, itemLevel)),
+    speed: `${skill.baseSpeed.toFixed(2)}/s`,
+    area: `${skill.baseArea} target${skill.baseArea === 1 ? '' : 's'}`,
+    crit: percent(skill.baseCritChance),
+    cost: skill.resourceCost.toFixed(1),
+    regenToSustain: skill.baseSpeed * skill.resourceCost,
+  };
 }
 
 /** Which half of the item a line belongs to. Implicits belong to neither. */
@@ -194,9 +250,11 @@ export const CURRENCY_TIER_STYLE: Record<CurrencyTier, { border: string; text: s
 
 /** Ordered stat list for the character sheet. */
 export function statEntries(stats: Stats): { key: StatKey; label: string; value: string }[] {
-  return (Object.keys(STAT_LABELS) as StatKey[]).map((key) => ({
-    key,
-    label: STAT_LABELS[key].label,
-    value: STAT_LABELS[key].format(stats[key]),
-  }));
+  return (Object.keys(STAT_LABELS) as StatKey[])
+    .filter((key) => !SHEET_HIDDEN.includes(key))
+    .map((key) => ({
+      key,
+      label: STAT_LABELS[key].label,
+      value: STAT_LABELS[key].format(stats[key]),
+    }));
 }

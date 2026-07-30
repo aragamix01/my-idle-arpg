@@ -25,6 +25,7 @@ import {
   CurrencyIdSchema,
   DISSEMBLE_YIELD,
   getCurrency,
+  isWeaponBase,
   type CurrencyId,
   type CurrencyPurse,
 } from './content';
@@ -40,7 +41,7 @@ import {
   rollItem,
   rollStageBossDrops,
 } from './items';
-import { findItem } from './stats';
+import { findItem, keyDropMultiplier } from './stats';
 import {
   ITEM_SLOTS,
   INVENTORY_CAP,
@@ -76,6 +77,17 @@ export const CommandSchema = z.discriminatedUnion('type', [
       type: z.literal('equipItem'),
       slot: z.number().int().min(0).max(ITEM_SLOTS - 1),
       /** Item uid, or null to clear the slot. */
+      itemId: z.string().nullable(),
+    })
+    .strict(),
+  /**
+   * The weapon has its own command because it has its own slot, and because only a
+   * weapon base may go in it - a check `equipItem` has no reason to carry.
+   */
+  z
+    .object({
+      type: z.literal('equipWeapon'),
+      /** Item uid, or null to fight unarmed. */
       itemId: z.string().nullable(),
     })
     .strict(),
@@ -162,6 +174,9 @@ export function newSave(seed: number, nowMs: number): SaveState {
     items: [],
     currency: {},
     loadout: Array<string | null>(ITEM_SLOTS).fill(null),
+    // A new character starts unarmed, and Unarmed's bases are the old global
+    // BASE_STATS - so stage 1 plays exactly as it did before weapons existed.
+    weapon: null,
     nextItemId: 1,
     lastSeenAt: nowMs,
   };
@@ -208,7 +223,14 @@ export function applyCommand(
 
         // Boss drops are rolled off the same clear-seeded stream, before the
         // item loop advances the uid counter past it.
-        const bossDrops = rollStageBossDrops(next.seed, firstUid, stage);
+        const bossDrops = rollStageBossDrops(
+          next.seed,
+          firstUid,
+          stage,
+          // Evaluated against the boss, since that is what drops the key - a
+          // conditional key effect gated on `isBoss` has to see the fight it names.
+          keyDropMultiplier(next, { stage, isBoss: true, enemyHpFraction: 1 }),
+        );
         next.currency = credit(next.currency, bossDrops);
         for (const [id, count] of Object.entries(bossDrops) as [CurrencyId, number][]) {
           events.push({
@@ -302,6 +324,23 @@ export function applyCommand(
         if (existing !== -1 && existing !== slot) next.loadout[existing] = null;
       }
       next.loadout[slot] = itemId;
+      break;
+    }
+
+    case 'equipWeapon': {
+      const { itemId } = command;
+      if (itemId !== null) {
+        const item = findItem(next, itemId);
+        if (!item) return err(`not owned: ${itemId}`);
+        // Refused rather than silently ignored: equipping a Charm as a weapon would
+        // otherwise leave the player unarmed with no indication why.
+        if (!isWeaponBase(item.baseId)) return err('that is not a weapon');
+        // A weapon in a gear slot is the same item in two places, and the two would
+        // both contribute its effects.
+        const inLoadout = next.loadout.indexOf(itemId);
+        if (inLoadout !== -1) next.loadout[inLoadout] = null;
+      }
+      next.weapon = itemId;
       break;
     }
 
@@ -408,7 +447,12 @@ export function applyCommand(
       // an unequip step is a cheap confirmation that costs nothing to undo.
       // Bulk callers filter equipped items out before sending, so this stays a
       // single rule rather than one rule for one item and another for many.
-      if (uids.some((uid) => next.loadout.includes(uid))) return err('unequip it first');
+      //
+      // The weapon counts as equipped. It is the most expensive item a player owns -
+      // it carries their skill and their skill level - so the one thing this guard
+      // must not miss is the thing they are holding.
+      const equipped = [...next.loadout, next.weapon];
+      if (uids.some((uid) => equipped.includes(uid))) return err('unequip it first');
 
       // Dissembling replaced discarding outright. An item you do not want is
       // now raw material for one you do, which makes a full inventory a pile of

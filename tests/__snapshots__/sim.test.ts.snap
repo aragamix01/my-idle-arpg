@@ -68,6 +68,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "vital",
       "kind": "prefix",
       "nameFragment": "Vital",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -96,6 +97,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "bulwark",
       "kind": "prefix",
       "nameFragment": "Bulwark",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -124,6 +126,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "armoured",
       "kind": "prefix",
       "nameFragment": "Armoured",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -174,6 +177,93 @@ exports[`content registry > matches its snapshot 1`] = `
     {
       "effect": {
         "kind": "statMod",
+        "op": "flat",
+        "stat": "damage",
+      },
+      "id": "savage",
+      "kind": "prefix",
+      "nameFragment": "Savage",
+      "rollsOn": "physical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 2.6,
+        },
+        {
+          "minStage": 15,
+          "value": 4.2,
+        },
+        {
+          "minStage": 40,
+          "value": 5.6,
+        },
+        {
+          "minStage": 80,
+          "value": 6.8,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "damage",
+      },
+      "id": "arcane",
+      "kind": "prefix",
+      "nameFragment": "Arcane",
+      "rollsOn": "magical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 2.4,
+        },
+        {
+          "minStage": 15,
+          "value": 3.9,
+        },
+        {
+          "minStage": 40,
+          "value": 5.2,
+        },
+        {
+          "minStage": 80,
+          "value": 6.4,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "resourceRegen",
+      },
+      "id": "resolute",
+      "kind": "prefix",
+      "nameFragment": "Resolute",
+      "rollsOn": "gear",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.06,
+        },
+        {
+          "minStage": 15,
+          "value": 0.1,
+        },
+        {
+          "minStage": 40,
+          "value": 0.14,
+        },
+        {
+          "minStage": 80,
+          "value": 0.18,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
         "op": "increased",
         "stat": "area",
       },
@@ -208,6 +298,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "warded",
       "kind": "prefix",
       "nameFragment": "Warded",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -404,6 +495,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "of-avarice",
       "kind": "suffix",
       "nameFragment": "of Avarice",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -432,6 +524,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "of-stone",
       "kind": "suffix",
       "nameFragment": "of Stone",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -460,6 +553,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "of-vigour",
       "kind": "suffix",
       "nameFragment": "of Vigour",
+      "rollsOn": "gear",
       "tiers": [
         {
           "minStage": 1,
@@ -476,6 +570,151 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "minStage": 80,
           "value": 0.045,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "resourceRegen",
+      },
+      "id": "of-endurance",
+      "kind": "suffix",
+      "nameFragment": "of Endurance",
+      "rollsOn": "physical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.05,
+        },
+        {
+          "minStage": 15,
+          "value": 0.08,
+        },
+        {
+          "minStage": 40,
+          "value": 0.11,
+        },
+        {
+          "minStage": 80,
+          "value": 0.145,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "resourceRegen",
+      },
+      "id": "of-clarity",
+      "kind": "suffix",
+      "nameFragment": "of Clarity",
+      "rollsOn": "magical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.057,
+        },
+        {
+          "minStage": 15,
+          "value": 0.088,
+        },
+        {
+          "minStage": 40,
+          "value": 0.122,
+        },
+        {
+          "minStage": 80,
+          "value": 0.158,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "resourceRegen",
+      },
+      "id": "of-recovery",
+      "kind": "suffix",
+      "nameFragment": "of Recovery",
+      "rollsOn": "gear",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.035,
+        },
+        {
+          "minStage": 15,
+          "value": 0.06,
+        },
+        {
+          "minStage": 40,
+          "value": 0.085,
+        },
+        {
+          "minStage": 80,
+          "value": 0.105,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "physicalSkillLevel",
+      },
+      "id": "of-mastery",
+      "kind": "suffix",
+      "nameFragment": "of Mastery",
+      "rollsOn": "physical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1,
+        },
+        {
+          "minStage": 15,
+          "value": 2,
+        },
+        {
+          "minStage": 40,
+          "value": 3,
+        },
+        {
+          "minStage": 80,
+          "value": 4,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "magicalSkillLevel",
+      },
+      "id": "of-attunement",
+      "kind": "suffix",
+      "nameFragment": "of Attunement",
+      "rollsOn": "magical",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 1,
+        },
+        {
+          "minStage": 15,
+          "value": 2,
+        },
+        {
+          "minStage": 40,
+          "value": 3,
+        },
+        {
+          "minStage": 80,
+          "value": 4,
         },
       ],
     },
@@ -521,6 +760,30 @@ exports[`content registry > matches its snapshot 1`] = `
       "name": "Idol",
       "sprite": "item.deep_delvers_idol",
     },
+    {
+      "id": "axe",
+      "name": "Axe",
+      "skillId": "sunder",
+      "sprite": "item.axe",
+    },
+    {
+      "id": "maul",
+      "name": "Maul",
+      "skillId": "cleave",
+      "sprite": "item.maul",
+    },
+    {
+      "id": "wand",
+      "name": "Wand",
+      "skillId": "fireball",
+      "sprite": "item.wand",
+    },
+    {
+      "id": "staff",
+      "name": "Staff",
+      "skillId": "frost-nova",
+      "sprite": "item.staff",
+    },
   ],
   "uniques": [
     {
@@ -529,13 +792,17 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "more",
+          "roll": {
+            "max": 1.5,
+            "min": 1.2,
+          },
           "stat": "damage",
-          "value": 1.35,
         },
       ],
       "id": "whetstone",
       "name": "The Whetstone",
       "sprite": "item.whetstone",
+      "tier": "lesser",
     },
     {
       "dropStage": 1,
@@ -543,25 +810,33 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "more",
+          "roll": {
+            "max": 1.42,
+            "min": 1.18,
+          },
           "stat": "attackSpeed",
-          "value": 1.3,
         },
       ],
       "id": "quickdraw-glove",
       "name": "Quickdraw Glove",
       "sprite": "item.quickdraw_glove",
+      "tier": "lesser",
     },
     {
       "dropStage": 3,
       "effects": [
         {
           "kind": "goldOnKill",
-          "multiplier": 0.6,
+          "roll": {
+            "max": 0.8,
+            "min": 0.4,
+          },
         },
       ],
       "id": "coin-purse",
       "name": "Bottomless Purse",
       "sprite": "item.coin_purse",
+      "tier": "lesser",
     },
     {
       "dropStage": 8,
@@ -569,8 +844,11 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "more",
+          "roll": {
+            "max": 2.2,
+            "min": 1.6,
+          },
           "stat": "damage",
-          "value": 1.9,
           "when": {
             "enemyHpBelow": 0.3,
           },
@@ -579,6 +857,7 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "executioners-mark",
       "name": "Executioner's Mark",
       "sprite": "item.executioners_mark",
+      "tier": "greater",
     },
     {
       "dropStage": 12,
@@ -586,8 +865,11 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "more",
+          "roll": {
+            "max": 1.95,
+            "min": 1.45,
+          },
           "stat": "damage",
-          "value": 1.7,
           "when": {
             "isBoss": true,
           },
@@ -595,13 +877,17 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "flat",
+          "roll": {
+            "max": -1,
+            "min": -1,
+          },
           "stat": "area",
-          "value": -1,
         },
       ],
       "id": "giant-slayer",
       "name": "Giant Slayer",
       "sprite": "item.giant_slayer",
+      "tier": "greater",
     },
     {
       "dropStage": 20,
@@ -609,19 +895,26 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "flat",
+          "roll": {
+            "max": 5,
+            "min": 3,
+          },
           "stat": "area",
-          "value": 4,
         },
         {
           "kind": "statMod",
           "op": "more",
+          "roll": {
+            "max": 0.8,
+            "min": 0.8,
+          },
           "stat": "damage",
-          "value": 0.8,
         },
       ],
       "id": "swarm-lens",
       "name": "Swarm Lens",
       "sprite": "item.swarm_lens",
+      "tier": "greater",
     },
     {
       "dropStage": 25,
@@ -629,25 +922,35 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "flat",
+          "roll": {
+            "max": 0.24,
+            "min": 0.12,
+          },
           "stat": "critChance",
-          "value": 0.18,
         },
         {
           "kind": "statMod",
           "op": "flat",
+          "roll": {
+            "max": 0.8,
+            "min": 0.4,
+          },
           "stat": "critMult",
-          "value": 0.6,
         },
         {
           "kind": "statMod",
           "op": "more",
+          "roll": {
+            "max": 0.75,
+            "min": 0.75,
+          },
           "stat": "maxHp",
-          "value": 0.75,
         },
       ],
       "id": "bloodstone",
       "name": "Bloodstone",
       "sprite": "item.bloodstone",
+      "tier": "ancient",
     },
     {
       "dropStage": 40,
@@ -655,15 +958,21 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "kind": "statMod",
           "op": "more",
+          "roll": {
+            "max": 2.4,
+            "min": 1.6,
+          },
           "stat": "goldFind",
-          "value": 2,
           "when": {
             "stageAtLeast": 40,
           },
         },
         {
           "kind": "goldOnKill",
-          "multiplier": 0.5,
+          "roll": {
+            "max": 0.65,
+            "min": 0.35,
+          },
           "when": {
             "isBoss": true,
           },
@@ -672,6 +981,113 @@ exports[`content registry > matches its snapshot 1`] = `
       "id": "deep-delvers-idol",
       "name": "Deep Delver's Idol",
       "sprite": "item.deep_delvers_idol",
+      "tier": "ancient",
+    },
+    {
+      "dropStage": 15,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "more",
+          "roll": {
+            "max": 0,
+            "min": 0,
+          },
+          "stat": "critChance",
+        },
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": 1.2,
+            "min": 0.7,
+          },
+          "stat": "damage",
+        },
+      ],
+      "id": "berserkers-anvil",
+      "name": "Berserker's Anvil",
+      "sprite": "item.berserkers_anvil",
+      "tier": "greater",
+    },
+    {
+      "dropStage": 18,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": 1.4,
+            "min": 0.6,
+          },
+          "stat": "critMult",
+        },
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": -0.3,
+            "min": -0.5,
+          },
+          "stat": "critChance",
+        },
+      ],
+      "id": "duelists-visor",
+      "name": "Duelist's Visor",
+      "sprite": "item.duelists_visor",
+      "tier": "greater",
+    },
+    {
+      "dropStage": 22,
+      "effects": [
+        {
+          "kind": "keyDrop",
+          "roll": {
+            "max": 2.4,
+            "min": 1.6,
+          },
+        },
+        {
+          "kind": "statMod",
+          "op": "increased",
+          "roll": {
+            "max": -0.2,
+            "min": -0.4,
+          },
+          "stat": "goldFind",
+        },
+      ],
+      "id": "wardens-coffer",
+      "name": "Warden's Coffer",
+      "sprite": "item.wardens_coffer",
+      "tier": "greater",
+    },
+    {
+      "dropStage": 30,
+      "effects": [
+        {
+          "kind": "statMod",
+          "op": "more",
+          "roll": {
+            "max": 1.9,
+            "min": 1.4,
+          },
+          "stat": "toughness",
+        },
+        {
+          "kind": "statMod",
+          "op": "more",
+          "roll": {
+            "max": 0.75,
+            "min": 0.75,
+          },
+          "stat": "damage",
+        },
+      ],
+      "id": "bulwark-of-the-deep",
+      "name": "Bulwark of the Deep",
+      "sprite": "item.bulwark_of_the_deep",
+      "tier": "ancient",
     },
   ],
 }

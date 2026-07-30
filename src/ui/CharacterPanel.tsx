@@ -10,7 +10,7 @@
  * player actually selected.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ITEM_SLOTS,
   DISSEMBLE_YIELD,
@@ -20,6 +20,11 @@ import {
   itemName,
   itemPower,
   itemSprite,
+  isWeaponBase,
+  isResourceBound,
+  baseSkillId,
+  getSkill,
+  UNARMED,
   killsPerSecond,
   statsDps,
   critFactor,
@@ -28,11 +33,12 @@ import {
   type ItemInstance,
   type Rarity,
   type SaveState,
+  type Skill,
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
 import { CraftModal } from './CraftModal';
 import { CurrencyStash } from './CurrencyStash';
-import { compact, RARITY_STYLE, statEntries } from './format';
+import { compact, RARITY_STYLE, resourceName, skillSummary, statEntries } from './format';
 import { ItemMods } from './ItemMods';
 
 type Tab = 'character' | 'inventory' | 'currency';
@@ -54,6 +60,7 @@ interface Props {
   hud: HudSnapshot;
   busy: boolean;
   onEquip: (slot: number, itemId: string | null) => void;
+  onEquipWeapon: (itemId: string | null) => void;
   onReroll: (uid: string) => void;
   onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
@@ -66,6 +73,7 @@ export function CharacterPanel({
   hud,
   busy,
   onEquip,
+  onEquipWeapon,
   onReroll,
   onDissemble,
   onApplyCurrency,
@@ -131,6 +139,7 @@ export function CharacterPanel({
               busy={busy}
               armed={armed}
               onEquip={onEquip}
+              onEquipWeapon={onEquipWeapon}
               onReroll={onReroll}
               onDissemble={onDissemble}
               onApplyCurrency={(currencyId, uid) => {
@@ -229,6 +238,7 @@ function InventoryTab({
   busy,
   armed,
   onEquip,
+  onEquipWeapon,
   onReroll,
   onDissemble,
   onApplyCurrency,
@@ -237,6 +247,7 @@ function InventoryTab({
   busy: boolean;
   armed: CurrencyId | null;
   onEquip: (slot: number, itemId: string | null) => void;
+  onEquipWeapon: (itemId: string | null) => void;
   onReroll: (uid: string) => void;
   onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
@@ -277,10 +288,21 @@ function InventoryTab({
 
   const byUid = useMemo(() => new Map(hud.items.map((item) => [item.uid, item])), [hud.items]);
 
+  /**
+   * Worn anywhere, gear slot or weapon slot.
+   *
+   * A useCallback because the filter memo below depends on it, and a plain
+   * function would be a new value every render and defeat the memo entirely.
+   */
+  const isEquipped = useCallback(
+    (uid: string) => hud.loadout.includes(uid) || hud.weapon === uid,
+    [hud.loadout, hud.weapon],
+  );
+
   const visible = useMemo(() => {
     const filtered = hud.items.filter((item) => {
       if (rarityFilter.length > 0 && !rarityFilter.includes(item.rarity)) return false;
-      if (equippedOnly && !hud.loadout.includes(item.uid)) return false;
+      if (equippedOnly && !isEquipped(item.uid)) return false;
       return true;
     });
 
@@ -300,7 +322,7 @@ function InventoryTab({
           return Number(b.uid) - Number(a.uid);
       }
     });
-  }, [hud.items, hud.loadout, rarityFilter, equippedOnly, sort]);
+  }, [hud.items, isEquipped, rarityFilter, equippedOnly, sort]);
 
   const selectedItem = selected ? byUid.get(selected) : undefined;
 
@@ -309,7 +331,21 @@ function InventoryTab({
       current.includes(rarity) ? current.filter((r) => r !== rarity) : [...current, rarity],
     );
 
+  const weaponItem = hud.weapon ? byUid.get(hud.weapon) : undefined;
+  const equippedSkill = getSkill(
+    (weaponItem && baseSkillId(weaponItem.baseId)) || UNARMED.id,
+  )!;
+  const weaponSkillLevel = weaponItem ? weaponItem.itemLevel : 0;
+  const resourceLabel = resourceName(equippedSkill);
+  const resourceBound = isResourceBound(hud.stats, equippedSkill);
+
   const equip = (uid: string) => {
+    const item = byUid.get(uid);
+    // A weapon never goes in a gear slot. There is one weapon slot, so equipping is
+    // a straight swap rather than a hunt for a free space.
+    if (item && isWeaponBase(item.baseId)) {
+      return onEquipWeapon(hud.weapon === uid ? null : uid);
+    }
     const equippedSlot = hud.loadout.indexOf(uid);
     if (equippedSlot !== -1) return onEquip(equippedSlot, null);
     const free = hud.loadout.indexOf(null);
@@ -318,6 +354,7 @@ function InventoryTab({
     if (free === -1) return;
     onEquip(free, uid);
   };
+
 
   /**
    * A grid click means one of three things, and the order matters.
@@ -332,7 +369,7 @@ function InventoryTab({
       // Equipped items are not selectable at all. The command refuses them
       // anyway, but offering a checkbox that cannot be honoured is worse than
       // not offering one.
-      if (hud.loadout.includes(uid)) return;
+      if (isEquipped(uid)) return;
       return setChosen((current) => {
         const next = new Set(current);
         if (!next.delete(uid)) next.add(uid);
@@ -351,7 +388,7 @@ function InventoryTab({
    * disclose a selection that reaches beyond the current view.
    */
   const selection = hud.items.filter(
-    (item) => chosen.has(item.uid) && !hud.loadout.includes(item.uid),
+    (item) => chosen.has(item.uid) && !isEquipped(item.uid),
   );
 
   const leaveSelectMode = () => {
@@ -373,6 +410,58 @@ function InventoryTab({
 
   return (
     <div className="flex flex-col gap-4">
+      {/*
+        The weapon sits above the gear row and on its own, because it is not one of
+        five equal slots. It decides the skill, and the skill decides which stats
+        matter at all - so putting it in line with four Charms would read as though
+        swapping it were the same kind of choice.
+      */}
+      <Section title="Weapon">
+        <button
+          type="button"
+          disabled={busy || !weaponItem}
+          onClick={() => weaponItem && setSelected(weaponItem.uid)}
+          title={weaponItem ? itemName(weaponItem) : 'No weapon - fighting unarmed'}
+          className={`flex w-full items-center gap-3 rounded border p-2 text-left ${
+            weaponItem
+              ? `${RARITY_STYLE[weaponItem.rarity].border} bg-neutral-900 hover:bg-neutral-800`
+              : 'border-dashed border-neutral-800 bg-neutral-900/50'
+          }`}
+        >
+          <AtlasSprite id={weaponItem ? itemSprite(weaponItem) : 'item.axe'} scale={2} />
+          <span className="flex flex-col gap-0.5">
+            <span
+              className={`text-xs leading-tight ${
+                weaponItem ? RARITY_STYLE[weaponItem.rarity].text : 'text-neutral-600'
+              }`}
+            >
+              {weaponItem ? itemName(weaponItem) : 'Unarmed'}
+            </span>
+            <span className="text-[10px] text-neutral-500">
+              {equippedSkill.name}
+              {weaponItem ? ` · skill level ${weaponSkillLevel}` : ' · find a weapon'}
+              {/*
+                Cost and regen together, never one alone. The cap is regen/cost, so a
+                player shown only their regen cannot tell whether 3.40/s is generous or
+                starving - that depends entirely on what the skill in their hand charges.
+              */}
+              {` · ${resourceLabel} ${equippedSkill.resourceCost.toFixed(1)}/use, regen ${hud.stats.resourceRegen.toFixed(2)}/s`}
+            </span>
+            {/*
+              Named here and nowhere else, because which resource it is depends on the
+              weapon in your hand - and the "limiting" note is the whole reason this
+              line exists. Attack speed is silently capped at regen/cost, so a player
+              who buys more of it and sees no change has no way to find out why.
+            */}
+            {resourceBound && (
+              <span className="text-[10px] text-amber-400">
+                {resourceLabel} is capping your attack speed — buy Recovery
+              </span>
+            )}
+          </span>
+        </button>
+      </Section>
+
       <Section title={`Equipped (${hud.loadout.filter(Boolean).length}/${ITEM_SLOTS})`}>
         <div className="grid grid-cols-4 gap-2">
           {hud.loadout.map((uid, slot) => {
@@ -496,7 +585,7 @@ function InventoryTab({
               setChosen((current) => {
                 const next = new Set(current);
                 for (const item of visible) {
-                  if (!hud.loadout.includes(item.uid)) next.add(item.uid);
+                  if (!isEquipped(item.uid)) next.add(item.uid);
                 }
                 return next;
               })
@@ -536,6 +625,7 @@ function InventoryTab({
         <ItemGrid
           items={visible}
           loadout={hud.loadout}
+          weapon={hud.weapon}
           selected={selected}
           armed={armed !== null}
           selecting={selecting}
@@ -546,7 +636,10 @@ function InventoryTab({
 
         <ItemDetail
           item={selectedItem}
-          equipped={selectedItem ? hud.loadout.includes(selectedItem.uid) : false}
+          // The pane compares a weapon's demand against what you can actually pay,
+          // which is the only form in which a cost tells a player anything.
+          resourceRegen={hud.stats.resourceRegen}
+          equipped={selectedItem ? isEquipped(selectedItem.uid) : false}
           slotsFull={!hud.loadout.includes(null)}
           busy={busy}
           onEquip={() => selectedItem && equip(selectedItem.uid)}
@@ -729,6 +822,7 @@ function Actions({
 function ItemGrid({
   items,
   loadout,
+  weapon,
   selected,
   armed,
   selecting,
@@ -738,6 +832,7 @@ function ItemGrid({
 }: {
   items: ItemInstance[];
   loadout: (string | null)[];
+  weapon: string | null;
   selected: string | null;
   armed: boolean;
   selecting: boolean;
@@ -767,7 +862,9 @@ function ItemGrid({
     >
       {items.map((item) => {
         const style = RARITY_STYLE[item.rarity];
-        const isEquipped = loadout.includes(item.uid);
+        // The weapon slot counts too, or the grid would offer the weapon you are
+        // holding as a dissemble candidate that the command then refuses.
+        const isEquipped = loadout.includes(item.uid) || weapon === item.uid;
         // Equipped items cannot be dissembled, so in select mode they are not
         // candidates at all rather than candidates that would be refused.
         const selectable = selecting && !isEquipped;
@@ -821,6 +918,7 @@ function ItemGrid({
 
 function ItemDetail({
   item,
+  resourceRegen,
   equipped,
   slotsFull,
   busy,
@@ -829,6 +927,7 @@ function ItemDetail({
   onDissemble,
 }: {
   item: ItemInstance | undefined;
+  resourceRegen: number;
   equipped: boolean;
   slotsFull: boolean;
   busy: boolean;
@@ -845,7 +944,8 @@ function ItemDetail({
   }
 
   const style = RARITY_STYLE[item.rarity];
-  const isUnique = item.rarity === 'unique';
+  const skillId = baseSkillId(item.baseId);
+  const skill = skillId ? getSkill(skillId) : undefined;
 
   return (
     <aside className={`flex flex-col gap-3 rounded border ${style.border} bg-neutral-900/70 p-3`}>
@@ -860,6 +960,8 @@ function ItemDetail({
         </div>
       </div>
 
+      {skill && <WeaponSkill skill={skill} itemLevel={item.itemLevel} regen={resourceRegen} />}
+
       <ItemMods item={item} />
 
       <div className="mt-auto flex flex-col gap-1">
@@ -872,18 +974,19 @@ function ItemDetail({
           {equipped ? 'Unequip' : slotsFull ? 'Slots full' : 'Equip'}
         </button>
 
-        {/* One button for every way of changing an item - gold and currency
-            alike. Uniques are authored, so there is nothing to change. */}
-        {!isUnique && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onCraft}
-            className="rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
-          >
-            Craft…
-          </button>
-        )}
+        {/* One button for every way of changing an item - gold and currency alike.
+            Uniques open it too now: their effects are authored but their MAGNITUDES
+            are rolled, so Angel Flame has something to reroll. The modal greys out
+            everything else with the reason, which is a better answer than a missing
+            button - a player who cannot open it never learns the flame applies. */}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onCraft}
+          className="rounded border border-neutral-700 px-2.5 py-1 text-xs hover:bg-neutral-800 disabled:opacity-40"
+        >
+          Craft…
+        </button>
 
         <button
           type="button"
@@ -896,6 +999,46 @@ function ItemDetail({
         </button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * What a weapon's skill costs to use, above its modifier list.
+ *
+ * A weapon is the only item whose worth is not in its affixes, and the cost line is
+ * the part that cannot be inferred from anything else on screen: attack speed is
+ * capped at regen/cost inside deriveStats, so a Staff swings slower than an Axe for
+ * a reason that appears nowhere on either item. Quoting the cost alone would not fix
+ * that - 3.0 is only meaningful next to the regen it demands and the regen you have.
+ */
+function WeaponSkill({
+  skill,
+  itemLevel,
+  regen,
+}: {
+  skill: Skill;
+  itemLevel: number;
+  regen: number;
+}) {
+  const summary = skillSummary(skill, itemLevel);
+  const sustained = Math.min(skill.baseSpeed, regen / skill.resourceCost);
+  const short = sustained < skill.baseSpeed - 1e-9;
+
+  return (
+    <div className="rounded border border-neutral-800 bg-neutral-950/60 p-2 text-[11px]">
+      <p className="text-neutral-200">
+        {skill.name} <span className="text-neutral-500">· {skill.kind}</span>
+      </p>
+      {/* "base" is load-bearing: these are what the layers build on, not what the
+          character sheet will read once gear and upgrades are applied. */}
+      <p className="text-neutral-400">
+        {summary.damage} base damage · {summary.speed} · {summary.area} · {summary.crit} crit
+      </p>
+      <p className={short ? 'text-amber-400' : 'text-neutral-400'}>
+        {summary.resource} {summary.cost}/use · needs {summary.regenToSustain.toFixed(2)}/s regen
+        {short && `, you regen ${regen.toFixed(2)}/s — ${sustained.toFixed(2)}/s`}
+      </p>
+    </div>
   );
 }
 

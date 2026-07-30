@@ -25,6 +25,29 @@ export const STAT_KEYS = [
    */
   'toughness',
   'goldFind',
+  /**
+   * Levels added to the equipped skill, by kind.
+   *
+   * Two stats rather than one, because a level only means something to a skill of
+   * the matching kind - `+2 to Physical Skill Levels` does nothing for a Fireball,
+   * and one shared stat would make every weapon want every skill-level roll.
+   *
+   * These raise the skill's BASE, which is a different position from any of the
+   * three layers: base is what flat adds to and what increased and more multiply. So
+   * a skill level competes with flat damage and compounds with everything else.
+   */
+  'physicalSkillLevel',
+  'magicalSkillLevel',
+  /**
+   * Resource restored per second - stamina or mana, named by the equipped weapon.
+   *
+   * Sustained uses per second is `min(speed, regen / cost)`, so this is what decides
+   * whether your attack speed is real. There is deliberately NO pool stat: the
+   * combat layer works in expected values over a whole stage, where a pool only
+   * governs burst and averages out to nothing. A stat that reads as a bonus and
+   * changes no outcome is worse than no stat.
+   */
+  'resourceRegen',
 ] as const;
 
 export type StatKey = (typeof STAT_KEYS)[number];
@@ -36,6 +59,11 @@ export type Stats = Record<StatKey, number>;
  * Lives here rather than in stats.ts because items.ts needs it to normalise flat
  * modifiers against, and stats.ts already imports items.ts. Plain data with no
  * dependencies, so this is its natural home anyway.
+ *
+ * **Four of these are now overridden by the equipped skill** - damage, attackSpeed,
+ * critChance and area. The values kept here are the Unarmed skill's, so they are
+ * still what a save with an empty weapon slot derives, and they are still what a
+ * flat modifier is normalised against.
  *
  * `damage` is 60 rather than 6 purely so flat damage rolls read as `+4.8` instead
  * of `+0.48`. It is a pure rescale: `TUNING.enemyHpBase` moved by the same factor,
@@ -51,7 +79,23 @@ export const BASE_STATS: Stats = {
   /** A multiplier on effective HP, so its base is 1 and it has no flat layer. */
   toughness: 1.0,
   goldFind: 1.0,
+  physicalSkillLevel: 0,
+  magicalSkillLevel: 0,
+  /**
+   * Three per second, against Unarmed's cost of one and speed of 1.5.
+   *
+   * Sized so NO skill is resource-limited at base: the most expensive costs 3.3 against
+   * a base speed of 0.9, and 3/3.3 clears it. The resource is a cap on the speed you
+   * BUY, not a tax on standing still - a flat tax at level zero would just be one
+   * playstyle being worse.
+   * That is what keeps the migration power-neutral - a save that loads unarmed
+   * derives exactly what it derived before resources existed.
+   */
+  resourceRegen: 3,
 };
+
+/** The stats an equipped skill supplies the base for, instead of BASE_STATS. */
+export const SKILL_BASE_STATS = ['damage', 'attackSpeed', 'critChance', 'area'] as const;
 
 export const UPGRADE_KEYS = [
   'damage',
@@ -61,6 +105,8 @@ export const UPGRADE_KEYS = [
   'health',
   'toughness',
   'greed',
+  /** Stamina and mana recovery. The purchasable way past the sustain cap. */
+  'resource',
 ] as const;
 
 export type UpgradeKey = (typeof UPGRADE_KEYS)[number];
@@ -115,6 +161,14 @@ export interface SaveState {
   currency: CurrencyPurse;
   /** Fixed-length; holds item uids. null = empty slot. */
   loadout: (string | null)[];
+  /**
+   * The equipped weapon's uid, or null for unarmed.
+   *
+   * Its own field rather than a fifth `loadout` index. A fifth index would
+   * reinterpret what every position in every existing save means, where a new field
+   * is purely additive - `weapon` absent reads as null and the save still works.
+   */
+  weapon: string | null;
   /**
    * Monotonic source of item uids, and part of every item's roll seed.
    *

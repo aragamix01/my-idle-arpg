@@ -28,6 +28,7 @@ import {
   INVENTORY_CAP,
   isUpgradeMaxed,
   ITEM_SLOTS,
+  isWeaponBase,
   itemPower,
   newSave,
   rerollAffixes,
@@ -163,8 +164,11 @@ function takeDrop(save: SaveState, stage: number): SaveState {
       // Dissemble rather than delete: the weakest spare is now raw material,
       // and an agent that threw it away would model a player who ignores half
       // the crafting economy.
+      // The equipped weapon is never a spare. It is the single most valuable item
+      // the agent owns - it carries the skill and the skill level - so dissembling
+      // it to make room for a common would model a player with a death wish.
       const spare = owned
-        .filter((item) => !save.loadout.includes(item.uid))
+        .filter((item) => !save.loadout.includes(item.uid) && item.uid !== save.weapon)
         .sort((a, b) => itemPower(a) - itemPower(b))[0];
       if (!spare) break;
       owned = owned.filter((item) => item.uid !== spare.uid);
@@ -380,12 +384,25 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
     for (let slot = 0; slot < ITEM_SLOTS; slot++) {
       for (const item of candidates) {
         if (current.loadout.includes(item.uid)) continue;
+        if (isWeaponBase(item.baseId)) continue; // weapons have their own slot
         const loadout = [...current.loadout];
         loadout[slot] = item.uid;
         const candidate = { ...current, loadout };
         const gain = value(candidate, stage) - baseline;
         if (gain > 0 && (!best || gain > best.gain)) best = { save: candidate, gain };
       }
+    }
+
+    // The weapon is weighed separately, and against every weapon owned rather than
+    // only the top-ranked candidates. It has to be: a weapon decides the skill, so
+    // swapping it changes which stats matter at all, and itemPower cannot rank an
+    // Axe against a Wand in a way that means anything. Weapons are also a fifth of
+    // drops rather than a whole inventory, so the exhaustive pass stays cheap.
+    for (const item of current.items) {
+      if (!isWeaponBase(item.baseId) || current.weapon === item.uid) continue;
+      const candidate = { ...current, weapon: item.uid };
+      const gain = value(candidate, stage) - baseline;
+      if (gain > 0 && (!best || gain > best.gain)) best = { save: candidate, gain };
     }
 
     if (!best) break;
@@ -426,7 +443,15 @@ function maybeReroll(save: SaveState, stage: number): SaveState {
   return improveLoadout(next, stage);
 }
 
-export function runLadder(): {
+/**
+ * @param seed Account seed. Defaults to the fixed one the golden is recorded under.
+ *
+ * Parameterised because a single trajectory cannot tell a pacing CHANGE from drop
+ * luck: uniques are 2% of drops and one of them carries a large gold multiplier, so
+ * whether the agent happens to find it moves total elapsed time by a factor of two.
+ * Sweeping seeds is how that question gets answered instead of argued about.
+ */
+export function runLadder(seed = SEED): {
   rows: Row[];
   wall: number | null;
   diagnosis: string;
@@ -434,7 +459,7 @@ export function runLadder(): {
   /** Final agent state, so a probe can ask what it actually did with its loot. */
   finalSave: SaveState;
 } {
-  let save = newSave(SEED, 0);
+  let save = newSave(seed, 0);
   let elapsed = 0;
   const rows: Row[] = [];
 

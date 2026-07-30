@@ -18,7 +18,8 @@ import {
   type RolledAffix,
 } from './content/schema';
 import { availableTiers, getAffix, PREFIXES, SUFFIXES } from './content/affixes';
-import { BASES, getBase, getBaseAffix } from './content/bases';
+import { GEAR_BASES, WEAPON_BASES, getBase, getBaseAffix } from './content/bases';
+import { getSkill } from './content/skills';
 import {
   CURRENCY_DROP_WEIGHTS,
   FRAGMENT_GATES,
@@ -29,12 +30,13 @@ import {
   type CurrencyPurse,
   type SpiritDelta,
 } from './content/currency';
-import { getUnique, uniquesFor } from './content/uniques';
+import { getUnique, pickUnique, rollUniqueValues, uniqueEffects } from './content/uniques';
 import {
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
   FRAGMENTS_PER_CLEAR,
   KEY_DROP_CHANCE,
+  WEAPON_DROP_SHARE,
 } from './curves';
 import { createRng, type Rng } from './rng';
 import { BASE_STATS } from './types';
@@ -58,7 +60,7 @@ const DUNGEON_STREAM = 0x27d4_eb2f;
  * reroll draw different numbers - two operations sharing a stream would make
  * "reroll, then flame, then reroll" reproduce the first reroll's result.
  */
-function rollStream(accountSeed: number, uid: number, crafts: number): Rng {
+export function rollStream(accountSeed: number, uid: number, crafts: number): Rng {
   return createRng(accountSeed).fork(uid * 7919 + crafts * REROLL_STREAM);
 }
 
@@ -74,6 +76,28 @@ function weightedRarity(rng: Rng): Rarity {
 }
 
 /**
+ * The affixes a given base may roll.
+ *
+ * An affix with a `weapons` kind rolls only on weapons of that kind - so a wand never
+ * rolls `+ to Physical Skill Levels`, and no gear rolls either. An affix without the
+ * tag rolls anywhere, which is every affix that existed before weapons did.
+ *
+ * `baseId` is optional so the reroll and spirit paths that already know they are
+ * working on a real item can pass it, and the handful of callers that do not have it
+ * fall back to the unrestricted pool rather than silently rolling nothing.
+ */
+export function eligibleAffixes(pool: AffixDefinition[], baseId?: string): AffixDefinition[] {
+  const kind = baseId ? getBase(baseId)?.skillId : undefined;
+  const skill = kind ? getSkill(kind) : undefined;
+  // Untagged rolls anywhere. 'gear' rolls only where there is no skill; a kind
+  // rolls only on a weapon granting a skill of that kind.
+  return pool.filter((affix) => {
+    if (!affix.rollsOn) return true;
+    return affix.rollsOn === 'gear' ? skill === undefined : affix.rollsOn === skill?.kind;
+  });
+}
+
+/**
  * Pick `count` distinct affixes from a pool and roll a tier for each.
  *
  * Distinct within an item, deliberately. Allowing duplicates would let a rare
@@ -84,8 +108,9 @@ function rollAffixes(
   count: number,
   itemLevel: number,
   rng: Rng,
+  baseId?: string,
 ): RolledAffix[] {
-  const candidates = [...pool];
+  const candidates = eligibleAffixes(pool, baseId);
   const rolled: RolledAffix[] = [];
 
   for (let i = 0; i < count && candidates.length > 0; i++) {
@@ -120,15 +145,21 @@ function rollAffixesForRows(
   rows: { prefix: number; suffix: number },
   itemLevel: number,
   rng: Rng,
+  baseId: string,
 ): RolledAffix[] {
   return [
-    ...rollAffixes(PREFIXES, rows.prefix, itemLevel, rng),
-    ...rollAffixes(SUFFIXES, rows.suffix, itemLevel, rng),
+    ...rollAffixes(PREFIXES, rows.prefix, itemLevel, rng, baseId),
+    ...rollAffixes(SUFFIXES, rows.suffix, itemLevel, rng, baseId),
   ];
 }
 
-function rollAffixesForRarity(rarity: Rarity, itemLevel: number, rng: Rng): RolledAffix[] {
-  return rollAffixesForRows(AFFIX_LIMITS[rarity], itemLevel, rng);
+function rollAffixesForRarity(
+  rarity: Rarity,
+  itemLevel: number,
+  rng: Rng,
+  baseId: string,
+): RolledAffix[] {
+  return rollAffixesForRows(AFFIX_LIMITS[rarity], itemLevel, rng, baseId);
 }
 
 /** Which side of the pool an affix id belongs to. */
@@ -163,12 +194,11 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
   let rarity = weightedRarity(rng);
 
   if (rarity === 'unique') {
-    const eligible = uniquesFor(itemLevel);
+    const unique = pickUnique(itemLevel, rng);
     // Early stages have no eligible uniques. Falling back keeps every clear a
     // drop rather than silently swallowing one.
-    if (eligible.length === 0) rarity = 'rare';
+    if (!unique) rarity = 'rare';
     else {
-      const unique = eligible[rng.int(eligible.length)];
       return {
         uid: String(uid),
         baseId: unique.id,
@@ -178,17 +208,23 @@ export function rollItem(accountSeed: number, uid: number, itemLevel: number): I
         rerolls: 0,
         crafts: 0,
         uniqueId: unique.id,
+        uniqueRolls: rollUniqueValues(unique, rng),
       };
     }
   }
 
-  const base = BASES[rng.int(BASES.length)];
+  // Weapon-or-gear is decided before the base, and by its own roll rather than by
+  // weapons simply being two entries in one list. A weapon carries most of the
+  // ladder now, so how often one drops is a tuning dial that has to be settable
+  // without adding or removing weapon types to move it.
+  const pool = rng.next() < WEAPON_DROP_SHARE ? WEAPON_BASES : GEAR_BASES;
+  const base = pool[rng.int(pool.length)];
   return {
     uid: String(uid),
     baseId: base.id,
     rarity,
     itemLevel,
-    affixes: rollAffixesForRarity(rarity, itemLevel, rng),
+    affixes: rollAffixesForRarity(rarity, itemLevel, rng, base.id),
     baseAffix: rollBaseAffix(base.id, itemLevel, rng),
     rerolls: 0,
     crafts: 0,
@@ -220,6 +256,14 @@ export function rollStageBossDrops(
   accountSeed: number,
   firstUid: number,
   stage: number,
+  /**
+   * Multiplier on the key chance, from equipped keyDrop effects.
+   *
+   * Passed in rather than read off the save here, because this file rolls and does
+   * not interpret loadouts - the same separation that keeps every roll a pure
+   * function of its arguments and reproducible on the server.
+   */
+  keyChanceMult = 1,
 ): CurrencyPurse {
   const rng = createRng(accountSeed).fork(firstUid * BOSS_DROP_STREAM);
   const purse: CurrencyPurse = {};
@@ -240,7 +284,10 @@ export function rollStageBossDrops(
     }
   }
 
-  if (rng.next() < KEY_DROP_CHANCE) purse['dungeon-key'] = 1;
+  // Rolled AFTER the fragments and clamped at certainty, so a key multiplier cannot
+  // shift which fragments fell: the stream position is the same whether or not a
+  // Warden's Coffer is equipped, and only this one roll's threshold moves.
+  if (rng.next() < Math.min(1, KEY_DROP_CHANCE * keyChanceMult)) purse['dungeon-key'] = 1;
   return purse;
 }
 
@@ -295,7 +342,7 @@ export function rollDungeonItem(accountSeed: number, uid: number, itemLevel: num
   return {
     ...item,
     rarity: upgraded,
-    affixes: rollAffixesForRarity(upgraded, itemLevel, rng),
+    affixes: rollAffixesForRarity(upgraded, itemLevel, rng, item.baseId),
   };
 }
 
@@ -320,13 +367,26 @@ export function rerollAffixes(accountSeed: number, item: ItemInstance): ItemInst
     // affixRows, not the rarity limits: a spirited item must keep the rows its
     // spirit gave it. Rerolling one back to 2/2 would make gold a way to undo
     // a permanent, one-shot change.
-    affixes: rollAffixesForRows(affixRows(item), item.itemLevel, rng),
+    affixes: rollAffixesForRows(affixRows(item), item.itemLevel, rng, item.baseId),
     rerolls: item.rerolls + 1,
     crafts,
   };
 }
 
 // --- Currency -------------------------------------------------------------
+
+/**
+ * Whether a unique has any range wide enough to be worth a flame.
+ *
+ * Swarm Lens's downside and Giant Slayer's are authored constants, and a unique made
+ * entirely of those would accept a flame, consume it, and produce a byte-identical
+ * item. Refusing up front is the difference between a currency that did nothing and
+ * a currency that was allowed to do nothing.
+ */
+function hasRollableRange(item: ItemInstance): boolean {
+  const unique = item.uniqueId ? getUnique(item.uniqueId) : undefined;
+  return unique?.effects.some((e) => e.roll.max > e.roll.min) ?? false;
+}
 
 /**
  * Why this currency cannot be used on this item, or null when it can.
@@ -346,8 +406,14 @@ export function currencyLegality(
   if (action.kind === 'combine') return 'combine this in the stash, not on an item';
   if (action.kind === 'inert') return `${currency.name} is not used on items`;
 
-  // Uniques are authored, not rolled. Nothing here has anything to act on.
-  if (item.rarity === 'unique') return 'uniques cannot be modified';
+  // A unique has no affixes, no rarity to raise and no rows to trade, so every
+  // currency but one has nothing to act on. Angel Flame does: it rerolls magnitudes
+  // and leaves identity alone, which is exactly what a unique's ranges are.
+  if (item.rarity === 'unique') {
+    if (action.kind !== 'rerollTiers') return 'uniques cannot be modified';
+    if (!hasRollableRange(item)) return 'this unique has nothing left to roll';
+    return null;
+  }
 
   switch (action.kind) {
     case 'rerollAffixes': {
@@ -436,11 +502,20 @@ export function applyCurrencyToItem(
       const kept = item.affixes.filter((a) => sideOf(a.affixId) !== action.only);
       const pool = action.only === 'prefix' ? PREFIXES : SUFFIXES;
       const count = affixRows(item)[action.only];
-      next.affixes = [...kept, ...rollAffixes(pool, count, item.itemLevel, rng)];
+      next.affixes = [...kept, ...rollAffixes(pool, count, item.itemLevel, rng, item.baseId)];
       return { item: next, transmuted: false };
     }
 
     case 'rerollTiers': {
+      // On a unique this rerolls the authored ranges. Same effects, new numbers -
+      // the identical operation the flame performs on a rare, which is why uniques
+      // accept this currency and no other.
+      const unique = item.uniqueId ? getUnique(item.uniqueId) : undefined;
+      if (unique) {
+        next.uniqueRolls = rollUniqueValues(unique, rng);
+        return { item: next, transmuted: false };
+      }
+
       // Same modifiers, new magnitudes. An item whose affixes are right but
       // whose numbers are not is exactly what this exists for.
       next.affixes = item.affixes.map((rolled) => {
@@ -479,18 +554,18 @@ export function applyCurrencyToItem(
 
     case 'gamble': {
       if (rng.next() >= action.successChance) return { item: null, transmuted: false };
-      const eligible = uniquesFor(item.itemLevel);
+      const unique = pickUnique(item.itemLevel, rng);
       // No unique exists this early. Refunding the item rather than eating it
       // keeps the failure honest: the droplet did not fail, it had nothing to
       // turn the item into.
-      if (eligible.length === 0) return { item: next, transmuted: false };
-      const unique = eligible[rng.int(eligible.length)];
+      if (!unique) return { item: next, transmuted: false };
       return {
         item: {
           ...next,
           baseId: unique.id,
           rarity: 'unique',
           uniqueId: unique.id,
+          uniqueRolls: rollUniqueValues(unique, rng),
           affixes: [],
           baseAffix: undefined,
           spirit: undefined,
@@ -520,7 +595,7 @@ export function applyCurrencyToItem(
         const pool = (side === 'prefix' ? PREFIXES : SUFFIXES).filter(
           (a) => !current.some((r) => r.affixId === a.id),
         );
-        return rollAffixes(pool, rows[side] - current.length, item.itemLevel, rng);
+        return rollAffixes(pool, rows[side] - current.length, item.itemLevel, rng, item.baseId);
       };
 
       next.affixes = [
@@ -549,7 +624,10 @@ export function affixEffect(rolled: RolledAffix): Effect | null {
 
 /** Everything an item contributes: implicit, rolled affixes, or authored effects. */
 export function itemEffects(item: ItemInstance): Effect[] {
-  if (item.uniqueId) return [...(getUnique(item.uniqueId)?.effects ?? [])];
+  if (item.uniqueId) {
+    const unique = getUnique(item.uniqueId);
+    return unique ? uniqueEffects(unique, item.uniqueRolls) : [];
+  }
   const rolled = [...(item.baseAffix ? [item.baseAffix] : []), ...item.affixes];
   return rolled.map(affixEffect).filter((e): e is Effect => e !== null);
 }
@@ -585,12 +663,24 @@ export function itemSprite(item: ItemInstance): string {
  * way the three become comparable: `+4.8 flat damage` and `+8% increased damage`
  * are both worth about 0.08 of a base-60 damage pool, and a naive sum of raw
  * values would rate the flat roll sixty times higher.
+ *
+ * SIGNED, and that is not a detail. This used to take absolute values, which was
+ * harmless while every downside in the game was small - and then a unique arrived
+ * that multiplies crit chance by ZERO, and `|0 - 1|` scored the worst downside
+ * available as the largest bonus any modifier could carry. The agent equipped it on
+ * purpose. A heuristic that rates a penalty as a benefit does not merely mis-rank
+ * items, it inverts them.
  */
 export function itemPower(item: ItemInstance): number {
   return itemEffects(item).reduce((power, effect) => {
     if (effect.kind === 'goldOnKill') return power + effect.multiplier;
-    if (effect.op === 'more') return power + Math.abs(effect.value - 1);
-    if (effect.op === 'increased') return power + Math.abs(effect.value);
-    return power + Math.abs(effect.value) / Math.max(BASE_STATS[effect.stat], 1e-9);
+    // A key multiplier is not power in the stat sense at all - it buys dungeon runs,
+    // not damage - so it is discounted heavily rather than counted at face value.
+    // At face value a doubled key chance was the single largest number any item
+    // could carry, above `+60% gold per kill`.
+    if (effect.kind === 'keyDrop') return power + (effect.multiplier - 1) * 0.3;
+    if (effect.op === 'more') return power + (effect.value - 1);
+    if (effect.op === 'increased') return power + effect.value;
+    return power + effect.value / Math.max(BASE_STATS[effect.stat], 1e-9);
   }, 0);
 }

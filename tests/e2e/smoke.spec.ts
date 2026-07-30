@@ -1,4 +1,18 @@
 import { expect, test, type ConsoleMessage } from '@playwright/test';
+import { WEAPON_BASES } from '../../src/sim';
+
+/**
+ * CSS that excludes every weapon tile, derived from the registry not written down.
+ *
+ * An attribute selector rather than Playwright's `hasNotText`, because a grid tile
+ * renders only a sprite - the item's name is in its `title`, so a text filter matched
+ * nothing at all and quietly selected the first tile regardless. That made the tests
+ * using it pass or fail on whether the newest drop happened to be a weapon.
+ *
+ * Derived, because a hand-written /Axe|Wand/ went stale the same day two more weapons
+ * were added.
+ */
+const NOT_A_WEAPON = WEAPON_BASES.map((b) => `:not([title*="${b.name}"])`).join('');
 
 /**
  * Attempts now play out a replay before the command is sent, so anything
@@ -311,7 +325,9 @@ test('the inventory grid selects, filters and sorts', async ({ page }) => {
   // Nothing is selected until the player picks something - the detail pane is
   // the only place affixes are readable, so this is the core interaction.
   await expect(panel.getByText(/Select an item to inspect/)).toBeVisible();
-  await tiles.first().click();
+  // Gear, not the newest tile: a weapon equips to its own slot and would never move
+  // the "Equipped (n/4)" counter this asserts on.
+  await panel.locator(`[aria-label="Item grid"] button${NOT_A_WEAPON}`).first().click();
   await expect(panel.getByText(/Select an item to inspect/)).toHaveCount(0);
 
   // Equipping from the detail pane must reach the sim, not just the pane.
@@ -340,6 +356,52 @@ test('the inventory grid selects, filters and sorts', async ({ page }) => {
 
   await expect(panel.getByText('undefined')).toHaveCount(0);
   await expect(panel.getByText('NaN')).toHaveCount(0);
+});
+
+test('a weapon says what its skill costs to use', async ({ page }) => {
+  await page.goto('/');
+
+  // Clear until a weapon drops rather than a fixed number of times. Weapons take a
+  // share of drops, not a reserved slot, so "clear twice" is a coin flip - the same
+  // assumption that made two other tests pass or fail on the newest tile's base.
+  const baseId = await page.evaluate(async (weaponIds: string[]) => {
+    const post = (body: unknown) =>
+      fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+
+    for (let i = 0; i < 40; i++) {
+      const result = await post({ type: 'attemptStage' });
+      const items: { baseId: string }[] = result?.state?.items ?? [];
+      const weapon = items.find((item) => weaponIds.includes(item.baseId));
+      if (weapon) return weapon.baseId;
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
+        await post({ type: 'buyUpgrade', key, count: 'max' });
+      }
+    }
+    return null;
+  }, WEAPON_BASES.map((b) => b.id));
+  expect(baseId, 'no weapon dropped in 40 clears').not.toBeNull();
+  await page.reload();
+
+  const baseName = WEAPON_BASES.find((b) => b.id === baseId)!.name;
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  await panel.locator(`[aria-label="Item grid"] button[title*="${baseName}"]`).first().click();
+
+  // The cost, and the regen it demands. Neither alone is actionable: deriveStats
+  // caps attack speed at regen/cost silently, so a bare "3.0" leaves the cap
+  // untraceable and a bare regen figure cannot say whether it is enough.
+  const detail = panel.getByRole('complementary');
+  await expect(detail).toContainText(/(Stamina|Mana) \d+\.\d\/use/);
+  await expect(detail).toContainText(/needs \d+\.\d\d\/s regen/);
+  // The skill's own bases, which are the half of a weapon's worth that is not in
+  // its affix list.
+  await expect(detail).toContainText(/base damage · \d+\.\d\d\/s · \d+ targets?/);
 });
 
 test('the craft modal explains what it refuses, and applies what it allows', async ({ page }) => {
@@ -518,22 +580,26 @@ test('dissembling a common yields a fragment without a confirmation', async ({ p
 test('fragments combine into ore, and the ore upgrades a common', async ({ page }) => {
   await page.goto('/');
 
-  // Enough clears that ten Magic Ore Shards have accumulated. Fragments are a
-  // slow trickle by design, so this is the shortest honest route to a craft.
+  // Clear UNTIL ten Magic Ore Shards have accumulated, rather than a fixed number
+  // of attempts. Fragments come from stage bosses, so they only arrive on a clear -
+  // and a fixed attempt count silently assumes every attempt succeeds. It stopped
+  // being true when the upgrade tracks were slowed for weapon scaling: the same 25
+  // attempts now include failures, the shards fell short, and the test timed out
+  // waiting for a Combine button that was never going to appear.
   await page.evaluate(async () => {
-    for (let i = 0; i < 25; i++) {
-      await fetch('/api/command', {
+    const post = (body: unknown) =>
+      fetch('/api/command', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'attemptStage' }),
-      });
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+
+    for (let i = 0; i < 120; i++) {
+      const result = await post({ type: 'attemptStage' });
       for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
-        await fetch('/api/command', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ type: 'buyUpgrade', key, count: 'max' }),
-        });
+        await post({ type: 'buyUpgrade', key, count: 'max' });
       }
+      if ((result?.state?.currency?.['magic-ore-shard'] ?? 0) >= 10) return;
     }
   });
   await page.reload();
@@ -566,7 +632,10 @@ test('fragments combine into ore, and the ore upgrades a common', async ({ page 
   // One fewer common, because it became a magic. The arming clears itself, so
   // the next click inspects rather than crafting again.
   await expect(tiles).toHaveCount(commonsBefore - 1);
-  await expect(panel.getByText(/armed/)).toHaveCount(0);
+  // Word-bounded, because the weapon slot renders "Unarmed" when empty and a bare
+  // /armed/ matches the middle of it. The banner this is asserting the absence of
+  // reads "Magic Ore armed".
+  await expect(panel.getByText(/\barmed\b/)).toHaveCount(0);
   await expect(page.getByText(/used Magic Ore/)).toBeVisible();
 });
 
@@ -656,7 +725,14 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
   expect(total).toBeGreaterThan(4);
 
   // Equip one, so select mode has something it must refuse to offer.
-  await tiles.first().click();
+  //
+  // Explicitly a piece of GEAR, not just the first tile. A fifth of drops are
+  // weapons now and a weapon goes to its own slot, so "Equipped (1/4)" would never
+  // appear - and since the newest item is a weapon only sometimes, taking the first
+  // tile made this pass or fail depending on the account seed.
+  const gear = panel.locator(`[aria-label="Item grid"] button${NOT_A_WEAPON}`).first();
+  const gearTitle = await gear.getAttribute('title');
+  await gear.click();
   await panel.getByRole('button', { name: 'Equip', exact: true }).click();
   await expect(panel.getByText('Equipped (1/4)')).toBeVisible();
 
@@ -665,15 +741,21 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
   await panel.getByRole('button', { name: 'Select', exact: true }).click();
   await expect(panel.getByText('0 selected')).toBeVisible();
 
-  // The equipped tile cannot be picked at all.
-  await expect(tiles.first()).toBeDisabled();
+  // Exactly one tile is unselectable, and it is the one just equipped.
+  //
+  // Asserted as a count rather than by position: the item equipped above is the
+  // first piece of GEAR, and that is only tile zero when tile zero is not a weapon.
+  const pickable = tiles.and(panel.locator('button:not([disabled])'));
+  await expect(pickable).toHaveCount(total - 1);
+  expect(gearTitle, 'equipped a tile with no title').toBeTruthy();
 
-  // Pick three, then unpick one - the toggle has to work both ways.
-  await tiles.nth(1).click();
-  await tiles.nth(2).click();
-  await tiles.nth(3).click();
+  // Pick three, then unpick one - the toggle has to work both ways. Selectable tiles
+  // only, so the equipped one is never among them whatever index it landed on.
+  await pickable.nth(0).click();
+  await pickable.nth(1).click();
+  await pickable.nth(2).click();
   await expect(panel.getByText('3 selected')).toBeVisible();
-  await tiles.nth(3).click();
+  await pickable.nth(2).click();
   await expect(panel.getByText('2 selected')).toBeVisible();
 
   const sweep = panel.getByRole('button', { name: /^Dissemble \d+$/ });

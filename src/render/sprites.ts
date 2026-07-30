@@ -38,6 +38,14 @@ export const SPRITE_IDS = [
   'item.swarm_lens',
   'item.bloodstone',
   'item.deep_delvers_idol',
+  'item.berserkers_anvil',
+  'item.duelists_visor',
+  'item.wardens_coffer',
+  'item.bulwark_of_the_deep',
+  'item.axe',
+  'item.wand',
+  'item.maul',
+  'item.staff',
 
   // Currency - must stay in step with src/sim/content/currency.ts.
   'currency.sacred_idol',

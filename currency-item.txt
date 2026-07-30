@@ -1,8 +1,12 @@
 # Roadmap
 
-Reordered after Phase 1 shipped. The original order was 1-2-3-4-5; the formula
-rework moved to the front because every other phase authors numbers priced against
-the damage formula, and authoring them before the rework meant pricing them twice.
+One rule decides this order: **anything that changes where damage comes from goes
+before anything that authors numbers.** That is why Phase 5's formula rework jumped
+the queue and shipped as 5a-1 and 5a-2, and it is why weapons-and-skills now sits in
+front of the uniques - a skill supplies the base that every modifier multiplies, so
+uniques authored first would be authored twice.
+
+Order:  1 -> 5a-1 -> 5a-2 -> 6a -> 6b -> 2 -> 5a-3 -> 3 -> 4 -> 5b -> 5c
 
 Status: [done] shipped and verified  [next] in progress or up next  [todo] not started
 
@@ -86,8 +90,150 @@ Stage 300 still reachable with no wall. Total elapsed shortened 4.7d -> 1.8d.
 Ladder after: stage 300 in 2.0d, clear times 18-29s, no wall.
 
 
+## [done] Phase 6a - Weapons & skills, the foundation
+> Was "Big change gameplay", at the bottom of the file. Moved to the front of the
+> unbuilt work for the same reason Phase 5 was: it changes where damage COMES FROM,
+> and Phase 2 authors eight uniques priced against that. Authoring them first means
+> authoring them twice.
+
+The good news, and the reason this is not another ground-up rework: **the three
+layer system already accommodates skills.** Stats resolve as
+
+      final = (base + sum flat) x (1 + sum increased) x product more
+
+and `base` was always just a constant sitting in BASE_STATS. A skill supplying that
+base instead of a hardcoded 60 is a small, well-isolated change. Nothing about the
+layers, the affix pool, or the currency has to move.
+
+- New item type: weapon, in its own equip slot
+- A weapon carries a SKILL, and the skill supplies the bases the layers build on:
+  base damage, base speed, base crit chance, base area
+- Both playstyles CAN crit. Four of the nine suffixes are crit affixes, so taking
+  crit away from casters would kill half their suffix pool. Differentiate by base
+  value instead: physical skills get high base crit, spells get near-zero. That is
+  the "each skill has base crit chance" note, and it costs nothing
+- No resources in this step - resources are 6b
+
+THE AXIS OF DIFFERENCE IS AREA VERSUS SINGLE-TARGET, and the combat layer already
+has it. Every stage is trash-then-boss: the trash phase multiplies damage by
+min(area, enemyCount), and the boss phase ignores area entirely.
+
+	physical   high per-hit, area 1-2, high base crit   -> melts bosses, slogs trash
+	magical    lower per-hit, area 4-8, low base crit   -> shreds trash, grinds bosses
+
+STAGE_TIME_LIMIT_SECONDS is 75 for the TOTAL, so each type has a real failure mode -
+pure physical times out on trash, pure magic times out on the boss. That is what
+makes the choice a choice rather than a dominance ordering, and it needs no new
+systems.
+
+SKILL LEVEL comes from the weapon's item level: floor(itemLevel / 10), plus
+modifiers granting "+N to Physical Skill Levels" or "+N to Magical Skill Levels",
+weapon-type-locked. Each level raises the skill's BASE by about 4%, so a stage-300
+weapon is roughly 2.2x the base of a shallow one.
+
+- This fixes a real gap: item level currently does nothing above stage 80, because
+  that is the last tier gate. Skill level makes depth matter forever and makes the
+  weapon the chase item
+- Side effect worth knowing: skill level raises `base`, so it COMPETES with flat
+  damage while increased and more multiply the result. A third position in the layer
+  tension, for free
+- Risk: this is a second exponential engine beside the gold tracks, which are tuned
+  so the feedback exponent stays below 1. At 4% per level it is a modest term rather
+  than a second engine, which is why that number and not a bigger one. Making
+  weapons BECOME the power curve is the bolder option and would mean retuning the
+  gold track exponents down to compensate
+
+
+## [done] Phase 6b - The magical playstyle
+> Split from 6a because mana is the only genuinely new machinery here, and it is the
+> one piece that touches the combat layer rather than the stat layer.
+
+Physical pays STAMINA, magic pays MANA. Both types pay something, so neither is
+free - which was the flaw in the first cut of this plan: mana with no matching cost
+on physical made magic strictly worse and nobody would ever pick a wand.
+
+ONE resource system, named by the weapon's kind. Same stats, same math, two labels
+in the UI. That halves the stat surface and there is no gameplay in having two
+implementations of one idea.
+
+	sustained rate = min(speed, regen / costPerUse)
+	DPS            = perHit x sustainedRate x critFactor x aoeTargets
+
+Both closed-form, which is non-negotiable: resolveStage has no per-tick loop, and
+that is what lets the server resolve offline progress and the harness sweep 300
+stages in milliseconds. A tick loop would be correct in the small and would throw
+away the two-layer architecture, offline resolution and the balance harness.
+
+THE TWO RESOURCES DIFFER IN WHEN THEY BITE, not in their math:
+
+	              pool    regen   cost    binds
+	stamina       small   fast    cheap   LATE, once attack speed is stacked
+	mana          large   slow    high    IMMEDIATELY, from the first cast
+
+So physical ignores stamina for a long time and then hits a wall - it has bought
+attack speed and is not actually swinging faster, and stamina regen becomes the
+affix that unlocks the attack speed it already owns. Magic gears mana from the first
+hour or it does not function. Different gearing arcs out of three numbers.
+
+Bonus: stamina is the soft cap attack speed does not currently have. Attack speed is
+an uncapped `more` track plus affixes with nothing bounding it.
+
+New affixes, weapon-type-locked:
+- resource regen, resource cost reduction (stamina on physical, mana on magical)
+- + to Physical Skill Levels, + to Magical Skill Levels
+
+NOT adding a separate cast-speed stat. One speed stat scaled by the skill's own base
+speed does the same job; a twin would mean a duplicate of every speed affix for no
+difference in outcome.
+
+Weapon-restricted affixes need a tag on AffixDefinition naming which base types may
+roll them, plus a filter in rollAffixes. Small schema addition, no migration.
+
+PHYSICAL-VS-MAGICAL PARITY becomes a third invariant beside offence/defence symmetry
+and the feedback exponent. Whichever playstyle runs ahead makes the other dead
+content, and it will not hold by accident - the offence/defence one has broken
+STRUCTURALLY three times now. The test compares TOTAL clear time, not per-phase:
+magic is meant to be faster on trash and slower on the boss, and a per-phase check
+would fail on the difference that is the whole point.
+
+Two things to measure, not assume:
+- Magic may out-earn physical. farmRate is killsPerSecond x goldPerKill and area
+  raises kills/sec directly, so unless the lower per-hit offsets it exactly, casters
+  become the economic pick as well as the wave pick
+- Area is capped at min(area, enemyCount) and enemyCount caps at 220. Past that,
+  magic's area stops paying and its scaling has to come from per-hit and speed - so
+  magic's late game plays differently from its early game
+
+
 ## [next] Phase 2 - Unique items
-> Now priced against the finished formula rather than the old one.
+> SHIPPED so far: the mechanism (tiers setting drop weight, values rolling inside an
+> authored range, Angel Flame as the only currency that touches a unique) and four of
+> the roster - Berserker's Anvil, Duelist's Visor, Warden's Coffer, Bulwark of the
+> Deep.
+>
+> STILL OPEN, and blocked on two different things:
+> - The two SLOT uniques and the "other equipped items x200-500%" one need equip
+>   slots to become a derived number instead of a constant. That is a save-shape
+>   change: loadout length, the equipItem bound, an inert-slot state in the UI, and a
+>   rule for which items may change the count at all (only ones in the first four
+>   positions, or the fixed point runs away)
+> - ART. The tile sheet has ~94 unbound tiles and almost all are floor, wall, door or
+>   fence; the free ones that read as an OBJECT at 16px are down to furniture and
+>   townsfolk. The four shipped uniques took the last four usable ones. A fifth needs
+>   a second CC0 pack as a new GridSource - the indirection exists for exactly this
+>   and no game code moves
+>
+> Also dropped deliberately: the "area is 0, attack speed x150-300%" entry, which is
+> the same trade as Berserker's Anvil with a different stat, and the dungeon-currency
+> twin of Warden's Coffer, which is the same trade as the key one.
+> Moved back behind weapons. Two of the seven uniques below grant or remove EQUIP
+> SLOTS, and 6a adds a slot - resolving that interaction once is cheaper than
+> resolving it twice. Authoring uniques that can be physical or magical is also only
+> possible after skills exist.
+>
+> If something shipping sooner matters more than authoring once, this can be pulled
+> back in front of 6a. The cost is re-tuning eight roll tables and redesigning the
+> two slot uniques.
 
 - Unique TIER first, setting drop weight - how hard each one is to obtain. Build the
   mechanism now, fill it in as more uniques are added
@@ -111,8 +257,9 @@ one feel like a different class of item rather than a rare with a name.
 
 
 ## [todo] Phase 5a-3 - Elements, resistances, penetration
-> Deferred. The layer system and the wider pool are worth having in players' hands
-> before the stat surface triples.
+> Deferred twice now, and it belongs AFTER the magical playstyle rather than before.
+> Elements are a stat-surface expansion, so they should expand the final damage model
+> once - not get built against the physical-only one and then extended to spells.
 
 - Damage splits into pools: physical plus fire, cold, lightning, darkness
 - Each pool carries its own flat and increased layers; the gold damage track
@@ -160,8 +307,9 @@ four it is book-keeping.
 - Tablets get their own tab in the character modal, holding 200 like items
 - Most crafting currency works on a tablet
 
-> Needs Phase 5a-3 finished first if tablet modifiers are to use elements, and it
-> authors a whole second affix pool - so it comes after the formula is settled.
+> Authors a whole second affix pool, and its explicit modifiers buff monsters - a
+> dimension that does not exist yet. Comes after the formula is settled, and after
+> 5a-3 if tablet modifiers are to use elements.
 
 
 ## [todo] Phase 5b - Accessories
@@ -184,7 +332,19 @@ four it is book-keeping.
   does, but the panel is otherwise unchanged from before layers existed
 
 
+## Later, not scheduled
+- Character skill tree and passives. Named in the weapons notes as coming after
+  skills-from-weapons, and it is a whole progression system of its own
+
+
 ## Known issues, unrelated to any phase
+- TOTAL LADDER TIME IS DOMINATED BY UNIQUE DROP LUCK, and the golden snapshot is one
+  sample of it. Swept across six account seeds after Phase 2: 5.3d, 5.5d, 6.7d,
+  14.4d, 17.9d, 18.0d. The fast runs are the ones that found Deep Delver's Idol or
+  The Whetstone; the slow ones never did. Uniques are 2% of drops split twelve ways,
+  and one of them carries `goldFind more 2.0` - so the economy hinges on a lottery.
+  Worth deciding whether that spread is the intended shape of the game before reading
+  any single "reached stage 300 in Xd" as a pacing statement
 - /api/health passes Supabase error strings straight to a public endpoint. Delete it
 - Gold passes Number.MAX_SAFE_INTEGER around stage 290 and nothing warns. The
   gentler curve after 5a-1 pushed this out but did not remove it

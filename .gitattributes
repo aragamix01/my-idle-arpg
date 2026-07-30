@@ -1,0 +1,7 @@
+# Snapshot and golden files are compared byte-for-byte by tests, and are written by
+# tools (vitest, scripts/balance.ts) that always emit LF. With core.autocrlf on,
+# git would check them out as CRLF on Windows, so the golden test would fail on any
+# fresh clone and every regenerated snapshot would read as dirty in `git status`.
+#
+# Pinning them to LF makes the checked-out bytes match what the tools produce.
+tests/__snapshots__/** text eol=lf

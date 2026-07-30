@@ -33,6 +33,8 @@ export interface HudSnapshot {
   pendingOfflineGold: number;
   offlineCapReached: boolean;
   loadout: (string | null)[];
+  /** Equipped weapon uid, or null for unarmed. */
+  weapon: string | null;
   items: ItemInstance[];
   currency: CurrencyPurse;
   /** Cap included so the panel can show capacity without importing curves. */
@@ -69,6 +71,7 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     pendingOfflineGold: offline.goldEarned,
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
+    weapon: save.weapon,
     items: save.items,
     currency: save.currency,
     inventoryCap: INVENTORY_CAP,

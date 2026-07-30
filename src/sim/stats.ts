@@ -6,8 +6,15 @@
  * item pool without executing arbitrary code.
  */
 
-import type { Effect, ItemInstance } from './content';
-import { UPGRADE_TRACKS } from './curves';
+import {
+  baseSkillId,
+  getSkill,
+  UNARMED,
+  type Effect,
+  type ItemInstance,
+  type Skill,
+} from './content';
+import { SKILL_LEVEL_GAIN, UPGRADE_TRACKS } from './curves';
 import { itemEffects } from './items';
 import {
   BASE_STATS,
@@ -30,6 +37,7 @@ const TRACK_STAT: Record<keyof UpgradeLevels, StatKey> = {
   area: 'area',
   crit: 'critChance',
   toughness: 'toughness',
+  resource: 'resourceRegen',
 };
 
 /** The three layers, accumulated per stat before anything is resolved. */
@@ -102,16 +110,85 @@ export function findItem(save: SaveState, uid: string): ItemInstance | undefined
   return save.items.find((item) => item.uid === uid);
 }
 
-/** Effects from currently equipped items only — owned-but-unequipped do nothing. */
+/** The equipped weapon, or undefined when unarmed. */
+export function equippedWeapon(save: SaveState): ItemInstance | undefined {
+  return save.weapon ? findItem(save, save.weapon) : undefined;
+}
+
+/**
+ * Effects from currently equipped items only — owned-but-unequipped do nothing.
+ *
+ * The weapon counts. It is an ordinary item that happens to also grant a skill, so
+ * its affixes and implicit contribute exactly like any other equipped item's.
+ */
 export function equippedEffects(save: SaveState): Effect[] {
   const out: Effect[] = [];
-  for (const uid of save.loadout) {
+  for (const uid of [...save.loadout, save.weapon]) {
     if (!uid) continue;
     const item = findItem(save, uid);
     if (!item) continue; // loadout referencing a discarded or migrated-away item
     out.push(...itemEffects(item));
   }
   return out;
+}
+
+/**
+ * The skill the equipped weapon grants, or Unarmed.
+ *
+ * Unarmed's bases are the pre-weapon BASE_STATS values, so a save with an empty
+ * weapon slot derives exactly what it derived before skills existed.
+ */
+export function equippedSkill(save: SaveState): Skill {
+  const weapon = equippedWeapon(save);
+  const id = weapon ? baseSkillId(weapon.baseId) : undefined;
+  return (id ? getSkill(id) : undefined) ?? UNARMED;
+}
+
+/**
+ * The equipped skill's level.
+ *
+ * Item level is the source, which is what makes depth matter again: the tier gates
+ * stop at stage 80, so before this an item level 226 drop rolled from the same table
+ * as an item level 80 one and pushing deeper bought nothing but gold.
+ *
+ * Modifiers add to it, and only ones matching the skill's kind - a wand gains
+ * nothing from `+2 to Physical Skill Levels`. Unarmed is level zero and never
+ * scales; it is a fallback, not a build.
+ */
+export function skillLevel(save: SaveState, ctx: EffectContext): number {
+  const weapon = equippedWeapon(save);
+  if (!weapon) return 0;
+  const skill = equippedSkill(save);
+  const stat = skill.kind === 'physical' ? 'physicalSkillLevel' : 'magicalSkillLevel';
+
+  let bonus = 0;
+  for (const e of equippedEffects(save)) {
+    if (e.kind === 'statMod' && e.stat === stat && conditionHolds(e, ctx)) bonus += e.value;
+  }
+  return Math.max(0, weapon.itemLevel + bonus);
+}
+
+/**
+ * The base each stat resolves from.
+ *
+ * Four stats come from the skill and scale with its level; the rest are global. The
+ * skill-level term multiplies the BASE, which is a distinct position from the three
+ * layers - see the note on physicalSkillLevel in types.ts.
+ */
+function baseStats(save: SaveState, ctx: EffectContext): Stats {
+  const skill = equippedSkill(save);
+  return {
+    ...BASE_STATS,
+    // Skill level scales DAMAGE ONLY. Speed, crit and area are the skill's identity
+    // and stay fixed: scaling speed as well would make a weapon deliver its growth
+    // rate squared per stage, which is double what the rate was sized to carry, and
+    // the player would outrun the ladder on weapons alone. Crit and area are bounded
+    // by their own meaning anyway - a probability and a target count.
+    damage: skill.baseDamage * Math.pow(SKILL_LEVEL_GAIN, skillLevel(save, ctx)),
+    attackSpeed: skill.baseSpeed,
+    critChance: skill.baseCritChance,
+    area: skill.baseArea,
+  };
 }
 
 /**
@@ -130,19 +207,79 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
     equippedEffects(save).filter((e) => conditionHolds(e, ctx)),
   );
 
-  const stats = { ...BASE_STATS };
-  for (const key of STAT_KEYS) stats[key] = resolve(BASE_STATS[key], buckets[key]);
+  const base = baseStats(save, ctx);
+  const stats = { ...base };
+  for (const key of STAT_KEYS) stats[key] = resolve(base[key], buckets[key]);
 
   stats.area = Math.max(1, stats.area);
   stats.critChance = Math.min(1, Math.max(0, stats.critChance));
   stats.maxHp = Math.max(1, stats.maxHp);
   stats.toughness = Math.max(0.1, stats.toughness);
+  stats.resourceRegen = Math.max(0, stats.resourceRegen);
+  // Gold find had no floor until an item existed that reduces it. Two Warden's
+  // Coffers take it negative, and a negative multiplier does not mean "earns less" -
+  // it means the clear pays out negative gold.
+  stats.goldFind = Math.max(0, stats.goldFind);
+
+  // Attack speed is capped by what the resource can sustain, and the CAP IS WRITTEN
+  // INTO THE STAT rather than applied later in the damage formula.
+  //
+  // That is deliberate. `attackSpeed` now means "swings you actually get", so every
+  // caller - the combat layer, the character sheet, the balance harness - is talking
+  // about the same number without being told about resources. A panel quoting 3.0/s
+  // to a player who can only sustain 2.0/s would be the exact failure statsDps was
+  // written to prevent.
+  //
+  // Closed-form, which is non-negotiable: resolveStage has no per-tick loop, and
+  // that is what lets the server resolve offline progress and the harness sweep 300
+  // stages in milliseconds.
+  stats.attackSpeed = Math.min(stats.attackSpeed, sustainedRate(stats, equippedSkill(save)));
   return stats;
+}
+
+/**
+ * Uses per second the resource can pay for.
+ *
+ * A cheap cost against fast regen sits above your attack speed and never binds; an
+ * expensive one sits below it and binds from the first swing. That difference in
+ * WHEN it binds is the whole distinction between stamina and mana - the formula is
+ * identical and only the numbers differ.
+ */
+export function sustainedRate(stats: Stats, skill: Skill): number {
+  if (skill.resourceCost <= 0) return Infinity;
+  return stats.resourceRegen / skill.resourceCost;
+}
+
+/**
+ * Whether the resource, not the weapon, is what limits your attacks.
+ *
+ * Since deriveStats already capped attackSpeed to the smaller of the two, the
+ * resource is binding exactly when the two are equal - no need to carry the
+ * uncapped figure around to find out.
+ *
+ * Exported for the panel. A stat silently lower than the modifiers on your gear
+ * imply is a number a player cannot act on without being told why.
+ */
+export function isResourceBound(stats: Stats, skill: Skill): boolean {
+  return sustainedRate(stats, skill) <= stats.attackSpeed * (1 + 1e-9);
 }
 
 /** Effective HP: what the incoming damage pool is actually measured against. */
 export function effectiveHp(stats: Stats): number {
   return stats.maxHp * stats.toughness;
+}
+
+/**
+ * Multiplier on the stage boss's key chance, from equipped items.
+ *
+ * A PRODUCT, unlike goldOnKill's sum. Two copies of a doubling effect should double
+ * twice - and the chance is clamped at certainty where it is applied, so compounding
+ * has a hard ceiling rather than an unbounded one.
+ */
+export function keyDropMultiplier(save: SaveState, ctx: EffectContext): number {
+  return equippedEffects(save)
+    .filter((e) => e.kind === 'keyDrop' && conditionHolds(e, ctx))
+    .reduce((mult, e) => mult * (e.kind === 'keyDrop' ? e.multiplier : 1), 1);
 }
 
 /** Extra gold per kill, as a fraction of the stage's base gold value. */

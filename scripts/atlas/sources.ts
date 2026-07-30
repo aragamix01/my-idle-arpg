@@ -71,6 +71,26 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     'item.bloodstone': 115,
     'item.deep_delvers_idol': 129,
 
+    // The four Phase 2 uniques, and these were the last readable item tiles the
+    // pack has. 94 of 132 tiles are unbound but nearly all are floor, wall, door or
+    // fence; the free ones that read as an OBJECT at 16px are down to furniture and
+    // townsfolk. A fifth unique needs a second GridSource, which is what this
+    // indirection exists for - no game code moves when one is added.
+    'item.berserkers_anvil': 74,
+    'item.duelists_visor': 124,
+    'item.wardens_coffer': 91,
+    'item.bulwark_of_the_deep': 82,
+
+    // Weapon bases. Picked by rendering the sheet at 6x and reading it, not by
+    // guessing indices - 117 is the double axe and 131 the staff, and both were the
+    // only free tiles that read unmistakably as a weapon at 16px. There is no free
+    // sword: 104 is the player's swing animation and 105-107 are bound to
+    // giant_slayer and two shards.
+    'item.axe': 117,
+    'item.wand': 131,
+    'item.maul': 118,
+    'item.staff': 128,
+
     // Currency. Tiny Dungeon has no purpose-drawn crafting icons, so these are
     // the closest readable stand-ins from what the pack ships: potions for the
     // ores, torches for the flames, chests and tomes for the rest. The colour

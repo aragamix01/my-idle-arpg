@@ -9,7 +9,8 @@
  * Gold, stage and upgrades are never touched by any step.
  */
 
-import { CONTENT_VERSION, getAffix, type RolledAffix } from './content';
+import { CONTENT_VERSION, getAffix, getUnique, rollUniqueValues, type RolledAffix } from './content';
+import { rollStream } from './items';
 import { ITEM_SLOTS, type SaveState } from './types';
 
 /** First version whose saves use rolled item instances. */
@@ -23,6 +24,9 @@ export const CURRENCY_VERSION = 4;
 
 /** First version where modifiers carry a layer instead of add/mul. */
 export const LAYERS_VERSION = 5;
+
+/** First version with a weapon slot, skills, and uniques that roll their values. */
+export const WEAPONS_VERSION = 6;
 
 export interface MigrationResult {
   state: SaveState;
@@ -109,6 +113,43 @@ export function migrateSave(state: SaveState): MigrationResult {
       affixes: item.affixes.map(restat),
       baseAffix: item.baseAffix ? restat(item.baseAffix) : undefined,
     }));
+    migrated = true;
+  }
+
+  if (next.weapon === undefined) {
+    // v5 -> v6 adds the weapon slot, and this step is deliberately POWER-NEUTRAL.
+    //
+    // Unarmed's bases are the exact BASE_STATS values every save derived before
+    // skills existed, so a migrated character's stats do not move by a single point
+    // on load. Nothing is rerolled, nothing is granted, and no gear is disturbed.
+    //
+    // What does change is what happens next: the gold upgrade tracks were retuned on
+    // the assumption that a weapon carries two thirds of the ladder, so a migrated
+    // player needs a weapon drop before they can push further. They can still farm
+    // the stage they are on, and weapons take a healthy share of drops, so this
+    // resolves itself within a few clears rather than becoming a wall.
+    next.weapon = null;
+    migrated = true;
+  }
+
+  if (next.items.some((item) => item.uniqueId && item.uniqueRolls === undefined)) {
+    // v5 -> v6 gives every owned unique a roll inside its authored range.
+    //
+    // Rolled rather than pinned to the midpoint, even though itemEffects already
+    // falls back to the midpoint. A stored roll is what Angel Flame rerolls and what
+    // the panel reports quality against - leaving the field absent would give
+    // existing owners a unique that reads as having no roll at all, and a currency
+    // whose effect on it is invisible.
+    //
+    // Seeded from the item's own uid and craft count like every other roll, so the
+    // client's optimistic migration and the server's authoritative one agree.
+    next.items = next.items.map((item) => {
+      if (!item.uniqueId || item.uniqueRolls !== undefined) return item;
+      const unique = getUnique(item.uniqueId);
+      if (!unique) return item;
+      const rng = rollStream(state.seed, Number(item.uid), item.crafts);
+      return { ...item, uniqueRolls: rollUniqueValues(unique, rng) };
+    });
     migrated = true;
   }
 
