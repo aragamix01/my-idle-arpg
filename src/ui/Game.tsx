@@ -250,7 +250,7 @@ export function Game() {
           busy={pending}
           onEquip={(slot, itemId) => void send({ type: 'equipItem', slot, itemId })}
           onReroll={(uid) => void send({ type: 'rerollItem', uid })}
-          onDissemble={(uid) => void send({ type: 'dissembleItem', uid })}
+          onDissemble={(uids) => void send({ type: 'dissembleItems', uids })}
           onApplyCurrency={(currencyId, uid) => void send({ type: 'applyCurrency', currencyId, uid })}
           onCombine={(currencyId) => void send({ type: 'combineFragments', currencyId })}
           onClose={() => setPanelOpen(false)}
@@ -421,8 +421,8 @@ function describe(event: { type: string } & Record<string, unknown>): string {
       return 'the item was destroyed';
     case 'fragmentsCombined':
       return `combined into ${event.name}`;
-    case 'itemDissembled':
-      return 'dissembled an item';
+    case 'itemsDissembled':
+      return `dissembled ${event.count} item${Number(event.count) === 1 ? '' : 's'}`;
     case 'upgradeBought':
       return Number(event.count) > 1
         ? `${event.key} +${event.count} → ${event.level}`

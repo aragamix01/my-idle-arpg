@@ -498,7 +498,8 @@ test('dissembling a common yields a fragment without a confirmation', async ({ p
   expect(before).toBeGreaterThan(0);
 
   await tiles.first().click();
-  await panel.getByRole('button', { name: 'Dissemble' }).click();
+  // Exact: the filter bar's sweep button is also called Dissemble, with a count.
+  await panel.getByRole('button', { name: 'Dissemble', exact: true }).click();
 
   // Straight through: confirming every common would train the reflex that
   // makes the dialog useless on the one item where it matters.
@@ -625,6 +626,67 @@ test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) =>
   await expect
     .poll(async () => Number((await dungeon.textContent())?.match(/(\d+)\s*$/)?.[1] ?? -1))
     .toBe(keysBefore - 1);
+});
+
+test('bulk dissemble sweeps the filter and keeps equipped items', async ({ page }) => {
+  await page.goto('/');
+
+  await page.evaluate(async () => {
+    const post = (body: unknown) =>
+      fetch('/api/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    for (let i = 0; i < 20; i++) {
+      await post({ type: 'attemptStage' });
+      for (const key of ['damage', 'health', 'attackSpeed', 'toughness']) {
+        await post({ type: 'buyUpgrade', key, count: 'max' });
+      }
+    }
+  });
+  await page.reload();
+
+  await page.getByRole('button', { name: /^Character/ }).click();
+  const panel = page.getByRole('dialog', { name: 'Character' });
+  await panel.getByRole('button', { name: /^Inventory/ }).click();
+
+  const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
+
+  // Filter to commons, then equip one of them so the sweep has something it
+  // must refuse to destroy.
+  await panel.getByRole('button', { name: 'Common', exact: true }).click();
+  const commons = await tiles.count();
+  expect(commons).toBeGreaterThan(1);
+
+  await tiles.first().click();
+  await panel.getByRole('button', { name: 'Equip', exact: true }).click();
+  await expect(panel.getByText('Equipped (1/4)')).toBeVisible();
+
+  // The button counts only what it will actually destroy.
+  const sweep = panel.getByRole('button', { name: /^Dissemble \d+$/ });
+  await expect(sweep).toHaveText(`Dissemble ${commons - 1}`);
+  await sweep.click();
+
+  // A sweep always confirms, whatever is in it, and says what it keeps.
+  const confirm = page.getByRole('alertdialog');
+  await expect(confirm).toBeVisible();
+  await expect(confirm.getByText(`Dissemble ${commons - 1} items?`)).toBeVisible();
+  await expect(confirm.getByText(/1 equipped item will be kept/)).toBeVisible();
+
+  await confirm.getByRole('button', { name: /^Dissemble \d+$/ }).click();
+
+  // Only the equipped common survives.
+  await expect(tiles).toHaveCount(1);
+  await expect(page.getByText(new RegExp(`dissembled ${commons - 1} items`))).toBeVisible();
+
+  // Cancelling must destroy nothing.
+  await panel.getByRole('button', { name: 'Common', exact: true }).click();
+  const remaining = await tiles.count();
+  await panel.getByRole('button', { name: /^Dissemble \d+$/ }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  await expect(tiles).toHaveCount(remaining);
 });
 
 test('progress survives a reload', async ({ page }) => {

@@ -50,13 +50,18 @@ export const ITEM_SLOTS = 4;
  * Inventory size.
  *
  * Every clear drops one to three items, so without a cap the save blob grows
- * without bound - and it is read and written on every single command. At 100
- * items the blob is roughly 20KB, which is the reason this is not higher.
+ * without bound - and it is read and written on every single command. At 200
+ * items the blob is roughly 40KB, which is the real cost of this number and the
+ * reason it is not simply unbounded.
  *
- * A full inventory refuses new drops rather than discarding silently, because
- * deciding what to throw away is the interesting part.
+ * 200 rather than 100 because dissembling arrived: a full inventory is now a
+ * pile of crafting material rather than a chore, and clearing it is one action
+ * instead of a hundred. The cap exists to bound the save, not to force
+ * housekeeping.
+ *
+ * A full inventory still refuses new drops rather than discarding silently.
  */
-export const INVENTORY_CAP = 100;
+export const INVENTORY_CAP = 200;
 
 /**
  * Authoritative player state. The server owns this; the client holds a cache

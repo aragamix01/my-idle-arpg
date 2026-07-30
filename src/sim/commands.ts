@@ -94,7 +94,20 @@ export const CommandSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ type: z.literal('combineFragments'), currencyId: CurrencyIdSchema }).strict(),
-  z.object({ type: z.literal('dissembleItem'), uid: z.string().min(1) }).strict(),
+  /**
+   * Dissembling, one item or two hundred.
+   *
+   * One command rather than a single and a bulk variant: a single dissemble is a
+   * list of one, and two commands would be two copies of the same ownership and
+   * equipped checks. Bounded by the inventory cap so an untrusted list cannot
+   * ask the server for unbounded work.
+   */
+  z
+    .object({
+      type: z.literal('dissembleItems'),
+      uids: z.array(z.string().min(1)).min(1).max(INVENTORY_CAP),
+    })
+    .strict(),
   /** Takes no stage: a dungeon always runs at bestStage, never at a chosen one. */
   z.object({ type: z.literal('attemptDungeon') }).strict(),
   z.object({ type: z.literal('claimOffline') }).strict(),
@@ -116,7 +129,7 @@ export type SimEvent =
   | { type: 'itemTransmuted'; uid: string; name: string }
   | { type: 'itemDestroyed'; uid: string }
   | { type: 'fragmentsCombined'; currencyId: string; name: string }
-  | { type: 'itemDissembled'; uid: string; yielded: string }
+  | { type: 'itemsDissembled'; count: number; yields: Record<string, number> }
   | { type: 'upgradeBought'; key: string; level: number; cost: number; count: number }
   | { type: 'offlineClaimed'; gold: number; seconds: number; capped: boolean };
 
@@ -378,21 +391,38 @@ export function applyCommand(
       break;
     }
 
-    case 'dissembleItem': {
-      const item = findItem(next, command.uid);
-      if (!item) return err(`not owned: ${command.uid}`);
+    case 'dissembleItems': {
+      // Deduplicated first: a list naming the same item twice would otherwise
+      // pay out twice for one item.
+      const uids = [...new Set(command.uids)];
+
+      // Validated in full before anything is destroyed. A partial dissemble
+      // that melted eleven items and then failed on the twelfth would leave the
+      // player unable to tell what they still owned.
+      const targets = uids.map((uid) => findItem(next, uid));
+      const missing = uids.find((uid, i) => !targets[i]);
+      if (missing) return err(`not owned: ${missing}`);
+
       // Refuse rather than silently unequipping. Destroying the item you are
       // currently wearing is the single most expensive misclick available, and
       // an unequip step is a cheap confirmation that costs nothing to undo.
-      if (next.loadout.includes(command.uid)) return err('unequip it first');
+      // Bulk callers filter equipped items out before sending, so this stays a
+      // single rule rather than one rule for one item and another for many.
+      if (uids.some((uid) => next.loadout.includes(uid))) return err('unequip it first');
 
       // Dissembling replaced discarding outright. An item you do not want is
-      // now raw material for one you do, which makes a full inventory a
-      // decision about what to melt down rather than what to throw away.
-      const yielded = DISSEMBLE_YIELD[item.rarity];
-      next.items = next.items.filter((current) => current.uid !== command.uid);
-      next.currency = credit(next.currency, { [yielded]: 1 });
-      events.push({ type: 'itemDissembled', uid: command.uid, yielded });
+      // now raw material for one you do, which makes a full inventory a pile of
+      // material rather than a chore.
+      const yields: Record<string, number> = {};
+      for (const item of targets) {
+        const yielded = DISSEMBLE_YIELD[item!.rarity];
+        yields[yielded] = (yields[yielded] ?? 0) + 1;
+      }
+
+      const doomed = new Set(uids);
+      next.items = next.items.filter((current) => !doomed.has(current.uid));
+      next.currency = credit(next.currency, yields as CurrencyPurse);
+      events.push({ type: 'itemsDissembled', count: uids.length, yields });
       break;
     }
 

@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ITEM_SLOTS,
+  DISSEMBLE_YIELD,
   effectiveHp,
   enemyCount,
   getCurrency,
@@ -54,7 +55,7 @@ interface Props {
   busy: boolean;
   onEquip: (slot: number, itemId: string | null) => void;
   onReroll: (uid: string) => void;
-  onDissemble: (uid: string) => void;
+  onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
   onCombine: (currencyId: CurrencyId) => void;
   onClose: () => void;
@@ -237,7 +238,7 @@ function InventoryTab({
   armed: CurrencyId | null;
   onEquip: (slot: number, itemId: string | null) => void;
   onReroll: (uid: string) => void;
-  onDissemble: (uid: string) => void;
+  onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -245,8 +246,14 @@ function InventoryTab({
   const [rarityFilter, setRarityFilter] = useState<Rarity[]>([]);
   const [equippedOnly, setEquippedOnly] = useState(false);
   const [crafting, setCrafting] = useState<string | null>(null);
-  /** Uid awaiting a dissemble confirmation, for rares and uniques. */
-  const [confirming, setConfirming] = useState<string | null>(null);
+  /**
+   * Items awaiting a dissemble confirmation.
+   *
+   * One list for one item and for two hundred. A single rare and a bulk sweep
+   * are the same irreversible action at different scales, and giving them
+   * separate dialogs would mean two places to keep the wording honest.
+   */
+  const [confirming, setConfirming] = useState<string[] | null>(null);
 
   const byUid = useMemo(() => new Map(hud.items.map((item) => [item.uid, item])), [hud.items]);
 
@@ -304,13 +311,26 @@ function InventoryTab({
 
   /** Rares and uniques are worth a confirmation; commons and magics are not. */
   const requestDissemble = (item: ItemInstance) => {
-    if (item.rarity === 'rare' || item.rarity === 'unique') return setConfirming(item.uid);
-    onDissemble(item.uid);
+    if (item.rarity === 'rare' || item.rarity === 'unique') return setConfirming([item.uid]);
+    onDissemble([item.uid]);
     setSelected(null);
   };
 
+  /**
+   * Everything the current filter shows, minus what is equipped.
+   *
+   * Equipped items are dropped here rather than refused by the command, because
+   * the player chose a filter, not a list - and losing a worn item to a sweep
+   * would be the exact misclick the single-item rule exists to prevent. The
+   * dialog says how many were kept.
+   */
+  const sweepable = visible.filter((item) => !hud.loadout.includes(item.uid));
+  const keptEquipped = visible.length - sweepable.length;
+
   const craftingItem = crafting ? byUid.get(crafting) : undefined;
-  const confirmingItem = confirming ? byUid.get(confirming) : undefined;
+  const confirmingItems = confirming
+    ? confirming.map((uid) => byUid.get(uid)).filter((item): item is ItemInstance => !!item)
+    : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -400,6 +420,19 @@ function InventoryTab({
           Equipped
         </button>
 
+        {/* Acts on the filter, which is what makes it useful: "dissemble every
+            common" is a rarity chip plus this button, with no per-item
+            clicking. Always confirms - a sweep is irreversible at scale. */}
+        <button
+          type="button"
+          disabled={busy || sweepable.length === 0}
+          onClick={() => setConfirming(sweepable.map((item) => item.uid))}
+          title="Dissembles everything the current filter shows, keeping equipped items"
+          className="rounded border border-red-900/70 px-2 py-1 text-red-400 hover:bg-red-950/40 disabled:opacity-40"
+        >
+          Dissemble {sweepable.length}
+        </button>
+
         <span className="ml-auto font-mono text-neutral-500">
           {visible.length}/{hud.items.length}
         </span>
@@ -450,12 +483,13 @@ function InventoryTab({
         />
       )}
 
-      {confirmingItem && (
+      {confirmingItems.length > 0 && (
         <ConfirmDissemble
-          item={confirmingItem}
+          items={confirmingItems}
+          keptEquipped={confirmingItems.length > 1 ? keptEquipped : 0}
           onCancel={() => setConfirming(null)}
           onConfirm={() => {
-            onDissemble(confirmingItem.uid);
+            onDissemble(confirmingItems.map((item) => item.uid));
             setConfirming(null);
             setSelected(null);
           }}
@@ -466,21 +500,100 @@ function InventoryTab({
 }
 
 /**
- * Confirmation for dissembling a rare or unique.
+ * Confirmation for dissembling.
  *
- * Only for those two. Confirming every common would train the reflex that makes
- * the dialog useless on the one item where it matters.
+ * A single common never reaches here - confirming every common would train the
+ * reflex that makes the dialog useless on the one item where it matters. A
+ * single rare or unique does, and so does every sweep regardless of what is in
+ * it, because destroying dozens of items at once is worth a beat even when each
+ * one individually would not be.
+ *
+ * The breakdown by rarity is the point: "dissemble 47 items" tells a player
+ * nothing about whether they are about to lose something they wanted.
  */
 function ConfirmDissemble({
-  item,
+  items,
+  keptEquipped,
   onCancel,
   onConfirm,
 }: {
-  item: ItemInstance;
+  items: ItemInstance[];
+  keptEquipped: number;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  if (items.length > 1) {
+    const counts = RARITIES.map((rarity) => ({
+      rarity,
+      count: items.filter((item) => item.rarity === rarity).length,
+    })).filter((entry) => entry.count > 0);
+
+    const yields = new Map<string, number>();
+    for (const item of items) {
+      const id = DISSEMBLE_YIELD[item.rarity];
+      yields.set(id, (yields.get(id) ?? 0) + 1);
+    }
+
+    return (
+      <Backdrop onCancel={onCancel}>
+        <p className="text-sm text-neutral-200">Dissemble {items.length} items?</p>
+
+        <ul className="mt-2 space-y-0.5 text-xs">
+          {counts.map((entry) => (
+            <li key={entry.rarity} className={RARITY_STYLE[entry.rarity].text}>
+              {entry.count} × {RARITY_STYLE[entry.rarity].label}
+            </li>
+          ))}
+        </ul>
+
+        <p className="mt-2 border-t border-neutral-800 pt-2 text-xs text-neutral-400">
+          Yields{' '}
+          {[...yields]
+            .map(([id, count]) => `${count} × ${getCurrency(id)?.name ?? id}`)
+            .join(', ')}
+          .
+        </p>
+
+        {keptEquipped > 0 && (
+          <p className="mt-1 text-xs text-emerald-400">
+            {keptEquipped} equipped {keptEquipped === 1 ? 'item' : 'items'} will be kept.
+          </p>
+        )}
+
+        <p className="mt-2 text-xs text-neutral-500">
+          The items are destroyed. This cannot be undone.
+        </p>
+
+        <Actions onCancel={onCancel} onConfirm={onConfirm} label={`Dissemble ${items.length}`} />
+      </Backdrop>
+    );
+  }
+
+  const item = items[0];
   const style = RARITY_STYLE[item.rarity];
+  return (
+    <Backdrop onCancel={onCancel}>
+      <p className="text-sm text-neutral-200">
+        Dissemble <span className={style.text}>{itemName(item)}</span>?
+      </p>
+      <p className="mt-1 text-xs text-neutral-400">
+        Yields 1 × {getCurrency(DISSEMBLE_YIELD[item.rarity])?.name}.
+      </p>
+      <p className="mt-1 text-xs text-neutral-500">
+        The item is destroyed. This cannot be undone.
+      </p>
+      <Actions onCancel={onCancel} onConfirm={onConfirm} label="Dissemble" />
+    </Backdrop>
+  );
+}
+
+function Backdrop({
+  onCancel,
+  children,
+}: {
+  onCancel: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <div
       className="pointer-events-auto fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
@@ -494,29 +607,37 @@ function ConfirmDissemble({
         aria-modal="true"
         aria-label="Confirm dissemble"
       >
-        <p className="text-sm text-neutral-200">
-          Dissemble <span className={style.text}>{itemName(item)}</span>?
-        </p>
-        <p className="mt-1 text-xs text-neutral-500">
-          The item is destroyed. This cannot be undone.
-        </p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="rounded border border-red-900/70 bg-red-950/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-950/70"
-          >
-            Dissemble
-          </button>
-        </div>
+        {children}
       </div>
+    </div>
+  );
+}
+
+function Actions({
+  onCancel,
+  onConfirm,
+  label,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+  label: string;
+}) {
+  return (
+    <div className="mt-4 flex justify-end gap-2">
+      <button
+        type="button"
+        onClick={onCancel}
+        className="rounded border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={onConfirm}
+        className="rounded border border-red-900/70 bg-red-950/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-950/70"
+      >
+        {label}
+      </button>
     </div>
   );
 }

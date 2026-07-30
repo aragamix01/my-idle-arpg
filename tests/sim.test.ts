@@ -584,12 +584,12 @@ describe('inventory', () => {
     const save: SaveState = { ...newSave(2, T0), items: [item] };
     const equipped = play(save, [{ type: 'equipItem', slot: 1, itemId: item.uid }]);
 
-    const refused = applyCommand(equipped, { type: 'dissembleItem', uid: item.uid }, T0);
+    const refused = applyCommand(equipped, { type: 'dissembleItems', uids: [item.uid] }, T0);
     expect(refused.ok).toBe(false);
 
     const after = play(equipped, [
       { type: 'equipItem', slot: 1, itemId: null },
-      { type: 'dissembleItem', uid: item.uid },
+      { type: 'dissembleItems', uids: [item.uid] },
     ]);
     expect(after.items).toHaveLength(0);
   });
@@ -848,12 +848,91 @@ describe('currency', () => {
     for (const rarity of ['common', 'magic', 'rare', 'unique'] as const) {
       const item = itemOfRarity(rarity, rarity === 'unique' ? 3 : 5);
       const save: SaveState = { ...newSave(5, T0), items: [item] };
-      const result = applyCommand(save, { type: 'dissembleItem', uid: item.uid }, T0);
+      const result = applyCommand(save, { type: 'dissembleItems', uids: [item.uid] }, T0);
       expect(result.ok).toBe(true);
       if (!result.ok) continue;
       expect(result.value.state.items).toHaveLength(0);
       expect(result.value.state.currency[DISSEMBLE_YIELD[rarity]]).toBe(1);
     }
+  });
+
+  it('dissembles many items in one command, crediting every yield', () => {
+    const items = [1, 2, 3, 4, 5].map((uid) => rollItem(5, uid, 40));
+    const save: SaveState = { ...newSave(5, T0), items };
+
+    const result = applyCommand(
+      save,
+      { type: 'dissembleItems', uids: items.map((item) => item.uid) },
+      T0,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.state.items).toHaveLength(0);
+
+    // Every item's yield lands, grouped by the fragment its rarity is worth.
+    const expected: Record<string, number> = {};
+    for (const item of items) {
+      const id = DISSEMBLE_YIELD[item.rarity];
+      expected[id] = (expected[id] ?? 0) + 1;
+    }
+    for (const [id, count] of Object.entries(expected)) {
+      expect(result.value.state.currency[id as CurrencyId], id).toBe(count);
+    }
+  });
+
+  it('destroys nothing when any item in the list is invalid', () => {
+    // Melting eleven items and then failing on the twelfth would leave a player
+    // unable to tell what they still owned.
+    const items = [1, 2, 3].map((uid) => rollItem(5, uid, 40));
+    const save: SaveState = { ...newSave(5, T0), items };
+
+    const result = applyCommand(
+      save,
+      { type: 'dissembleItems', uids: [...items.map((i) => i.uid), 'nonexistent'] },
+      T0,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('refuses a bulk dissemble containing an equipped item', () => {
+    const items = [1, 2, 3].map((uid) => rollItem(5, uid, 40));
+    const save: SaveState = {
+      ...newSave(5, T0),
+      items,
+      loadout: [items[1].uid, null, null, null],
+    };
+
+    const result = applyCommand(
+      save,
+      { type: 'dissembleItems', uids: items.map((i) => i.uid) },
+      T0,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('unequip it first');
+  });
+
+  it('pays out once for an item named twice', () => {
+    const item = rollItem(5, 1, 40);
+    const save: SaveState = { ...newSave(5, T0), items: [item] };
+
+    const result = applyCommand(
+      save,
+      { type: 'dissembleItems', uids: [item.uid, item.uid, item.uid] },
+      T0,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.state.currency[DISSEMBLE_YIELD[item.rarity]]).toBe(1);
+  });
+
+  it('bounds the list at the schema boundary', () => {
+    // The list comes from an untrusted client, so its length has to be capped
+    // before it reaches the handler.
+    const tooMany = Array.from({ length: INVENTORY_CAP + 1 }, (_, i) => String(i + 1));
+    expect(CommandSchema.safeParse({ type: 'dissembleItems', uids: tooMany }).success).toBe(false);
+    expect(CommandSchema.safeParse({ type: 'dissembleItems', uids: [] }).success).toBe(false);
   });
 
   it('is fully determined by seed, uid and craft count', () => {

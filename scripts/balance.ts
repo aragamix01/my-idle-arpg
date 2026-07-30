@@ -347,6 +347,17 @@ function spendCurrency(save: SaveState, stage: number): SaveState {
 }
 
 /**
+ * How many bench items the agent will weigh against a slot.
+ *
+ * Not the whole inventory. Every candidate costs a resolveStage through
+ * value(), so an exhaustive search is O(slots x items x passes) per clear -
+ * which at a 200-slot inventory pushed the golden-snapshot test past its
+ * timeout. It is also a poor model: a player triages by eye and tries the
+ * promising few, rather than evaluating two hundred items against four slots.
+ */
+const LOADOUT_CANDIDATES = 24;
+
+/**
  * Equip whatever raises the objective.
  *
  * Repeated single swaps rather than a search over all combinations - the
@@ -359,8 +370,15 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
     const baseline = value(current, stage);
     let best: { save: SaveState; gain: number } | null = null;
 
+    // Ranked by the same crude heuristic the discard logic uses. It can miss an
+    // item that is weak overall but ideal for this build; that is the cost of
+    // not evaluating everything, and 24 candidates for 4 slots is generous.
+    const candidates = [...current.items]
+      .sort((a, b) => itemPower(b) - itemPower(a))
+      .slice(0, LOADOUT_CANDIDATES);
+
     for (let slot = 0; slot < ITEM_SLOTS; slot++) {
-      for (const item of current.items) {
+      for (const item of candidates) {
         if (current.loadout.includes(item.uid)) continue;
         const loadout = [...current.loadout];
         loadout[slot] = item.uid;
