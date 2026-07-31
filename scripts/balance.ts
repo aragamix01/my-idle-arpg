@@ -33,6 +33,7 @@ import {
   equipSlots,
   ITEM_SLOTS,
   isWeaponBase,
+  itemEffects,
   itemPower,
   newSave,
   rerollAffixes,
@@ -48,6 +49,7 @@ import {
   UPGRADE_KEYS,
   type Big,
   type CurrencyId,
+  type ItemInstance,
   type SaveState,
   type UpgradeKey,
 } from '../src/sim';
@@ -375,6 +377,38 @@ const LOADOUT_CANDIDATES = 24;
  * Repeated single swaps rather than a search over all combinations - the
  * agent is greedy everywhere else and this keeps it comparable.
  */
+/**
+ * Greedily fill any live-but-empty gear slot from `candidates`.
+ *
+ * The second ply of the slot-granter evaluation above: a slot is worth nothing until
+ * something is in it, so the granter has to be judged on the loadout it enables rather
+ * than the one it arrives in.
+ */
+function fillEmptySlots(save: SaveState, stage: number, candidates: ItemInstance[]): SaveState {
+  let current = save;
+  const slots = equipSlots(current, { stage, isBoss: false, enemyHpFraction: 1 });
+
+  for (let slot = 0; slot < slots; slot++) {
+    if (current.loadout[slot]) continue;
+    let best: SaveState | null = null;
+    let bestValue = value(current, stage);
+
+    for (const item of candidates) {
+      if (current.loadout.includes(item.uid) || isWeaponBase(item.baseId)) continue;
+      const loadout = [...current.loadout];
+      loadout[slot] = item.uid;
+      const candidate = { ...current, loadout };
+      const v = value(candidate, stage);
+      if (v > bestValue) {
+        bestValue = v;
+        best = candidate;
+      }
+    }
+    if (best) current = best;
+  }
+  return current;
+}
+
 function improveLoadout(save: SaveState, stage: number): SaveState {
   let current = save;
 
@@ -385,9 +419,18 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
     // Ranked by the same crude heuristic the discard logic uses. It can miss an
     // item that is weak overall but ideal for this build; that is the cost of
     // not evaluating everything, and 24 candidates for 4 slots is generous.
-    const candidates = [...current.items]
-      .sort((a, b) => itemPower(b) - itemPower(a))
-      .slice(0, LOADOUT_CANDIDATES);
+    const ranked = [...current.items].sort((a, b) => itemPower(b) - itemPower(a));
+    // Slot granters are added back regardless of rank. itemPower is a per-item
+    // heuristic and a slot's worth is a property of the whole loadout, so it ranked
+    // the harness 25th of 200 - one place outside the window - and the agent never
+    // saw the item at all. "The search rejected it" and "the search never looked"
+    // are very different findings, and only one of them is about balance.
+    const granters = ranked.filter((item) =>
+      itemEffects(item).some((e) => e.kind === 'equipSlots' && e.delta > 0),
+    );
+    const candidates = [
+      ...new Set([...ranked.slice(0, LOADOUT_CANDIDATES), ...granters]),
+    ];
 
     // The LIVE count, not the base one. A unique that grants slots would otherwise
     // give the agent positions it never tries to fill, and the harness would report
@@ -402,6 +445,31 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
         const candidate = { ...current, loadout };
         const gain = value(candidate, stage) - baseline;
         if (gain > 0 && (!best || gain > best.gain)) best = { save: candidate, gain };
+      }
+    }
+
+    /*
+      Slot granters need TWO plies, and this is not an optimisation.
+
+      Equipping one costs value immediately - Traveller's Harness is 30% less damage -
+      and pays only once something goes in the slot it opened. A greedy one-swap search
+      never takes a step down, so it rejected the item every time: the golden run
+      OWNED one for a hundred stages and wore four slots the whole way, which made the
+      item untestable rather than balanced.
+
+      So the move is evaluated as "equip it AND fill what it opened", which is what a
+      player would actually do. One extra ply, granters only, no recursion.
+    */
+    for (const item of candidates) {
+      if (current.loadout.includes(item.uid) || isWeaponBase(item.baseId)) continue;
+      if (!itemEffects(item).some((e) => e.kind === 'equipSlots' && e.delta > 0)) continue;
+
+      for (let slot = 0; slot < slots; slot++) {
+        const loadout = [...current.loadout];
+        loadout[slot] = item.uid;
+        const filled = fillEmptySlots({ ...current, loadout }, stage, candidates);
+        const gain = value(filled, stage) - baseline;
+        if (gain > 0 && (!best || gain > best.gain)) best = { save: filled, gain };
       }
     }
 

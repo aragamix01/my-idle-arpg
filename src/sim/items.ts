@@ -684,6 +684,11 @@ export function itemPower(item: ItemInstance): number {
     // unique above any single affix without pretending to price it exactly - the real
     // comparison is the power-budget search, which equips the thing and measures.
     if (effect.kind === 'equipSlots') return power + effect.delta;
+    // Worth what it multiplies, which this function cannot see - it prices one item
+    // in isolation and amplification is a property of the whole loadout. Counted at
+    // its excess so the heuristic ranks it as significant without pretending to know
+    // by how much; the power-budget search is what actually measures it.
+    if (effect.kind === 'amplifyOthers') return power + (effect.multiplier - 1);
     if (effect.op === 'more') return power + (effect.value - 1);
     if (effect.op === 'increased') return power + effect.value;
     // The base is a Big for damage and max HP, and a plain number for the rest. Read

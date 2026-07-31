@@ -42,6 +42,8 @@ export const SPRITE_IDS = [
   'item.duelists_visor',
   'item.wardens_coffer',
   'item.bulwark_of_the_deep',
+  'item.travellers_harness',
+  'item.monomaniacs_seal',
   'item.axe',
   'item.wand',
   'item.maul',

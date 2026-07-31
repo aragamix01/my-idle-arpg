@@ -119,6 +119,12 @@ export function describeEffect(effect: Effect): string {
     return `x${effect.multiplier.toFixed(2)} dungeon key drop chance${suffix}`;
   }
 
+  if (effect.kind === 'amplifyOthers') {
+    // "other equipped items" is load-bearing wording: it does not amplify itself, and
+    // a line reading "x2.0 to your modifiers" would promise that it did.
+    return `x${effect.multiplier.toFixed(2)} to other equipped items' modifiers${suffix}`;
+  }
+
   if (effect.kind === 'equipSlots') {
     const n = Math.abs(effect.delta);
     const slots = n === 1 ? 'slot' : 'slots';

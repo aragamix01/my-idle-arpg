@@ -109,6 +109,23 @@ export const EffectSchema = z.discriminatedUnion('kind', [
       when: ConditionSchema.optional(),
     })
     .strict(),
+  /**
+   * Scales what every OTHER equipped item contributes.
+   *
+   * Applies to `flat` and `increased` only. `more` is already the compounding layer,
+   * and multiplying a multiplier turns a bounded effect into an unbounded one - the
+   * same reason a rollable affix may not use `more` at all.
+   *
+   * Never applies to itself, or it would compound against its own downside and two
+   * copies would compound against each other.
+   */
+  z
+    .object({
+      kind: z.literal('amplifyOthers'),
+      multiplier: z.number(),
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
 ]);
 
 export type Effect = z.infer<typeof EffectSchema>;
@@ -431,6 +448,13 @@ export const UniqueEffectSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('equipSlots'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('amplifyOthers'),
       roll: RollRangeSchema,
       when: ConditionSchema.optional(),
     })

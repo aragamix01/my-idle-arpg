@@ -710,6 +710,79 @@ describe('equip slots', () => {
     expect(fingerprint(wearingAt(0, item))).not.toBe(bare);
   });
 
+  /** A unique instance rolled at the top of every range. */
+  const uniqueItem = (id: string, uid = 'u1') => {
+    const unique = getUnique(id)!;
+    return {
+      uid,
+      baseId: id,
+      rarity: 'unique' as const,
+      itemLevel: 60,
+      affixes: [],
+      rerolls: 0,
+      crafts: 0,
+      uniqueId: id,
+      uniqueRolls: unique.effects.map((e) => e.roll.max),
+    };
+  };
+
+  it('grants slots from a base position and ignores one parked past the window', () => {
+    // The rule that stops the fixed point running away. A granter inside the first
+    // four positions works; the same item at index 4 is inert, because it would
+    // otherwise grant the slot that makes it live and then grant it again.
+    const granter = uniqueItem('travellers-harness');
+    const granted = granter.uniqueRolls[0];
+    expect(granted).toBeGreaterThan(0);
+
+    expect(equipSlots(wearingAt(0, granter), CTX)).toBe(ITEM_SLOTS + granted);
+    expect(equipSlots(wearingAt(ITEM_SLOTS, granter), CTX)).toBe(ITEM_SLOTS);
+  });
+
+  it('settles rather than oscillating when a taker is worn', () => {
+    // Removing slots shrinks the window, which can only ever remove more granters -
+    // monotone, so it converges. Two takers cannot take the count below one.
+    const taker = uniqueItem('monomaniacs-seal', 'a');
+    const other = { ...uniqueItem('monomaniacs-seal', 'b') };
+
+    const one = wearingAt(0, taker);
+    expect(equipSlots(one, CTX)).toBe(ITEM_SLOTS - 1);
+
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[0] = taker.uid;
+    loadout[1] = other.uid;
+    const both: SaveState = { ...newSave(5, T0), items: [taker, other], loadout };
+    expect(equipSlots(both, CTX)).toBe(ITEM_SLOTS - 2);
+    // And calling it repeatedly gives the same answer - a fixed point, not a step.
+    expect(equipSlots(both, CTX)).toBe(equipSlots(both, CTX));
+  });
+
+  it('amplifies other items but never itself', () => {
+    // The amplifier's own effects are excluded, or it would scale its own downside
+    // and two copies would compound against each other - the shape a rollable `more`
+    // is banned for.
+    const seal = uniqueItem('monomaniacs-seal', 'seal');
+    const gear = rollItem(5, 1, 60);
+
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[0] = seal.uid;
+    loadout[1] = gear.uid;
+    const withBoth: SaveState = { ...newSave(5, T0), items: [seal, gear], loadout };
+
+    const alone = deriveStats({ ...newSave(5, T0), items: [gear], loadout: [gear.uid] }, CTX);
+    const bare = deriveStats(newSave(5, T0), CTX);
+    const amplified = deriveStats(withBoth, CTX);
+
+    // Whatever the gear contributed on its own is now worth more.
+    const gearGain = statsDps(alone).div(statsDps(bare)).toNumber();
+    const bothGain = statsDps(amplified).div(statsDps(bare)).toNumber();
+    if (gearGain > 1.0001) expect(bothGain).toBeGreaterThan(gearGain);
+
+    // Wearing the seal ALONE is exactly a bare character minus a slot: it has nothing
+    // to amplify, and it must not amplify itself into mattering.
+    const sealOnly = deriveStats(wearingAt(0, seal), CTX);
+    expect(statsDps(sealOnly).eq(statsDps(bare))).toBe(true);
+  });
+
   it('refuses to equip into a locked slot, on the server', () => {
     const item = rollItem(5, 1, 60);
     const save: SaveState = { ...newSave(5, T0), items: [item] };

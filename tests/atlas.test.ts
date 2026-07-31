@@ -73,7 +73,8 @@ describe('atlas', () => {
 
   it('maps no two sprite ids to the same tile', () => {
     // Not fatal, but almost always a copy-paste slip in sources.ts rather than
-    // a deliberate alias.
+    // a deliberate alias. A deliberate one goes in `placeholders`, which is the
+    // difference between "this is temporary art" and "nobody noticed".
     for (const source of SOURCES) {
       const used = new Map<number, string[]>();
       for (const [id, index] of Object.entries(source.tiles)) {
@@ -82,6 +83,25 @@ describe('atlas', () => {
       }
       const duplicates = [...used.entries()].filter(([, ids]) => ids.length > 1);
       expect(duplicates.map(([index, ids]) => `tile ${index}: ${ids.join(', ')}`)).toEqual([]);
+    }
+  });
+
+  it('names every borrowed tile out loud', () => {
+    // Placeholders are allowed, silence is not. Printing them on every run is the
+    // point: temporary art that nothing ever mentions again is permanent art.
+    const borrowed = SOURCES.flatMap((source) =>
+      Object.entries(source.placeholders ?? {}).map(([id, index]) => `${id} -> tile ${index}`),
+    );
+    if (borrowed.length > 0) {
+      console.log(`placeholder sprites awaiting real art:\n  ${borrowed.join('\n  ')}`);
+    }
+
+    // Each one still has to resolve to actual art, or the placeholder is a blank
+    // square and the item renders as nothing.
+    for (const source of SOURCES) {
+      for (const id of Object.keys(source.placeholders ?? {})) {
+        expect(manifest.frames[id], `${id} has no frame`).toBeDefined();
+      }
     }
   });
 });

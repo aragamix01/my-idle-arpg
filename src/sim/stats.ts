@@ -93,12 +93,19 @@ function collectUpgrades(buckets: Buckets, levels: UpgradeLevels): void {
   }
 }
 
-function collectEffects(buckets: Buckets, effects: Effect[]): void {
+/**
+ * @param amplify Scale applied to this source's flat and increased contributions.
+ *
+ * `more` is deliberately not amplified. It is already the compounding layer, and
+ * multiplying a multiplier is how a bounded effect becomes an unbounded one - the
+ * same reasoning that keeps `more` off rollable affixes entirely.
+ */
+function collectEffects(buckets: Buckets, effects: Effect[], amplify = 1): void {
   for (const e of effects) {
     if (e.kind !== 'statMod') continue;
     const layers = buckets[e.stat as StatKey];
-    if (e.op === 'flat') layers.flat += e.value;
-    else if (e.op === 'increased') layers.increased += e.value;
+    if (e.op === 'flat') layers.flat += e.value * amplify;
+    else if (e.op === 'increased') layers.increased += e.value * amplify;
     else layers.more = layers.more.mul(e.value);
   }
 }
@@ -234,19 +241,51 @@ export function equipSlots(save: SaveState, ctx: EffectContext): number {
  * The weapon counts. It is an ordinary item that happens to also grant a skill, so
  * its affixes and implicit contribute exactly like any other equipped item's.
  */
-export function equippedEffects(save: SaveState, ctx: EffectContext): Effect[] {
+export function equippedGroups(save: SaveState, ctx: EffectContext): Effect[][] {
   const base = baseGearEffects(save);
   const slots = slotsFrom(base, ctx);
 
-  const out: Effect[] = [];
-  for (let i = 0; i < Math.min(slots, ITEM_SLOTS); i++) out.push(...base[i]);
+  const out: Effect[][] = [];
+  for (let i = 0; i < Math.min(slots, ITEM_SLOTS); i++) out.push(base[i]);
   // Positions past the base four are only resolved when something actually granted
   // them, which is the uncommon case.
-  for (let i = ITEM_SLOTS; i < slots; i++) out.push(...slotEffects(save, i));
+  for (let i = ITEM_SLOTS; i < slots; i++) out.push(slotEffects(save, i));
 
   const weapon = equippedWeapon(save);
-  if (weapon) out.push(...itemEffects(weapon));
+  if (weapon) out.push(itemEffects(weapon));
   return out;
+}
+
+export function equippedEffects(save: SaveState, ctx: EffectContext): Effect[] {
+  return equippedGroups(save, ctx).flat();
+}
+
+/**
+ * How much each equipped item's contributions are scaled by the OTHER items.
+ *
+ * One number per group, in the same order. An amplifier multiplies everything worn
+ * except itself: `total / own` is the product of every other source's multiplier,
+ * which is the cheap way to say "all of them but this one".
+ *
+ * Excluding itself is not a nicety. An amplifier that scaled its own effects would
+ * compound against its own downside, and two of them would compound against each
+ * other - the same shape as a rollable `more` affix, which the registry forbids for
+ * exactly this reason.
+ */
+function amplifiers(groups: Effect[][], ctx: EffectContext): number[] {
+  const own = groups.map((effects) =>
+    effects.reduce(
+      (mult, e) =>
+        e.kind === 'amplifyOthers' && conditionHolds(e, ctx) ? mult * e.multiplier : mult,
+      1,
+    ),
+  );
+
+  // Nothing amplifies anything, which is every loadout without that one unique.
+  if (own.every((m) => m === 1)) return own.map(() => 1);
+
+  const total = own.reduce((a, b) => a * b, 1);
+  return own.map((m) => (m === 0 ? total : total / m));
 }
 
 /**
@@ -322,10 +361,18 @@ function baseStats(save: SaveState, ctx: EffectContext): Stats {
 export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
   const buckets = emptyBuckets();
   collectUpgrades(buckets, save.upgrades);
-  collectEffects(
-    buckets,
-    equippedEffects(save, ctx).filter((e) => conditionHolds(e, ctx)),
-  );
+
+  // Grouped by source item rather than flattened, because an amplifier scales what
+  // the OTHER items contribute - a flat list has no way to say which is which.
+  const groups = equippedGroups(save, ctx);
+  const scale = amplifiers(groups, ctx);
+  groups.forEach((effects, i) => {
+    collectEffects(
+      buckets,
+      effects.filter((e) => conditionHolds(e, ctx)),
+      scale[i],
+    );
+  });
 
   const base = baseStats(save, ctx);
   const stats = { ...base };

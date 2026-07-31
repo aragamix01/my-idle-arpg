@@ -224,6 +224,55 @@ export const UNIQUES = [
       { kind: 'statMod', stat: 'damage', op: 'more', roll: { min: 0.75, max: 0.75 } },
     ],
   },
+  {
+    /**
+     * More room to wear things, paid for in raw output.
+     *
+     * A slot is worth roughly a whole item, so this is the largest single upgrade in
+     * the roster - and it has to be, because the cost is charged immediately while the
+     * benefit only arrives once you own something good enough to put in the new slot.
+     * A player who finds this early gets an empty slot and a damage penalty.
+     */
+    id: 'travellers-harness',
+    name: "Traveller's Harness",
+    sprite: 'item.travellers_harness',
+    dropStage: 35,
+    tier: 'ancient',
+    effects: [
+      { kind: 'equipSlots', roll: { min: 1, max: 2 } },
+      // 15%, not the 30% this was first authored at.
+      //
+      // A fifth slot adds roughly a quarter of a fully geared character's item
+      // contribution, so a 30% damage tax made the item a straight loss - the harness
+      // owned one for a hundred stages and correctly refused to wear it, even when
+      // taught to evaluate equipping it and filling the new slot as a single move.
+      // The trade has to be smaller than what a slot is worth or it is not a trade.
+      { kind: 'statMod', stat: 'damage', op: 'more', roll: { min: 0.92, max: 0.92 } },
+    ],
+  },
+  {
+    /**
+     * The inverse trade, and the most interesting item here: fewer slots, but what
+     * remains counts for far more.
+     *
+     * Amplification lands on `flat` and `increased` only - see amplifyOthers in
+     * schema.ts. It also never applies to this item's own effects, which is what stops
+     * a second copy from compounding against the first.
+     *
+     * The slot cost is a CONSTANT while the payoff rolls. A range on both halves would
+     * let a lucky drop be better in two directions at once, and losing a slot is the
+     * decision this item exists to pose.
+     */
+    id: 'monomaniacs-seal',
+    name: "Monomaniac's Seal",
+    sprite: 'item.monomaniacs_seal',
+    dropStage: 45,
+    tier: 'ancient',
+    effects: [
+      { kind: 'amplifyOthers', roll: { min: 1.6, max: 2.4 } },
+      { kind: 'equipSlots', roll: { min: -1, max: -1 } },
+    ],
+  },
 ] as const satisfies readonly Unique[];
 
 export type UniqueId = (typeof UNIQUES)[number]['id'];
@@ -312,6 +361,9 @@ export function uniqueEffects(unique: Unique, rolls: number[] | undefined): Effe
     // otherwise resolve to 2.4 slots at the midpoint.
     if (effect.kind === 'equipSlots') {
       return { kind: 'equipSlots', delta: Math.round(value), ...when };
+    }
+    if (effect.kind === 'amplifyOthers') {
+      return { kind: 'amplifyOthers', multiplier: value, ...when };
     }
     return { kind: 'statMod', stat: effect.stat, op: effect.op, value, ...when };
   });

@@ -188,7 +188,7 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
             ? { kind: 'statMod' as const, stat: effect.stat, op: effect.op, value }
             : effect.kind === 'equipSlots'
               ? { kind: 'equipSlots' as const, delta: Math.round(value) }
-              : { kind: effect.kind, multiplier: value };
+              : { kind: effect.kind as 'goldOnKill' | 'keyDrop' | 'amplifyOthers', multiplier: value };
         if (!EffectSchema.safeParse(sample).success) {
           errors.push(`${unique.id} effect ${i}: ${value} produces an invalid effect`);
         }

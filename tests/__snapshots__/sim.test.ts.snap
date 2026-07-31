@@ -1089,6 +1089,54 @@ exports[`content registry > matches its snapshot 1`] = `
       "sprite": "item.bulwark_of_the_deep",
       "tier": "ancient",
     },
+    {
+      "dropStage": 35,
+      "effects": [
+        {
+          "kind": "equipSlots",
+          "roll": {
+            "max": 2,
+            "min": 1,
+          },
+        },
+        {
+          "kind": "statMod",
+          "op": "more",
+          "roll": {
+            "max": 0.92,
+            "min": 0.92,
+          },
+          "stat": "damage",
+        },
+      ],
+      "id": "travellers-harness",
+      "name": "Traveller's Harness",
+      "sprite": "item.travellers_harness",
+      "tier": "ancient",
+    },
+    {
+      "dropStage": 45,
+      "effects": [
+        {
+          "kind": "amplifyOthers",
+          "roll": {
+            "max": 2.4,
+            "min": 1.6,
+          },
+        },
+        {
+          "kind": "equipSlots",
+          "roll": {
+            "max": -1,
+            "min": -1,
+          },
+        },
+      ],
+      "id": "monomaniacs-seal",
+      "name": "Monomaniac's Seal",
+      "sprite": "item.monomaniacs_seal",
+      "tier": "ancient",
+    },
   ],
 }
 `;
