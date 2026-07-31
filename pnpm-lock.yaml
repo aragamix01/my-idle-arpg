@@ -14,6 +14,9 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.110.9
         version: 2.110.9
+      break_infinity.js:
+        specifier: ^2.2.0
+        version: 2.2.0
       next:
         specifier: 16.2.12
         version: 16.2.12(@babel/core@7.29.7)(@playwright/test@1.62.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -1188,6 +1191,9 @@ packages:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
     engines: {node: '>=8'}
 
+  break_infinity.js@2.2.0:
+    resolution: {integrity: sha512-Li+150FfqGDj4gcJrgEJatFAR0OmfZyZLBGFKSHgjWKqKgWRm7GA+OmSSHwDFqkdOOjoY+R8X/jyDX/9MQEjmA==}
+
   browserslist@4.28.7:
     resolution: {integrity: sha512-JxV13hNrFxqjOc8alRbq9dK1MM79NEXYpma2B2J4wAtpWS5zIEIKqWPGCl7N4o7Uc7B7itylh7SuDujATRyyTw==}
     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
@@ -2055,6 +2061,9 @@ packages:
   p-locate@5.0.0:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
+
+  pad-end@1.0.2:
+    resolution: {integrity: sha512-pHkQejQ2oo08iXEDDFYxUK1xPe8L5fpbLSpkKk+ytimW70S8golMYFP9nAPTLXW6DTt+bF5QLcbswx5imMszHg==}
 
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
@@ -3551,6 +3560,10 @@ snapshots:
     dependencies:
       fill-range: 7.1.1
 
+  break_infinity.js@2.2.0:
+    dependencies:
+      pad-end: 1.0.2
+
   browserslist@4.28.7:
     dependencies:
       baseline-browser-mapping: 2.11.5
@@ -4577,6 +4590,8 @@ snapshots:
   p-locate@5.0.0:
     dependencies:
       p-limit: 3.1.0
+
+  pad-end@1.0.2: {}
 
   parent-module@1.0.1:
     dependencies:

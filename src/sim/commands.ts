@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod';
+import { big, formatBig, fromSave, toSave, type Big, type BigInput } from './big';
 import { resolveDungeon, resolveStage } from './combat';
 import {
   BULK_PURCHASE_LIMIT,
@@ -127,23 +128,29 @@ export const CommandSchema = z.discriminatedUnion('type', [
 
 export type Command = z.infer<typeof CommandSchema>;
 
+/**
+ * Every gold figure on an event is a decimal STRING, for the same reason the save
+ * holds one: these cross the wire as JSON, and a JSON number is a double at the far
+ * end. A toast reading `Infinity gold` would be the cheapest possible way to lose the
+ * whole point of this type.
+ */
 export type SimEvent =
-  | { type: 'stageCleared'; stage: number; seconds: number; gold: number }
-  | { type: 'stageFailed'; stage: number; reason: 'died' | 'timeout'; gold: number }
-  | { type: 'dungeonCleared'; stage: number; seconds: number; gold: number }
+  | { type: 'stageCleared'; stage: number; seconds: number; gold: string }
+  | { type: 'stageFailed'; stage: number; reason: 'died' | 'timeout'; gold: string }
+  | { type: 'dungeonCleared'; stage: number; seconds: number; gold: string }
   | { type: 'dungeonFailed'; stage: number; reason: 'died' | 'timeout' }
   | { type: 'itemDropped'; itemId: string; name: string; rarity: string }
   /** Carries how many drops were lost, so the message can say what it cost. */
   | { type: 'inventoryFull'; lost: number }
-  | { type: 'itemRerolled'; uid: string; cost: number }
+  | { type: 'itemRerolled'; uid: string; cost: string }
   | { type: 'currencyDropped'; currencyId: string; name: string; count: number }
   | { type: 'currencyUsed'; currencyId: string; name: string; uid: string }
   | { type: 'itemTransmuted'; uid: string; name: string }
   | { type: 'itemDestroyed'; uid: string }
   | { type: 'fragmentsCombined'; currencyId: string; name: string }
   | { type: 'itemsDissembled'; count: number; yields: Record<string, number> }
-  | { type: 'upgradeBought'; key: string; level: number; cost: number; count: number }
-  | { type: 'offlineClaimed'; gold: number; seconds: number; capped: boolean };
+  | { type: 'upgradeBought'; key: string; level: number; cost: string; count: number }
+  | { type: 'offlineClaimed'; gold: string; seconds: number; capped: boolean };
 
 export interface CommandOutcome {
   state: SaveState;
@@ -152,6 +159,25 @@ export interface CommandOutcome {
 
 function emptyUpgrades(): UpgradeLevels {
   return Object.fromEntries(UPGRADE_KEYS.map((k) => [k, 0])) as UpgradeLevels;
+}
+
+/**
+ * Credit gold, and record it against the lifetime total in the same breath.
+ *
+ * One function rather than two lines at five call sites, because the two totals
+ * diverging is a silent bug: nothing checks them against each other, and prestige
+ * would quietly be priced off whichever earnings happened to be counted.
+ */
+function earn(state: SaveState, amount: BigInput): Big {
+  const gained = big(amount);
+  state.gold = toSave(fromSave(state.gold).add(gained));
+  state.lifetimeGold = toSave(fromSave(state.lifetimeGold).add(gained));
+  return gained;
+}
+
+/** Debit gold. Lifetime earnings are untouched - they are earnings, not a balance. */
+function spend(state: SaveState, amount: Big): void {
+  state.gold = toSave(fromSave(state.gold).sub(amount));
 }
 
 /** Add counts into a purse, returning a new one. Never mutates the argument. */
@@ -167,7 +193,8 @@ export function newSave(seed: number, nowMs: number): SaveState {
   return {
     contentVersion: CONTENT_VERSION,
     seed,
-    gold: 0,
+    gold: '0',
+    lifetimeGold: '0',
     bestStage: 0,
     currentStage: 1,
     upgrades: emptyUpgrades(),
@@ -203,7 +230,7 @@ export function applyCommand(
         return err(`cannot attempt stage ${stage}: best cleared is ${next.bestStage}`);
       }
       const outcome = resolveStage(next, stage);
-      next.gold += Math.floor(outcome.goldEarned);
+      const earned = earn(next, outcome.goldEarned);
 
       if (outcome.cleared) {
         next.bestStage = Math.max(next.bestStage, stage);
@@ -212,7 +239,7 @@ export function applyCommand(
           type: 'stageCleared',
           stage,
           seconds: outcome.seconds,
-          gold: Math.floor(outcome.goldEarned),
+          gold: toSave(earned),
         });
 
         // Every clear drops one to three. Rarity and count are what vary, not
@@ -270,7 +297,7 @@ export function applyCommand(
           type: 'stageFailed',
           stage,
           reason: outcome.failure === 'timeout' ? 'timeout' : 'died',
-          gold: Math.floor(outcome.goldEarned),
+          gold: toSave(earned),
         });
       }
       break;
@@ -291,7 +318,7 @@ export function applyCommand(
       const requested = command.count ?? 1;
       const count =
         requested === 'max'
-          ? maxAffordableUpgrades(command.key, level, next.gold)
+          ? maxAffordableUpgrades(command.key, level, fromSave(next.gold))
           : Math.min(requested, remainingLevels(command.key, level));
 
       if (count <= 0) {
@@ -306,13 +333,19 @@ export function applyCommand(
       // player asked for ten would spend their gold on something they did not
       // choose; 'max' is the button that means "as many as fit".
       const cost = bulkUpgradeCost(command.key, level, count);
-      if (next.gold < cost) {
-        return err(`need ${Math.ceil(cost)} gold for ${count}x, have ${Math.floor(next.gold)}`);
+      if (fromSave(next.gold).lt(cost)) {
+        return err(`need ${formatBig(cost)} gold for ${count}x, have ${formatBig(fromSave(next.gold))}`);
       }
 
-      next.gold -= cost;
+      spend(next, cost);
       next.upgrades[command.key] = level + count;
-      events.push({ type: 'upgradeBought', key: command.key, level: level + count, cost, count });
+      events.push({
+        type: 'upgradeBought',
+        key: command.key,
+        level: level + count,
+        cost: toSave(cost),
+        count,
+      });
       break;
     }
 
@@ -352,18 +385,18 @@ export function applyCommand(
       if (item.rarity === 'unique') return err('uniques cannot be rerolled');
 
       const cost = rerollCost(item.rarity, item.itemLevel, item.rerolls);
-      if (next.gold < cost) {
-        return err(`need ${cost} gold to reroll, have ${Math.floor(next.gold)}`);
+      if (fromSave(next.gold).lt(cost)) {
+        return err(`need ${formatBig(cost)} gold to reroll, have ${formatBig(fromSave(next.gold))}`);
       }
 
-      next.gold -= cost;
+      spend(next, cost);
       // Replaces every rolled affix, and leaves the base implicit alone. There
       // is deliberately no way to keep one and reroll the rest - that choice is
       // what gives each roll weight.
       next.items = next.items.map((current, i) =>
         i === index ? rerollAffixes(next.seed, current) : current,
       );
-      events.push({ type: 'itemRerolled', uid: command.uid, cost });
+      events.push({ type: 'itemRerolled', uid: command.uid, cost: toSave(cost) });
       break;
     }
 
@@ -492,12 +525,11 @@ export function applyCommand(
         break;
       }
 
-      next.gold += Math.floor(outcome.goldEarned);
       events.push({
         type: 'dungeonCleared',
         stage,
         seconds: outcome.seconds,
-        gold: Math.floor(outcome.goldEarned),
+        gold: toSave(earn(next, outcome.goldEarned)),
       });
 
       const uid = next.nextItemId;
@@ -533,13 +565,13 @@ export function applyCommand(
 
     case 'claimOffline': {
       const report = computeOffline(next, nowMs);
-      next.gold += report.goldEarned;
+      earn(next, report.goldEarned);
       // Advancing lastSeenAt is what makes this idempotent: an immediate second
       // claim finds ~0 elapsed seconds. Double-claim is the classic idle exploit.
       next.lastSeenAt = nowMs;
       events.push({
         type: 'offlineClaimed',
-        gold: report.goldEarned,
+        gold: toSave(report.goldEarned),
         seconds: report.creditedSeconds,
         capped: report.capped,
       });

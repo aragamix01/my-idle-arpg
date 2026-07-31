@@ -32,8 +32,14 @@ export interface Floater {
 
 export interface VisualOptions {
   killsPerSecond: number;
-  /** Typical hit for the damage numbers. Cosmetic - the real number lives in the sim. */
-  hitSize: number;
+  /**
+   * Renders one floating damage number, given this hit's jitter multiplier.
+   *
+   * A formatter rather than a number, because damage outgrows a double and this layer
+   * is deliberately kept on bounded values. The renderer owns the jitter - it is the
+   * thing with the seeded RNG - and the caller owns how a magnitude reads.
+   */
+  hitLabel: (jitter: number) => string;
   /** Swings per second, from the sim's attackSpeed stat. Paces the animation only. */
   attacksPerSecond: number;
   /** Decides which creatures appear. Has no effect on outcomes. */
@@ -344,7 +350,7 @@ export class StageVisual {
       this.floaters.push({
         x: enemy.x + jitter(),
         y: enemy.y + jitter(),
-        text: Math.round(this.options.hitSize * (0.8 + this.random() * 0.4)).toString(),
+        text: this.options.hitLabel(0.8 + this.random() * 0.4),
         life: 0.9,
       });
     }

@@ -6,6 +6,7 @@
  * src/render/ or src/ui/ instead.
  */
 
+export * from './big';
 export * from './types';
 export * from './rng';
 export * from './curves';

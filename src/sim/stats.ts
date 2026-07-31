@@ -16,9 +16,12 @@ import {
 } from './content';
 import { SKILL_LEVEL_GAIN, UPGRADE_TRACKS } from './curves';
 import { itemEffects } from './items';
+import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
   BASE_STATS,
+  MAGNITUDE_STAT_KEYS,
   STAT_KEYS,
+  type MagnitudeStatKey,
   type EffectContext,
   type SaveState,
   type StatKey,
@@ -40,18 +43,31 @@ const TRACK_STAT: Record<keyof UpgradeLevels, StatKey> = {
   resource: 'resourceRegen',
 };
 
-/** The three layers, accumulated per stat before anything is resolved. */
+/**
+ * The three layers, accumulated per stat before anything is resolved.
+ *
+ * `more` is a Big and the other two are not, which is not an inconsistency: flat and
+ * increased land in SUMS bounded by how many modifiers an item can carry, while more
+ * is a PRODUCT over upgrade levels and compounds without bound. At 1.07 per level the
+ * damage track passes 1.8e308 near level 10,000 - a stage the ladder is meant to
+ * reach.
+ */
 interface Layers {
   flat: number;
   increased: number;
-  more: number;
+  more: Big;
 }
 
 type Buckets = Record<StatKey, Layers>;
 
+/** Whether a stat is stored as a Big. See MAGNITUDE_STAT_KEYS in types.ts. */
+function isMagnitude(key: StatKey): key is MagnitudeStatKey {
+  return (MAGNITUDE_STAT_KEYS as readonly string[]).includes(key);
+}
+
 function emptyBuckets(): Buckets {
   return Object.fromEntries(
-    STAT_KEYS.map((key) => [key, { flat: 0, increased: 0, more: 1 }]),
+    STAT_KEYS.map((key) => [key, { flat: 0, increased: 0, more: BIG_ONE }]),
   ) as Buckets;
 }
 
@@ -70,7 +86,7 @@ function collectUpgrades(buckets: Buckets, levels: UpgradeLevels): void {
     const level = levels[key as keyof UpgradeLevels];
     if (level <= 0) continue;
     const layers = buckets[TRACK_STAT[key as keyof UpgradeLevels]];
-    if (track.valueGrowth !== null) layers.more *= Math.pow(track.valueGrowth, level);
+    if (track.valueGrowth !== null) layers.more = layers.more.mul(big(track.valueGrowth).pow(level));
     else if (track.valueAdd !== null) layers.flat += track.valueAdd * level;
   }
 }
@@ -81,7 +97,7 @@ function collectEffects(buckets: Buckets, effects: Effect[]): void {
     const layers = buckets[e.stat as StatKey];
     if (e.op === 'flat') layers.flat += e.value;
     else if (e.op === 'increased') layers.increased += e.value;
-    else layers.more *= e.value;
+    else layers.more = layers.more.mul(e.value);
   }
 }
 
@@ -92,8 +108,8 @@ function collectEffects(buckets: Buckets, effects: Effect[]): void {
  * common layers have diminishing returns and why a sixth affix row is now
  * affordable - see ModLayer in src/sim/content/schema.ts.
  */
-function resolve(base: number, layers: Layers): number {
-  return (base + layers.flat) * (1 + layers.increased) * layers.more;
+function resolve(base: Big, layers: Layers): Big {
+  return base.add(layers.flat).mul(1 + layers.increased).mul(layers.more);
 }
 
 function conditionHolds(effect: Effect, ctx: EffectContext): boolean {
@@ -184,7 +200,10 @@ function baseStats(save: SaveState, ctx: EffectContext): Stats {
     // rate squared per stage, which is double what the rate was sized to carry, and
     // the player would outrun the ladder on weapons alone. Crit and area are bounded
     // by their own meaning anyway - a probability and a target count.
-    damage: skill.baseDamage * Math.pow(SKILL_LEVEL_GAIN, skillLevel(save, ctx)),
+    // A Big because this term alone outgrows a double: 1.05 per skill level, and
+    // skill level is the weapon's item level, so a stage-6,000 weapon is already past
+    // 1.8e308 before a single upgrade or affix is applied.
+    damage: big(skill.baseDamage).mul(big(SKILL_LEVEL_GAIN).pow(skillLevel(save, ctx))),
     attackSpeed: skill.baseSpeed,
     critChance: skill.baseCritChance,
     area: skill.baseArea,
@@ -209,11 +228,18 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
 
   const base = baseStats(save, ctx);
   const stats = { ...base };
-  for (const key of STAT_KEYS) stats[key] = resolve(base[key], buckets[key]);
+  for (const key of STAT_KEYS) {
+    // Resolved as a Big in every case, then collapsed back to a double for the stats
+    // that are rates, probabilities or counts. Doing the arithmetic uniformly is what
+    // keeps the three layers one code path; only the storage type differs.
+    const resolved = resolve(big(base[key]), buckets[key]);
+    if (isMagnitude(key)) stats[key] = resolved;
+    else (stats as unknown as Record<string, number>)[key] = resolved.toNumber();
+  }
 
   stats.area = Math.max(1, stats.area);
   stats.critChance = Math.min(1, Math.max(0, stats.critChance));
-  stats.maxHp = Math.max(1, stats.maxHp);
+  stats.maxHp = bigMax(1, stats.maxHp);
   stats.toughness = Math.max(0.1, stats.toughness);
   stats.resourceRegen = Math.max(0, stats.resourceRegen);
   // Gold find had no floor until an item existed that reduces it. Two Warden's
@@ -265,8 +291,8 @@ export function isResourceBound(stats: Stats, skill: Skill): boolean {
 }
 
 /** Effective HP: what the incoming damage pool is actually measured against. */
-export function effectiveHp(stats: Stats): number {
-  return stats.maxHp * stats.toughness;
+export function effectiveHp(stats: Stats): Big {
+  return stats.maxHp.mul(stats.toughness);
 }
 
 /**
@@ -308,6 +334,6 @@ export function critFactor(stats: Stats): number {
  * The combat layer calls this too, so the character sheet cannot quote a DPS
  * the fight does not actually use.
  */
-export function statsDps(stats: Stats): number {
-  return stats.damage * stats.attackSpeed * critFactor(stats);
+export function statsDps(stats: Stats): Big {
+  return stats.damage.mul(stats.attackSpeed).mul(critFactor(stats));
 }

@@ -12,6 +12,10 @@ import {
   affixRows,
   applyCommand,
   BASES,
+  big,
+  formatBig,
+  fromSave,
+  toSave,
   BASE_AFFIXES,
   BASE_STATS,
   BULK_PURCHASE_LIMIT,
@@ -29,6 +33,7 @@ import {
   effectiveHp,
   enemyCount,
   enemyHp,
+  farmRate,
   feedbackExponent,
   FRAGMENTS_PER_CLEAR,
   getAffix,
@@ -57,6 +62,7 @@ import {
   rollStageBossDrops,
   statsDps,
   trackLayer,
+  TUNING,
   UNIQUES,
   uniqueEffects,
   UPGRADE_TRACKS,
@@ -70,6 +76,9 @@ import {
 } from '../src/sim';
 
 const T0 = 1_700_000_000_000;
+
+/** Gold as the save holds it: a decimal string, not a number. */
+const goldOf = (save: SaveState) => fromSave(save.gold);
 
 /** Run a command sequence, asserting each one succeeds. */
 function play(save: SaveState, commands: Command[], nowMs = T0): SaveState {
@@ -134,15 +143,15 @@ describe('offline claim', () => {
     const save = farmingSave();
     const oneHour = computeOffline(save, T0 + 3600_000);
     const twoHours = computeOffline(save, T0 + 7200_000);
-    expect(twoHours.goldEarned).toBeGreaterThan(oneHour.goldEarned);
-    expect(twoHours.goldEarned / oneHour.goldEarned).toBeCloseTo(2, 1);
+    expect(twoHours.goldEarned.gt(oneHour.goldEarned)).toBe(true);
+    expect(twoHours.goldEarned.div(oneHour.goldEarned).toNumber()).toBeCloseTo(2, 1);
   });
 
   it('caps accrual', () => {
     const save = farmingSave();
     const atCap = computeOffline(save, T0 + OFFLINE_CAP_SECONDS * 1000);
     const wayPastCap = computeOffline(save, T0 + OFFLINE_CAP_SECONDS * 1000 * 10);
-    expect(wayPastCap.goldEarned).toBe(atCap.goldEarned);
+    expect(wayPastCap.goldEarned.eq(atCap.goldEarned)).toBe(true);
     expect(wayPastCap.capped).toBe(true);
   });
 
@@ -154,18 +163,18 @@ describe('offline claim', () => {
     const first = applyCommand(save, { type: 'claimOffline' }, now);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
-    expect(first.value.state.gold).toBeGreaterThan(0);
+    expect(goldOf(first.value.state).gt(0)).toBe(true);
 
     const second = applyCommand(first.value.state, { type: 'claimOffline' }, now);
     expect(second.ok).toBe(true);
     if (!second.ok) return;
-    expect(second.value.state.gold).toBe(first.value.state.gold);
+    expect(goldOf(second.value.state).eq(goldOf(first.value.state))).toBe(true);
   });
 
   it('never pays out for time before the last claim', () => {
     const save = farmingSave();
     const report = computeOffline(save, T0 - 60_000);
-    expect(report.goldEarned).toBe(0);
+    expect(report.goldEarned.eq(0)).toBe(true);
   });
 });
 
@@ -190,13 +199,58 @@ describe('command validation', () => {
   });
 
   it('deducts exactly the quoted cost', () => {
-    const rich: SaveState = { ...newSave(1, T0), gold: 1000 };
+    const rich: SaveState = { ...newSave(1, T0), gold: '1000' };
     const cost = upgradeCost('damage', 0);
     const result = applyCommand(rich, { type: 'buyUpgrade', key: 'damage' }, T0);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.state.gold).toBe(1000 - cost);
+    expect(goldOf(result.value.state).eq(big(1000).sub(cost))).toBe(true);
     expect(result.value.state.upgrades.damage).toBe(1);
+  });
+
+  it('deducts at magnitudes a double cannot hold at all', () => {
+    // Deep enough that the price of a single level is past 1e308. Both the balance
+    // and the cost are numbers a double cannot represent, and the purchase still
+    // lands with the right amount taken off.
+    const level = 2100;
+    const cost = bulkUpgradeCost('damage', level, 10);
+    expect(cost.exponent).toBeGreaterThan(308);
+
+    const rich: SaveState = {
+      ...newSave(1, T0),
+      gold: toSave(cost.mul(2)),
+      upgrades: { ...newSave(1, T0).upgrades, damage: level },
+    };
+    const result = applyCommand(rich, { type: 'buyUpgrade', key: 'damage', count: 10 }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.state.upgrades.damage).toBe(level + 10);
+
+    // Compared as a RATIO, not for equality. The mantissa is a double, so `2c - c`
+    // differs from `c` in the last significant digit - ordinary floating point, not a
+    // fault in the type. What matters is that the right amount left the balance.
+    const spent = cost.mul(2).sub(goldOf(result.value.state));
+    expect(spent.div(cost).toNumber()).toBeCloseTo(1, 10);
+  });
+
+  it('still loses a cost far below the balance, and that is the trade', () => {
+    // break_infinity buys RANGE, not precision: the mantissa is a double, so about
+    // seventeen significant digits survive and a cost eighteen orders of magnitude
+    // below the balance rounds away exactly as it did before.
+    //
+    // Pinned rather than fixed. The alternative is arbitrary-precision arithmetic in
+    // the hot path of a closed-form sim, to make a player pay 10 gold out of 1e40 -
+    // a distinction with no gameplay attached. Every game in this genre makes the
+    // same trade.
+    const rich: SaveState = { ...newSave(1, T0), gold: '1e40' };
+    const result = applyCommand(rich, { type: 'buyUpgrade', key: 'damage' }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(goldOf(result.value.state).eq(big('1e40'))).toBe(true);
+
+    // What DID change: this is now a rounding artefact at 1e40, not a wall at 1e308.
+    expect(big('1e40').mul(big('1e400')).exponent).toBe(440);
   });
 
   it('charges the same for a bulk buy as for the same levels one at a time', () => {
@@ -206,16 +260,16 @@ describe('command validation', () => {
     for (const key of ['damage', 'health', 'greed'] as const) {
       for (const count of [2, 5, 10, 37]) {
         const oneByOne = Array.from({ length: count }, (_, i) => upgradeCost(key, 3 + i)).reduce(
-          (a, b) => a + b,
-          0,
+          (a, b) => a.add(b),
+          big(0),
         );
-        expect(bulkUpgradeCost(key, 3, count), `${key} x${count}`).toBe(oneByOne);
+        expect(bulkUpgradeCost(key, 3, count).eq(oneByOne), `${key} x${count}`).toBe(true);
       }
     }
   });
 
   it('buying 10 at once equals buying 1 ten times', () => {
-    const rich: SaveState = { ...newSave(1, T0), gold: 1_000_000 };
+    const rich: SaveState = { ...newSave(1, T0), gold: '1000000' };
 
     const bulk = play(rich, [{ type: 'buyUpgrade', key: 'damage', count: 10 }]);
     const singles = play(
@@ -230,28 +284,28 @@ describe('command validation', () => {
   it('refuses a fixed multiplier it cannot fully afford', () => {
     // All-or-nothing: quietly buying 3 of a requested 20 spends gold on
     // something the player did not choose.
-    const save: SaveState = { ...newSave(1, T0), gold: upgradeCost('damage', 0) + 1 };
+    const save: SaveState = { ...newSave(1, T0), gold: toSave(upgradeCost('damage', 0).add(1)) };
     const result = applyCommand(save, { type: 'buyUpgrade', key: 'damage', count: 20 }, T0);
     expect(result.ok).toBe(false);
   });
 
   it('max spends what it can and never overdraws', () => {
-    const save: SaveState = { ...newSave(1, T0), gold: 5000 };
+    const save: SaveState = { ...newSave(1, T0), gold: '5000' };
     const result = applyCommand(save, { type: 'buyUpgrade', key: 'damage', count: 'max' }, T0);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
     const bought = result.value.state.upgrades.damage;
     expect(bought).toBeGreaterThan(0);
-    expect(result.value.state.gold).toBeGreaterThanOrEqual(0);
+    expect(goldOf(result.value.state).gte(0)).toBe(true);
     // Exactly maximal: one more level must not have been affordable.
-    expect(bulkUpgradeCost('damage', 0, bought + 1)).toBeGreaterThan(5000);
+    expect(bulkUpgradeCost('damage', 0, bought + 1).gt(5000)).toBe(true);
   });
 
   it('max stops at a capped track rather than overshooting', () => {
     const key = 'crit';
     const cap = UPGRADE_TRACKS[key].maxLevel!;
-    const save: SaveState = { ...newSave(1, T0), gold: Number.MAX_SAFE_INTEGER };
+    const save: SaveState = { ...newSave(1, T0), gold: '1e30' };
     const result = applyCommand(save, { type: 'buyUpgrade', key, count: 'max' }, T0);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -274,7 +328,7 @@ describe('command validation', () => {
 
   it('still accepts a command with no count', () => {
     // Backward compatibility: a client predating bulk purchase omits the field.
-    const rich: SaveState = { ...newSave(1, T0), gold: 1000 };
+    const rich: SaveState = { ...newSave(1, T0), gold: '1000' };
     const result = applyCommand(rich, { type: 'buyUpgrade', key: 'damage' }, T0);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -590,7 +644,7 @@ describe('item rolling', () => {
         uniqueId: unique.id,
       };
       const equipped: SaveState = { ...base, items: [item], loadout: [item.uid, null, null, null] };
-      return effectiveHp(deriveStats(equipped, ctx)) / baseline;
+      return effectiveHp(deriveStats(equipped, ctx)).div(baseline).toNumber();
     }).reduce((a, b) => Math.max(a, b), 0);
 
     expect(best, 'no unique raises effective HP').toBeGreaterThan(1.3);
@@ -617,10 +671,124 @@ describe('item rolling', () => {
   });
 });
 
+describe('big numbers', () => {
+  it('survives the JSON round trip a save actually takes', () => {
+    // Both stores serialise through JSON - the file adapter directly, Supabase via
+    // jsonb - so this IS the persistence path. As a JSON number, 1e5000 comes back
+    // as Infinity; as a string it comes back as itself.
+    for (const value of ['1e300', '1e5000', '123456789012345678901234567890']) {
+      const save: SaveState = { ...newSave(1, T0), gold: value };
+      const round = JSON.parse(JSON.stringify(save)) as SaveState;
+      expect(fromSave(round.gold).eq(big(value)), value).toBe(true);
+    }
+  });
+
+  it('formats every magnitude a player could ever hold', () => {
+    // The old formatter had six suffix names and started printing 1000000.00Q past
+    // the last one. This one switches to exponent form instead, so it cannot run out.
+    let previous = big(0);
+    for (let exp = 0; exp <= 50_000; exp += 137) {
+      const value = big(`1e${exp}`);
+      const text = formatBig(value);
+
+      expect(text, `1e${exp}`).not.toMatch(/NaN|Infinity|undefined/);
+      expect(text.length, `1e${exp} -> ${text}`).toBeLessThan(16);
+      expect(value.gt(previous)).toBe(true);
+      previous = value;
+    }
+
+    // The readable range keeps its names; past it, exponents.
+    expect(formatBig(big(1500))).toBe('1.50k');
+    expect(formatBig(big('1.18e20'))).toBe('118.00Q');
+    expect(formatBig(big('1e21'))).toBe('1.00e21');
+  });
+
+  it('holds magnitudes the whole curve can reach, not just the ones it does', () => {
+    // The reason for the type, stated as a test. Every one of these is Infinity as a
+    // double, and Infinity in enemyHp means NaN clear times all the way down.
+    for (const stage of [10_000, 100_000, 1_000_000]) {
+      const hp = big(TUNING.enemyHpBase).mul(big(TUNING.enemyHpGrowth).pow(stage - 1));
+      const gold = big(TUNING.goldBase).mul(big(TUNING.goldGrowth).pow(stage - 1));
+
+      expect(Number.isFinite(hp.exponent), `enemyHp at ${stage}`).toBe(true);
+      expect(Number.isFinite(gold.exponent), `goldPerKill at ${stage}`).toBe(true);
+      expect(hp.gt(gold)).toBe(true);
+      expect(formatBig(hp)).not.toMatch(/NaN|Infinity/);
+      // And the same value as a double is exactly the failure being escaped.
+      expect(TUNING.enemyHpBase * Math.pow(TUNING.enemyHpGrowth, stage - 1)).toBe(Infinity);
+    }
+  });
+
+  it('resolves a stage far past where a double gives up', () => {
+    // The whole point, end to end. At stage 100,000 enemy HP is ~10^4,920 and a
+    // weapon's skill-level damage term is 1.05^100,000 - both Infinity as doubles,
+    // and Infinity anywhere in resolveStage means NaN seconds and NaN gold.
+    //
+    // Their RATIO is an ordinary number of seconds, which is exactly why the
+    // magnitudes are Bigs and the outcome fields are not.
+    const stage = 100_000;
+    const weapon = { ...rollItem(9, 1, stage), baseId: 'axe', rarity: 'rare' as const };
+    const save: SaveState = {
+      ...newSave(9, T0),
+      bestStage: stage,
+      currentStage: stage,
+      items: [weapon],
+      weapon: weapon.uid,
+      upgrades: { ...newSave(9, T0).upgrades, damage: 4000, health: 4000, toughness: 4000 },
+    };
+
+    const stats = deriveStats(save, { stage, isBoss: false, enemyHpFraction: 1 });
+    expect(Number.isFinite(stats.damage.exponent)).toBe(true);
+    expect(stats.damage.exponent).toBeGreaterThan(308);
+    expect(formatBig(statsDps(stats))).not.toMatch(/NaN|Infinity/);
+
+    const outcome = resolveStage(save, stage);
+    expect(Number.isFinite(outcome.seconds)).toBe(true);
+    expect(Number.isFinite(outcome.damageTakenFraction)).toBe(true);
+    expect(Number.isFinite(outcome.goldEarned.exponent)).toBe(true);
+    expect(Number.isFinite(farmRate(save, stage).exponent)).toBe(true);
+  });
+
+  it('migrates a v6 double into a string without changing what it holds', () => {
+    const v6 = {
+      ...newSave(1, T0),
+      contentVersion: 6,
+      gold: 123456.75,
+      lifetimeGold: undefined,
+    } as unknown as SaveState;
+
+    const { state, migrated } = migrateSave(v6);
+
+    expect(migrated).toBe(true);
+    expect(fromSave(state.gold).eq(big(123456.75))).toBe(true);
+    // Seeded from the balance rather than from zero: telling prestige that a
+    // long-running account has never earned anything is the worse of two errors.
+    expect(fromSave(state.lifetimeGold).eq(big(123456.75))).toBe(true);
+  });
+
+  it('counts lifetime gold up and never down', () => {
+    // Both fields seeded together, the way the migration leaves an existing save.
+    // Injecting a balance without the matching history would make lifetime earnings
+    // start behind, which is a property of the fixture rather than of the code.
+    let save: SaveState = { ...newSave(4, T0), gold: '1e9', lifetimeGold: '1e9' };
+    save = play(save, [
+      { type: 'attemptStage' },
+      { type: 'buyUpgrade', key: 'damage', count: 10 },
+      { type: 'attemptStage' },
+    ]);
+
+    // Spending moved the balance and left earnings alone. If these two ever tracked
+    // each other, prestige would be priced off a number that goes down when you buy
+    // something.
+    expect(fromSave(save.lifetimeGold).gt(fromSave(save.gold))).toBe(true);
+    expect(fromSave(save.lifetimeGold).gt(big('1e9'))).toBe(true);
+  });
+});
+
 describe('rerolling', () => {
   const richSave = (item: ReturnType<typeof rollItem>): SaveState => ({
     ...newSave(5, T0),
-    gold: 1e12,
+    gold: '1e12',
     items: [item],
   });
 
@@ -646,7 +814,7 @@ describe('rerolling', () => {
     expect(after.baseId).toBe(item.baseId);
     expect(after.itemLevel).toBe(item.itemLevel);
     expect(after.rerolls).toBe(1);
-    expect(result.value.state.gold).toBe(save.gold - cost);
+    expect(goldOf(result.value.state).eq(goldOf(save).sub(cost))).toBe(true);
   });
 
   it('leaves the base implicit untouched', () => {
@@ -671,12 +839,12 @@ describe('rerolling', () => {
     // tiers for pocket change.
     const first = rerollCost('rare', 40, 0);
     const fifth = rerollCost('rare', 40, 4);
-    expect(fifth).toBeGreaterThan(first * 2);
+    expect(fifth.gt(first.mul(2))).toBe(true);
   });
 
   it('refuses a reroll that cannot be afforded', () => {
     const item = rollableItem();
-    const save: SaveState = { ...newSave(5, T0), gold: 0, items: [item] };
+    const save: SaveState = { ...newSave(5, T0), gold: '0', items: [item] };
     expect(applyCommand(save, { type: 'rerollItem', uid: item.uid }, T0).ok).toBe(false);
   });
 
@@ -762,7 +930,7 @@ describe('currency', () => {
   /** A save holding one item and a stack of every currency. */
   const withCurrency = (item: ReturnType<typeof rollItem>): SaveState => ({
     ...newSave(5, T0),
-    gold: 1e12,
+    gold: '1e12',
     items: [item],
     currency: Object.fromEntries(CURRENCIES.map((c) => [c.id, 20])),
   });
@@ -1367,10 +1535,13 @@ describe('power budget', () => {
     return { ...base, items, loadout: items.map((i) => i.uid) };
   };
 
+  // Ratios of two Bigs, collapsed to ordinary numbers. That is the shape the whole
+  // power budget is expressed in, and the reason the magnitudes themselves can be
+  // astronomical without anything downstream having to care.
   const dpsRatio = (save: SaveState) =>
-    statsDps(deriveStats(save, CTX)) / statsDps(deriveStats(base, CTX));
+    statsDps(deriveStats(save, CTX)).div(statsDps(deriveStats(base, CTX))).toNumber();
   const ehpRatio = (save: SaveState) =>
-    effectiveHp(deriveStats(save, CTX)) / effectiveHp(deriveStats(base, CTX));
+    effectiveHp(deriveStats(save, CTX)).div(effectiveHp(deriveStats(base, CTX))).toNumber();
 
   const combos = <T,>(xs: T[], k: number): T[][] =>
     k === 0
@@ -1658,7 +1829,8 @@ describe('migration', () => {
     expect(state.items).toEqual([]);
     expect(state.loadout).toEqual([null, null, null, null]);
     expect(state.nextItemId).toBe(1);
-    expect(state.gold).toBe(12345);
+    // The fixture holds a legacy NUMBER; migration leaves a string of equal value.
+    expect(fromSave(state.gold).eq(big(12345))).toBe(true);
     expect(state.bestStage).toBe(40);
     expect(state.upgrades.damage).toBe(30);
   });
@@ -1683,7 +1855,8 @@ describe('migration', () => {
     expect(state.items).toEqual(rolled);
     expect(state.loadout[0]).toBe(rolled[0].uid);
     expect(state.nextItemId).toBe(3);
-    expect(state.gold).toBe(12345);
+    // The fixture holds a legacy NUMBER; migration leaves a string of equal value.
+    expect(fromSave(state.gold).eq(big(12345))).toBe(true);
     expect((state as unknown as Record<string, unknown>).artifactsOwned).toBeUndefined();
   });
 
@@ -1772,7 +1945,7 @@ describe('migration', () => {
   });
 
   it('leaves a current save alone', () => {
-    const current = { ...newSave(1, T0), gold: 500 };
+    const current = { ...newSave(1, T0), gold: '500' };
     const { state, migrated } = migrateSave(current);
     expect(migrated).toBe(false);
     expect(state).toEqual(current);
@@ -1792,11 +1965,11 @@ describe('derived stats', () => {
     const outcome = resolveStage(save, stage);
     const stats = deriveStats(save, { stage, isBoss: false, enemyHpFraction: 1 });
 
-    const poolHp = enemyCount(stage) * enemyHp(stage);
+    const poolHp = enemyHp(stage).mul(enemyCount(stage));
     const aoeTargets = Math.min(stats.area, enemyCount(stage));
-    const impliedDps = poolHp / (outcome.trashPhaseSeconds * aoeTargets);
+    const impliedDps = poolHp.div(outcome.trashPhaseSeconds * aoeTargets);
 
-    expect(statsDps(stats)).toBeCloseTo(impliedDps, 6);
+    expect(statsDps(stats).div(impliedDps).toNumber()).toBeCloseTo(1, 6);
   });
 
   it('effective HP is what damage is measured against', () => {
@@ -1805,7 +1978,7 @@ describe('derived stats', () => {
       upgrades: { ...newSave(1, T0).upgrades, health: 9, toughness: 5 },
     };
     const stats = deriveStats(save, { stage: 1, isBoss: false, enemyHpFraction: 1 });
-    expect(effectiveHp(stats)).toBeCloseTo(stats.maxHp * stats.toughness, 6);
+    expect(effectiveHp(stats).eq(stats.maxHp.mul(stats.toughness))).toBe(true);
   });
 });
 
@@ -1827,7 +2000,7 @@ describe('modifier layers', () => {
       else if (e.op === 'increased') buckets.increased += e.value;
       else buckets.more *= e.value;
     }
-    return (BASE_STATS.damage + buckets.flat) * (1 + buckets.increased) * buckets.more;
+    return BASE_STATS.damage.add(buckets.flat).mul(1 + buckets.increased).mul(buckets.more).toNumber();
   };
 
   const mod = (op: 'flat' | 'increased' | 'more', value: number): Effect => ({
@@ -1881,7 +2054,10 @@ describe('modifier layers', () => {
     const save = { ...newSave(1, T0), upgrades: { ...newSave(1, T0).upgrades, damage: 3 } };
     const stats = deriveStats(save, CTX);
     // The damage track is uncapped and therefore `more` - see trackLayer().
-    expect(stats.damage).toBeCloseTo(BASE_STATS.damage * Math.pow(1.07, 3), 9);
+    expect(stats.damage.toNumber()).toBeCloseTo(
+      BASE_STATS.damage.mul(Math.pow(1.07, 3)).toNumber(),
+      9,
+    );
   });
 
   it('keeps every uncapped upgrade track in the more layer', () => {

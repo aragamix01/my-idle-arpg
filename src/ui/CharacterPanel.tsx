@@ -16,6 +16,8 @@ import {
   DISSEMBLE_YIELD,
   effectiveHp,
   enemyCount,
+  formatBig,
+  fromSave,
   getCurrency,
   itemName,
   itemPower,
@@ -27,6 +29,7 @@ import {
   UNARMED,
   killsPerSecond,
   statsDps,
+  statsFromWire,
   critFactor,
   type CurrencyId,
   type HudSnapshot,
@@ -191,21 +194,23 @@ function TabButton({
 }
 
 function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
-  const stats = hud.stats;
+  // Revived once. The snapshot arrives as JSON, where a Decimal is an object with no
+  // prototype left - see WireStats in src/sim/hud.ts.
+  const stats = statsFromWire(hud.stats);
   const stage = Math.max(1, hud.bestStage || 1);
 
   // Derived figures, not stats. These are what actually decide a run: effective
   // HP is what damage is measured against, and wave DPS is why Area matters.
   const derived = [
-    { label: 'Effective HP', value: compact(effectiveHp(stats)) },
-    { label: 'DPS (single)', value: compact(statsDps(stats)) },
+    { label: 'Effective HP', value: formatBig(effectiveHp(stats)) },
+    { label: 'DPS (single)', value: formatBig(statsDps(stats)) },
     {
       label: 'DPS (wave)',
-      value: compact(statsDps(stats) * Math.min(stats.area, enemyCount(stage))),
+      value: formatBig(statsDps(stats).mul(Math.min(stats.area, enemyCount(stage)))),
     },
     { label: 'Crit multiplier', value: `x${critFactor(stats).toFixed(3)}` },
     { label: 'Kills / sec', value: compact(killsPerSecond(state, stage)) },
-    { label: 'Gold / sec', value: compact(hud.goldPerSecond) },
+    { label: 'Gold / sec', value: formatBig(fromSave(hud.goldPerSecond)) },
   ];
 
   return (
@@ -252,6 +257,9 @@ function InventoryTab({
   onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
 }) {
+  // Revived from the wire, same as the character tab - a Decimal does not survive
+  // JSON with its prototype, and everything below does Big arithmetic on it.
+  const stats = statsFromWire(hud.stats);
   const [selected, setSelected] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>('newest');
   const [rarityFilter, setRarityFilter] = useState<Rarity[]>([]);
@@ -337,7 +345,7 @@ function InventoryTab({
   )!;
   const weaponSkillLevel = weaponItem ? weaponItem.itemLevel : 0;
   const resourceLabel = resourceName(equippedSkill);
-  const resourceBound = isResourceBound(hud.stats, equippedSkill);
+  const resourceBound = isResourceBound(stats, equippedSkill);
 
   const equip = (uid: string) => {
     const item = byUid.get(uid);
@@ -445,7 +453,7 @@ function InventoryTab({
                 player shown only their regen cannot tell whether 3.40/s is generous or
                 starving - that depends entirely on what the skill in their hand charges.
               */}
-              {` · ${resourceLabel} ${equippedSkill.resourceCost.toFixed(1)}/use, regen ${hud.stats.resourceRegen.toFixed(2)}/s`}
+              {` · ${resourceLabel} ${equippedSkill.resourceCost.toFixed(1)}/use, regen ${stats.resourceRegen.toFixed(2)}/s`}
             </span>
             {/*
               Named here and nowhere else, because which resource it is depends on the
@@ -638,7 +646,7 @@ function InventoryTab({
           item={selectedItem}
           // The pane compares a weapon's demand against what you can actually pay,
           // which is the only form in which a cost tells a player anything.
-          resourceRegen={hud.stats.resourceRegen}
+          resourceRegen={stats.resourceRegen}
           equipped={selectedItem ? isEquipped(selectedItem.uid) : false}
           slotsFull={!hud.loadout.includes(null)}
           busy={busy}
@@ -652,11 +660,11 @@ function InventoryTab({
         <CraftModal
           item={craftingItem}
           purse={hud.currency}
-          gold={hud.gold}
+          gold={fromSave(hud.gold)}
           equipped={hud.loadout.includes(craftingItem.uid)}
           busy={busy}
-          dps={statsDps(hud.stats)}
-          effectiveHp={effectiveHp(hud.stats)}
+          dps={statsDps(stats)}
+          effectiveHp={effectiveHp(stats)}
           // Neither of these closes the modal. Crafting is roll-look-roll, and
           // closing after each application made a player reopen it to continue
           // the loop they were already in.

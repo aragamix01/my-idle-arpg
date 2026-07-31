@@ -13,13 +13,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   bulkUpgradeCost,
+  formatBig,
+  fromSave,
   killsPerSecond,
   maxAffordableUpgrades,
   remainingLevels,
   resolveDungeon,
   resolveStage,
   STAGE_TIME_LIMIT_SECONDS,
+  statsFromWire,
   UPGRADE_TRACKS,
+  type Big,
   type UpgradeKey,
   type SimEvent,
   type UpgradeView,
@@ -45,6 +49,7 @@ export function Game() {
   const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
   const [attempt, setAttempt] = useState<AttemptRequest | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const attemptSeq = useRef(0);
 
   /**
@@ -110,138 +115,210 @@ export function Game() {
 
   const rate = killsPerSecond(state, Math.max(1, state.bestStage || 1));
   const keys = hud.currency['dungeon-key'] ?? 0;
+  // Parsed once per render rather than at each of the five places that read it -
+  // the HUD ticks ten times a second and this is a string every time it arrives.
+  const gold = fromSave(hud.gold);
+  const offlineGold = fromSave(hud.pendingOfflineGold);
+  // The snapshot crosses the wire as JSON, so its magnitudes arrive as strings.
+  const stats = statsFromWire(hud.stats);
 
+  const upgradeGrid = (
+    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      {hud.upgrades.map((upgrade) => (
+        <UpgradeButton
+          key={upgrade.key}
+          upgrade={upgrade}
+          amount={buyAmount}
+          gold={gold}
+          disabled={pending}
+          onBuy={(count) => void send({ type: 'buyUpgrade', key: upgrade.key, count })}
+        />
+      ))}
+    </div>
+  );
+
+  /*
+    Rendered twice - once in the desktop bar, once in the sheet - so the id has to
+    be per-instance. With a shared one the DOM held two `#buy-amount` elements, the
+    `for` attribute bound to whichever came first, and on a phone that was the
+    hidden desktop copy: the label pointed at a control nobody could see.
+  */
+  const buyPicker = (id: string) => (
+    <div className="flex items-center gap-2 text-xs">
+      <label htmlFor={id} className="text-neutral-400">
+        Buy
+      </label>
+      <select
+        id={id}
+        value={String(buyAmount)}
+        onChange={(e) =>
+          setBuyAmount(e.target.value === 'max' ? 'max' : (Number(e.target.value) as BuyAmount))
+        }
+        className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 font-mono text-neutral-100"
+      >
+        {BUY_AMOUNTS.map((amount) => (
+          <option key={String(amount)} value={String(amount)}>
+            {amount === 'max' ? 'Max' : `${amount}x`}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
+  /*
+    Three fixed rows: status, arena, controls. Nothing overlaps anything.
+
+    The canvas used to be `absolute inset-0` with the whole UI floating over it,
+    which is why the phone screenshot has spiders crawling through the upgrade
+    text and the action row hidden behind Safari's chrome. The fight now owns a
+    bounded row and every surface below it is opaque.
+  */
   return (
-    <main className="relative min-h-screen bg-neutral-950 text-neutral-100">
-      <div className="absolute inset-0">
+    <main className="flex h-[100dvh] flex-col overflow-hidden bg-neutral-950 text-neutral-100">
+      <header
+        className="shrink-0 border-b border-neutral-800 bg-neutral-950/95 px-3 pb-2"
+        style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top))' }}
+      >
+        <div className="flex items-center gap-2">
+          {/*
+            One horizontally scrollable rail rather than a wrapping grid. Six
+            chips cannot fit a phone width, and wrapping them pushed the arena
+            down by a whole row at exactly the moment a number got longer.
+          */}
+          <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <Stat label="gold" value={formatBig(gold)} />
+            <Stat label="gold/s" value={formatBig(fromSave(hud.goldPerSecond))} />
+            <Stat label="stage" value={String(hud.currentStage)} />
+            <Stat label="best" value={String(hud.bestStage)} />
+            <Stat label="dmg" value={formatBig(stats.damage)} />
+            <Stat label="kills/s" value={compact(rate)} />
+          </div>
+
+          {/* In the flow, not absolutely positioned - it used to sit on top of
+              the stage chip on a narrow screen. */}
+          <button
+            type="button"
+            onClick={() => setPanelOpen(true)}
+            aria-label="Character"
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-500/50 bg-neutral-900 px-2.5 py-2 text-sm font-medium text-amber-100 active:bg-neutral-800 sm:px-3"
+          >
+            <AtlasSprite id="player.knight" scale={2} />
+            <span className="hidden sm:inline">Character</span>
+            {hud.items.length > 0 && (
+              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
+                {hud.items.length}
+              </span>
+            )}
+          </button>
+        </div>
+      </header>
+
+      {/* The arena. `min-h-0` is what lets it shrink rather than pushing the
+          controls off screen - a flex child defaults to its content size. */}
+      <div className="relative min-h-0 flex-1">
         <GameCanvas
           killsPerSecond={rate}
-          hitSize={hud.stats.damage}
-          attacksPerSecond={hud.stats.attackSpeed}
+          // A formatter rather than a number. Damage is a Big and the cosmetic layer
+          // is deliberately kept on bounded values - handing it the raw stat would put
+          // `Infinity` in the floating combat text the moment the ladder ran deep.
+          // The renderer owns the jitter; the UI owns how a magnitude reads.
+          hitLabel={(jitter) => formatBig(stats.damage.mul(jitter))}
+          attacksPerSecond={stats.attackSpeed}
           stage={Math.max(1, hud.bestStage || 1)}
           stageTimeLimit={STAGE_TIME_LIMIT_SECONDS}
           attempt={attempt}
           onAttemptComplete={finishAttempt}
         />
-      </div>
 
-      <div className="pointer-events-none relative z-10 flex min-h-screen flex-col justify-between p-6">
-        <header className="pointer-events-auto flex flex-wrap gap-6 text-sm">
-          <Stat label="gold" value={compact(hud.gold)} />
-          <Stat label="gold/s" value={compact(hud.goldPerSecond)} />
-          <Stat label="stage" value={String(hud.currentStage)} />
-          <Stat label="best" value={String(hud.bestStage)} />
-          <Stat label="damage" value={compact(hud.stats.damage)} />
-          <Stat label="kills/s" value={compact(rate)} />
-        </header>
-
-        {/* Deliberately not in the stat strip. It is the only control up here,
-            and reading as one more number is how it went unnoticed. */}
-        <button
-          type="button"
-          onClick={() => setPanelOpen(true)}
-          aria-label="Character"
-          className="pointer-events-auto absolute right-6 top-6 flex items-center gap-2 rounded-lg border border-amber-500/50 bg-neutral-900/90 px-3 py-2 text-sm font-medium text-amber-100 shadow-lg transition hover:border-amber-400 hover:bg-neutral-800"
-        >
-          <AtlasSprite id="player.knight" scale={2} />
-          <span>Character</span>
-          {hud.items.length > 0 && (
-            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
-              {hud.items.length}
-            </span>
-          )}
-        </button>
-
-        <footer className="pointer-events-auto flex flex-col gap-3">
+        {/* Toasts float INSIDE the arena, bottom-anchored, so they never
+            displace a control. They are the one thing allowed to overlap the
+            canvas, because they are about what just happened on it. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-1 p-2">
           {error && (
-            <p className="text-xs text-amber-400">
+            <p className="rounded bg-neutral-950/90 px-2 py-1 text-xs text-amber-400">
               {error}
-              {desynced && ' — resynced from server'}
+              {desynced && ' — resynced'}
             </p>
           )}
-
-          <ul className="flex flex-wrap gap-2 text-xs text-neutral-400">
-            {summarise(events).map((line, i) => (
-              <li key={i} className="rounded bg-neutral-900/80 px-2 py-1">
+          {summarise(events)
+            .slice(-2)
+            .map((line, i) => (
+              <p key={i} className="rounded bg-neutral-950/90 px-2 py-1 text-xs text-neutral-300">
                 {line}
-              </li>
+              </p>
             ))}
-          </ul>
-
-          <div className="flex items-center gap-2 text-xs">
-            <label htmlFor="buy-amount" className="text-neutral-400">
-              Buy
-            </label>
-            <select
-              id="buy-amount"
-              value={String(buyAmount)}
-              onChange={(e) =>
-                setBuyAmount(e.target.value === 'max' ? 'max' : (Number(e.target.value) as BuyAmount))
-              }
-              className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-neutral-100"
-            >
-              {BUY_AMOUNTS.map((amount) => (
-                <option key={String(amount)} value={String(amount)}>
-                  {amount === 'max' ? 'Max' : `${amount}x`}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
-            {hud.upgrades.map((upgrade) => (
-              <UpgradeButton
-                key={upgrade.key}
-                upgrade={upgrade}
-                amount={buyAmount}
-                gold={hud.gold}
-                disabled={pending}
-                onBuy={(count) => void send({ type: 'buyUpgrade', key: upgrade.key, count })}
-              />
-            ))}
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={pending || attempt !== null}
-              onClick={startAttempt}
-              className="rounded bg-neutral-100 px-4 py-2 text-sm font-medium text-neutral-900 disabled:opacity-40"
-            >
-              {/* A dungeon replay disables this button too, so it must not
-                  claim a stage fight is under way while a duel is on screen. */}
-              {attempt
-                ? attempt.dungeon
-                  ? 'In a dungeon…'
-                  : `Fighting stage ${attempt.stage}…`
-                : `Attempt stage ${hud.currentStage}`}
-            </button>
-
-            <button
-              type="button"
-              disabled={pending || attempt !== null || keys < 1 || hud.bestStage < 1}
-              onClick={startDungeon}
-              title={
-                keys < 1 ? 'Keys drop from stage bosses' : `Runs a dungeon at stage ${hud.bestStage}`
-              }
-              className="flex items-center gap-2 rounded border border-amber-500/60 bg-amber-500/10 px-4 py-2 text-sm text-amber-100 disabled:opacity-40"
-            >
-              <AtlasSprite id="currency.dungeon_key" scale={1.5} />
-              Dungeon
-              <span className="font-mono text-xs">{keys}</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={pending || hud.pendingOfflineGold <= 0}
-              onClick={() => void send({ type: 'claimOffline' })}
-              className="rounded border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
-            >
-              Claim {compact(hud.pendingOfflineGold)} idle gold
-            </button>
-          </div>
-        </footer>
+        </div>
       </div>
+
+      {/* Desktop has the vertical room to keep the tracks on screen; a phone
+          does not, and the same grid renders in the sheet below. */}
+      <div className="hidden shrink-0 flex-col gap-2 border-t border-neutral-800 px-3 py-2 lg:flex">
+        {buyPicker('buy-amount-inline')}
+        {upgradeGrid}
+      </div>
+
+      <footer
+        className="shrink-0 border-t border-neutral-800 bg-neutral-950 px-3 pt-2"
+        style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+      >
+        <div className="flex gap-2">
+          {/* The primary action takes the width it deserves: it is the thing a
+              player taps hundreds of times, and it belongs under the thumb. */}
+          <button
+            type="button"
+            disabled={pending || attempt !== null}
+            onClick={startAttempt}
+            className="min-h-12 flex-1 rounded-lg bg-neutral-100 px-4 text-sm font-semibold text-neutral-900 active:bg-neutral-300 disabled:opacity-40"
+          >
+            {/* A dungeon replay disables this button too, so it must not
+                claim a stage fight is under way while a duel is on screen. */}
+            {attempt
+              ? attempt.dungeon
+                ? 'In a dungeon…'
+                : `Fighting stage ${attempt.stage}…`
+              : `Attempt stage ${hud.currentStage}`}
+          </button>
+
+          <button
+            type="button"
+            disabled={pending || attempt !== null || keys < 1 || hud.bestStage < 1}
+            onClick={startDungeon}
+            aria-label={`Dungeon, ${keys} keys`}
+            title={
+              keys < 1 ? 'Keys drop from stage bosses' : `Runs a dungeon at stage ${hud.bestStage}`
+            }
+            className="flex min-h-12 items-center gap-1.5 rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 text-sm text-amber-100 disabled:opacity-40"
+          >
+            <AtlasSprite id="currency.dungeon_key" scale={1.5} />
+            <span className="font-mono text-xs">{keys}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            className="flex min-h-12 items-center rounded-lg border border-neutral-700 px-3 text-sm lg:hidden"
+          >
+            Upgrades
+          </button>
+        </div>
+
+        {offlineGold.gt(0) && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => void send({ type: 'claimOffline' })}
+            className="mt-2 min-h-11 w-full rounded-lg border border-emerald-600/60 bg-emerald-500/10 px-4 text-sm text-emerald-100 disabled:opacity-40"
+          >
+            Claim {formatBig(offlineGold)} idle gold
+          </button>
+        )}
+      </footer>
+
+      {sheetOpen && (
+        <BottomSheet title="Upgrades" trailing={buyPicker('buy-amount-sheet')} onClose={() => setSheetOpen(false)}>
+          {upgradeGrid}
+        </BottomSheet>
+      )}
 
       {panelOpen && (
         <CharacterPanel
@@ -296,23 +373,24 @@ function effectText(key: string): string {
  * actually do: a fixed multiplier is all-or-nothing, 'max' takes what fits.
  * Both call the same sim functions the server calls, so they cannot disagree.
  */
-function plannedPurchase(upgrade: UpgradeView, amount: BuyAmount, gold: number) {
+function plannedPurchase(upgrade: UpgradeView, amount: BuyAmount, gold: Big) {
   const key = upgrade.key as UpgradeKey;
-  if (upgrade.maxed) return { count: 0, cost: Infinity, affordable: false };
+  const none = { count: 0, cost: null, affordable: false };
+  if (upgrade.maxed) return none;
 
   if (amount === 'max') {
     const count = maxAffordableUpgrades(key, upgrade.level, gold);
     return {
       count,
-      cost: count > 0 ? bulkUpgradeCost(key, upgrade.level, count) : upgrade.cost,
+      cost: count > 0 ? bulkUpgradeCost(key, upgrade.level, count) : fromSave(upgrade.cost),
       affordable: count > 0,
     };
   }
 
   const count = Math.min(amount, remainingLevels(key, upgrade.level));
-  if (count <= 0) return { count: 0, cost: Infinity, affordable: false };
+  if (count <= 0) return none;
   const cost = bulkUpgradeCost(key, upgrade.level, count);
-  return { count, cost, affordable: gold >= cost };
+  return { count, cost, affordable: gold.gte(cost) };
 }
 
 function UpgradeButton({
@@ -324,7 +402,7 @@ function UpgradeButton({
 }: {
   upgrade: UpgradeView;
   amount: BuyAmount;
-  gold: number;
+  gold: Big;
   disabled: boolean;
   onBuy: (count: number | 'max') => void;
 }) {
@@ -341,31 +419,117 @@ function UpgradeButton({
       // No title attribute: it duplicates the effect line already rendered
       // below, and it shadows the label in the accessible name.
       className={[
-        'flex flex-col items-start gap-0.5 rounded border px-3 py-2 text-left transition',
+        // min-h-14 is a thumb target, not a decoration: these were 3-line cards
+        // whose tap area happened to be large. Now they are two lines and the
+        // height is stated rather than inherited from the text.
+        'flex min-h-14 flex-col items-start justify-center gap-0.5 rounded-lg border px-3 py-2 text-left transition',
         upgrade.maxed
-          ? 'border-neutral-800 bg-neutral-900/80 text-neutral-500'
+          ? 'border-neutral-800 bg-neutral-900 text-neutral-500'
           : plan.affordable
-            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25'
-            : 'border-neutral-800 bg-neutral-900/80 text-neutral-400',
+            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100 active:bg-emerald-500/30'
+            : 'border-neutral-800 bg-neutral-900 text-neutral-400',
         blocked ? 'cursor-not-allowed' : 'cursor-pointer',
       ].join(' ')}
     >
-      <span className="text-sm font-medium">{upgrade.label}</span>
-      <span className="text-[11px] text-neutral-400">{effectText(upgrade.key)}</span>
+      <span className="flex w-full items-baseline gap-1.5">
+        <span className="truncate text-sm font-medium">{upgrade.label}</span>
+        {/* The effect line is what a player reads once and never again, so it
+            drops off the narrow layout rather than wrapping the card taller. */}
+        <span className="ml-auto shrink-0 font-mono text-[11px] text-neutral-500">
+          Lv {upgrade.level}
+          {plan.count > 1 ? ` +${plan.count}` : ''}
+        </span>
+      </span>
+      <span className="hidden text-[11px] text-neutral-400 sm:block">
+        {effectText(upgrade.key)}
+      </span>
       <span className="font-mono text-[11px]">
-        {upgrade.maxed
-          ? 'MAX'
-          : `Lv ${upgrade.level}${plan.count > 1 ? ` +${plan.count}` : ''} · ${compact(plan.cost)}g`}
+        {upgrade.maxed ? 'MAX' : `${plan.cost ? formatBig(plan.cost) : '—'}g`}
       </span>
     </button>
   );
 }
 
+/**
+ * A pull-up sheet for controls that do not fit a phone screen.
+ *
+ * A sheet rather than a modal: it is anchored to the bottom edge, so the
+ * controls inside land under a thumb rather than in the middle of the screen
+ * where the upgrade grid used to sit. The backdrop closes it, and so does
+ * Escape, because a sheet that can only be dismissed by an X is a trap on a
+ * device with no visible cursor.
+ */
+function BottomSheet({
+  title,
+  trailing,
+  onClose,
+  children,
+}: {
+  title: string;
+  trailing?: React.ReactNode;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex flex-col justify-end bg-black/60"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="max-h-[80dvh] overflow-y-auto rounded-t-2xl border-t border-neutral-700 bg-neutral-950 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+      >
+        {/* Sticky, so the buy multiplier stays reachable while the list scrolls -
+            picking 'Max' and then hunting back up for the track is the exact
+            trip this avoids. */}
+        <div className="sticky top-0 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950 px-3 py-3">
+          <span className="h-1 w-10 shrink-0 rounded-full bg-neutral-700" aria-hidden />
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <div className="ml-auto flex items-center gap-3">
+            {trailing}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded px-2 py-1 text-neutral-400 active:bg-neutral-800"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        <div className="p-3">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One figure in the status rail.
+ *
+ * Stacked rather than inline: `gold 302.67k` on one line is wide, and six wide
+ * chips are what forced the header to wrap into two ragged rows on a phone.
+ * Label above value halves the width and reads faster at a glance.
+ */
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded bg-neutral-900/80 px-3 py-1.5">
-      <span className="text-neutral-500">{label} </span>
-      <span className="font-mono">{value}</span>
+    <div className="shrink-0 rounded bg-neutral-900 px-2 py-1">
+      <div className="text-[10px] uppercase leading-tight tracking-wide text-neutral-500">
+        {label}
+      </div>
+      <div className="font-mono text-sm leading-tight">{value}</div>
     </div>
   );
 }

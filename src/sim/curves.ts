@@ -6,6 +6,7 @@
  * (tests/__snapshots__/balance.golden.txt) before committing.
  */
 
+import { big, BIG_ZERO, type Big } from './big';
 import type { ModLayer, Rarity } from './content/schema';
 import type { UpgradeKey } from './types';
 
@@ -96,29 +97,37 @@ export function contactCount(stage: number): number {
   return Math.min(3 + Math.floor(stage / 8), 12);
 }
 
-export function enemyHp(stage: number): number {
-  return TUNING.enemyHpBase * Math.pow(TUNING.enemyHpGrowth, stage - 1);
+/**
+ * The four curves that grow exponentially in stage, and therefore have to be Bigs.
+ *
+ * `1.12^stage` passes 1.8e308 near **stage 6,100**. As doubles these returned
+ * Infinity from there on, and Infinity in enemyHp means NaN clear times, NaN gold and
+ * a game that stops working at a stage number nobody chose. Their RATIOS - clear
+ * time, damage fractions - stay ordinary numbers, which is what makes this work.
+ */
+export function enemyHp(stage: number): Big {
+  return big(TUNING.enemyHpBase).mul(big(TUNING.enemyHpGrowth).pow(stage - 1));
 }
 
-export function bossHp(stage: number): number {
-  return enemyHp(stage) * TUNING.bossHpMult;
+export function bossHp(stage: number): Big {
+  return enemyHp(stage).mul(TUNING.bossHpMult);
 }
 
-export function enemyDps(stage: number): number {
-  return TUNING.enemyDpsBase * Math.pow(TUNING.enemyDpsGrowth, stage - 1);
+export function enemyDps(stage: number): Big {
+  return big(TUNING.enemyDpsBase).mul(big(TUNING.enemyDpsGrowth).pow(stage - 1));
 }
 
-export function bossDps(stage: number): number {
-  return enemyDps(stage) * TUNING.bossDpsMult;
+export function bossDps(stage: number): Big {
+  return enemyDps(stage).mul(TUNING.bossDpsMult);
 }
 
-export function goldPerKill(stage: number): number {
-  return TUNING.goldBase * Math.pow(TUNING.goldGrowth, stage - 1);
+export function goldPerKill(stage: number): Big {
+  return big(TUNING.goldBase).mul(big(TUNING.goldGrowth).pow(stage - 1));
 }
 
 /** Boss kill pays a lump sum on top of trash gold. */
-export function bossGold(stage: number): number {
-  return goldPerKill(stage) * 25;
+export function bossGold(stage: number): Big {
+  return goldPerKill(stage).mul(25);
 }
 
 /**
@@ -375,10 +384,20 @@ export function sideExponents(): { offence: number; defence: number } {
   };
 }
 
-/** Cost to go from `level` to `level + 1`. */
-export function upgradeCost(key: UpgradeKey, level: number): number {
+/**
+ * Cost to go from `level` to `level + 1`.
+ *
+ * A Big, because `costGrowth^level` is exactly the shape that outruns a double: at
+ * 1.405 per level the damage track passes 1e308 near level 2,100, which the ladder
+ * reaches long before it runs out of stages.
+ *
+ * Still rounded up per level. The rounding is invisible once the exponent is large,
+ * but it is what makes buying ten at once cost exactly what buying one ten times
+ * costs - see bulkUpgradeCost.
+ */
+export function upgradeCost(key: UpgradeKey, level: number): Big {
   const t = UPGRADE_TRACKS[key];
-  return Math.ceil(t.baseCost * Math.pow(t.costGrowth, level));
+  return big(t.baseCost).mul(big(t.costGrowth).pow(level)).ceil();
 }
 
 export function isUpgradeMaxed(key: UpgradeKey, level: number): boolean {
@@ -408,21 +427,21 @@ export const BULK_PURCHASE_LIMIT = 1000;
  * upgradeCost rounds each level up. Buying ten at once must cost exactly what
  * buying one ten times costs, or the bulk button becomes a discount.
  */
-export function bulkUpgradeCost(key: UpgradeKey, level: number, count: number): number {
-  let total = 0;
-  for (let i = 0; i < count; i++) total += upgradeCost(key, level + i);
+export function bulkUpgradeCost(key: UpgradeKey, level: number, count: number): Big {
+  let total = BIG_ZERO;
+  for (let i = 0; i < count; i++) total = total.add(upgradeCost(key, level + i));
   return total;
 }
 
 /** How many levels `gold` can buy, respecting the track cap and the bulk limit. */
-export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: number): number {
+export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: Big): number {
   const ceiling = Math.min(remainingLevels(key, level), BULK_PURCHASE_LIMIT);
   let count = 0;
-  let spent = 0;
+  let spent = BIG_ZERO;
 
   while (count < ceiling) {
-    const next = spent + upgradeCost(key, level + count);
-    if (next > gold) break;
+    const next = spent.add(upgradeCost(key, level + count));
+    if (next.gt(gold)) break;
     spent = next;
     count++;
   }
@@ -494,7 +513,7 @@ export const DUNGEON_CURRENCY_PER_CLEAR = { min: 1, max: 2 } as const;
  * player park on one item and grind it to perfect tiers for pocket change,
  * which turns a loot system into a slot machine with no cost.
  */
-export function rerollCost(rarity: Rarity, itemLevel: number, rerolls: number): number {
+export function rerollCost(rarity: Rarity, itemLevel: number, rerolls: number): Big {
   const rarityMultiplier: Record<Rarity, number> = {
     common: 1,
     magic: 2.5,
@@ -502,8 +521,8 @@ export function rerollCost(rarity: Rarity, itemLevel: number, rerolls: number): 
     // Uniques have no affixes to reroll; commands.ts refuses before reaching here.
     unique: Infinity,
   };
-  const base = goldPerKill(Math.max(1, itemLevel)) * 30 * rarityMultiplier[rarity];
-  return Math.ceil(base * Math.pow(1.35, rerolls));
+  const base = goldPerKill(Math.max(1, itemLevel)).mul(30).mul(rarityMultiplier[rarity]);
+  return base.mul(big(1.35).pow(rerolls)).ceil();
 }
 
 // --- Offline --------------------------------------------------------------

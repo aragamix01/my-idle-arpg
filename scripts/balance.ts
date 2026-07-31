@@ -19,10 +19,13 @@ import {
   applyCommand,
   applyCurrencyToItem,
   availableTiers,
+  big,
   CURRENCIES,
   currencyLegality,
   DISSEMBLE_YIELD,
   farmRate,
+  formatBig,
+  fromSave,
   getAffix,
   getCurrency,
   INVENTORY_CAP,
@@ -39,8 +42,10 @@ import {
   rollItem,
   rollStageBossDrops,
   STAGE_TIME_LIMIT_SECONDS,
+  toSave,
   upgradeCost,
   UPGRADE_KEYS,
+  type Big,
   type CurrencyId,
   type SaveState,
   type UpgradeKey,
@@ -67,7 +72,9 @@ function clearScore(save: SaveState, stage: number): number {
 
 /** Objective the greedy agent maximises: beat the stage, and farm faster. */
 function value(save: SaveState, stage: number): number {
-  return Math.log(clearScore(save, stage)) + 0.5 * Math.log(farmRate(save, save.bestStage) + 1);
+  // Farm rate enters in log space. It is a Big and can sit past 1e300, so `+ 1` on the
+  // raw value would be a no-op and Math.log of it would be Infinity.
+  return Math.log(clearScore(save, stage)) + 0.5 * farmRate(save, save.bestStage).add(1).ln();
 }
 
 function withUpgrade(save: SaveState, key: UpgradeKey): SaveState {
@@ -76,7 +83,7 @@ function withUpgrade(save: SaveState, key: UpgradeKey): SaveState {
 
 interface Purchase {
   key: UpgradeKey;
-  cost: number;
+  cost: Big;
   gain: number;
 }
 
@@ -93,7 +100,7 @@ function bestPurchase(save: SaveState, stage: number): Purchase | null {
     // Compared in log space: late-game costs exceed 1e300, and a raw
     // delta/cost ratio underflows to zero for every candidate, which the
     // harness would otherwise report as a wall that does not exist.
-    const gain = Math.log(delta) - Math.log(cost);
+    const gain = Math.log(delta) - cost.ln();
     if (best === null || gain > best.gain) best = { key, cost, gain };
   }
   return best;
@@ -117,7 +124,7 @@ function diagnose(save: SaveState, stage: number): string {
     `  outcome: cleared=${o.cleared} failure=${o.failure} seconds=${o.seconds.toFixed(2)} ` +
       `damageTaken=${o.damageTakenFraction.toFixed(3)} trash=${o.trashPhaseSeconds.toFixed(2)}s ` +
       `boss=${o.bossPhaseSeconds.toFixed(2)}s`,
-    `  gold=${save.gold.toExponential(2)} value=${before.toFixed(4)} farm=${farmRate(save, save.bestStage).toExponential(2)}`,
+    `  gold=${formatBig(fromSave(save.gold))} value=${before.toFixed(4)} farm=${formatBig(farmRate(save, save.bestStage))}`,
   ];
   for (const key of UPGRADE_KEYS) {
     const level = save.upgrades[key];
@@ -430,12 +437,12 @@ function maybeReroll(save: SaveState, stage: number): SaveState {
   const weakest = equipped.sort((a, b) => itemPower(a) - itemPower(b))[0];
   const cost = rerollCost(weakest.rarity, weakest.itemLevel, weakest.rerolls);
   // Never starve the upgrade tracks: rerolling is discretionary spending.
-  if (!Number.isFinite(cost) || save.gold < cost * 4) return save;
+  if (fromSave(save.gold).lt(cost.mul(4))) return save;
 
   const rerolled = rerollAffixes(save.seed, weakest);
   const next: SaveState = {
     ...save,
-    gold: save.gold - cost,
+    gold: toSave(fromSave(save.gold).sub(cost)),
     items: save.items.map((item) => (item.uid === weakest.uid ? rerolled : item)),
   };
   // The result is kept whatever it is - that is what "cannot remove if it
@@ -473,7 +480,7 @@ export function runLadder(seed = SEED): {
       const outcome = resolveStage(save, stage);
       attempts++;
       elapsed += Math.min(outcome.seconds, STAGE_TIME_LIMIT_SECONDS);
-      save = { ...save, gold: save.gold + outcome.goldEarned };
+      save = { ...save, gold: toSave(fromSave(save.gold).add(outcome.goldEarned)) };
 
       if (outcome.cleared) {
         save = { ...save, bestStage: stage, currentStage: stage + 1 };
@@ -493,8 +500,11 @@ export function runLadder(seed = SEED): {
       let boughtAnything = false;
       for (;;) {
         const buy = bestPurchase(save, stage);
-        if (!buy || buy.cost > save.gold) break;
-        save = { ...withUpgrade(save, buy.key), gold: save.gold - buy.cost };
+        if (!buy || buy.cost.gt(fromSave(save.gold))) break;
+        save = {
+          ...withUpgrade(save, buy.key),
+          gold: toSave(fromSave(save.gold).sub(buy.cost)),
+        };
         boughtAnything = true;
       }
 
@@ -508,16 +518,18 @@ export function runLadder(seed = SEED): {
           stalled = true;
           break;
         }
-        if (rate <= 0) continue; // no farm income yet; keep re-attempting for partial gold
-        const deficit = buy.cost - save.gold;
-        const seconds = deficit / rate;
+        if (rate.lte(0)) continue; // no farm income yet; keep re-attempting for partial gold
+        // Divided as Bigs and only then collapsed to a number of seconds. The deficit
+        // and the rate are both astronomical late on; their RATIO is a normal number,
+        // which is exactly the shape this type handles and a double cannot.
+        const seconds = fromSave(save.gold).sub(buy.cost).neg().div(rate).toNumber();
         if (!Number.isFinite(seconds) || seconds > PATIENCE_SECONDS) {
           stalled = true;
-          stallReason = `next upgrade (${buy.key}) costs ${buy.cost.toExponential(2)} at ${rate.toExponential(2)} gold/s = ${fmtDuration(seconds)} of farming`;
+          stallReason = `next upgrade (${buy.key}) costs ${formatBig(buy.cost)} at ${formatBig(rate)} gold/s = ${fmtDuration(seconds)} of farming`;
           break;
         }
         elapsed += seconds;
-        save = { ...save, gold: save.gold + seconds * rate };
+        save = { ...save, gold: toSave(fromSave(save.gold).add(rate.mul(seconds))) };
       }
 
       if (attempts > 5000) {
@@ -534,7 +546,7 @@ export function runLadder(seed = SEED): {
       cumulativeSeconds: elapsed,
       stageSeconds: elapsed - stageStart,
       clearSeconds: resolveStage(save, stage).seconds,
-      goldPerSecond: farmRate(save, stage),
+      goldPerSecond: farmRate(save, stage).toNumber(),
       totalLevels: UPGRADE_KEYS.reduce((n, k) => n + save.upgrades[k], 0),
     });
   }
@@ -566,7 +578,11 @@ export function report(): string {
         fmtDuration(r.stageSeconds).padStart(14),
         fmtDuration(r.cumulativeSeconds).padStart(14),
         `${r.clearSeconds.toFixed(1)}s`.padStart(11),
-        r.goldPerSecond.toFixed(1).padStart(10),
+        // Formatted, not printed raw. `toFixed(1)` on a value of 1e20 is twenty-one
+        // digits of false precision, and the last two of them move when an unrelated
+        // multiplication is reordered - which made the golden fail on a change that
+        // altered no outcome. Three significant figures is what the column is for.
+        formatBig(big(r.goldPerSecond)).padStart(10),
         String(r.totalLevels).padStart(7),
       ].join(' |'),
     );

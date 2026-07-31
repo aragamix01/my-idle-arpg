@@ -7,30 +7,61 @@
  * costs nothing in re-renders.
  */
 
+import { fromSave, toSave } from './big';
 import { farmRate } from './combat';
 import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from './curves';
 import { computeOffline } from './offline';
 import { deriveStats } from './stats';
-import { INVENTORY_CAP, UPGRADE_KEYS, type SaveState, type Stats, type UpgradeKey } from './types';
+import {
+  INVENTORY_CAP,
+  UPGRADE_KEYS,
+  type MagnitudeStatKey,
+  type SaveState,
+  type StatKey,
+  type Stats,
+  type UpgradeKey,
+} from './types';
 import type { CurrencyPurse, ItemInstance } from './content';
 
 export interface UpgradeView {
   key: UpgradeKey;
   label: string;
   level: number;
-  cost: number;
+  /** Decimal string. A maxed track has no cost at all rather than an infinite one. */
+  cost: string | null;
   affordable: boolean;
   maxed: boolean;
 }
 
+/**
+ * Stats as they cross the wire.
+ *
+ * A Decimal is an object with a prototype, and JSON keeps the fields while losing the
+ * prototype - so a snapshot that travelled through `NextResponse.json` arrives as
+ * `{mantissa, exponent}` with no `.mul`, and the first thing the panel does with it
+ * throws. Strings survive; the UI revives them with `statsFromWire`.
+ */
+export type WireStats = { [K in StatKey]: K extends MagnitudeStatKey ? string : number };
+
+export function statsToWire(stats: Stats): WireStats {
+  return { ...stats, damage: toSave(stats.damage), maxHp: toSave(stats.maxHp) };
+}
+
+export function statsFromWire(stats: WireStats): Stats {
+  return { ...stats, damage: fromSave(stats.damage), maxHp: fromSave(stats.maxHp) };
+}
+
 export interface HudSnapshot {
-  gold: number;
+  /** Decimal string - see the note on SaveState.gold. */
+  gold: string;
   bestStage: number;
   currentStage: number;
-  stats: Stats;
-  goldPerSecond: number;
+  stats: WireStats;
+  /** Decimal string, like every other magnitude that crosses the wire. */
+  goldPerSecond: string;
   upgrades: UpgradeView[];
-  pendingOfflineGold: number;
+  /** Decimal string. */
+  pendingOfflineGold: string;
   offlineCapReached: boolean;
   loadout: (string | null)[];
   /** Equipped weapon uid, or null for unarmed. */
@@ -43,32 +74,34 @@ export interface HudSnapshot {
 
 export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
   const offline = computeOffline(save, nowMs);
-  const gold = Math.floor(save.gold);
+  const gold = fromSave(save.gold);
 
   return {
-    gold,
+    gold: toSave(gold),
     bestStage: save.bestStage,
     currentStage: save.currentStage,
-    stats: deriveStats(save, {
-      stage: save.currentStage,
-      isBoss: false,
-      enemyHpFraction: 1,
-    }),
-    goldPerSecond: farmRate(save, save.bestStage),
+    stats: statsToWire(
+      deriveStats(save, {
+        stage: save.currentStage,
+        isBoss: false,
+        enemyHpFraction: 1,
+      }),
+    ),
+    goldPerSecond: toSave(farmRate(save, save.bestStage)),
     upgrades: UPGRADE_KEYS.map((key) => {
       const level = save.upgrades[key];
       const maxed = isUpgradeMaxed(key, level);
-      const cost = maxed ? Infinity : upgradeCost(key, level);
+      const cost = maxed ? null : upgradeCost(key, level);
       return {
         key,
         label: UPGRADE_TRACKS[key].label,
         level,
-        cost,
-        affordable: !maxed && gold >= cost,
+        cost: cost && toSave(cost),
+        affordable: cost !== null && gold.gte(cost),
         maxed,
       };
     }),
-    pendingOfflineGold: offline.goldEarned,
+    pendingOfflineGold: toSave(offline.goldEarned),
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
     weapon: save.weapon,

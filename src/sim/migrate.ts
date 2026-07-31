@@ -9,6 +9,7 @@
  * Gold, stage and upgrades are never touched by any step.
  */
 
+import { fromSave, toSave } from './big';
 import { CONTENT_VERSION, getAffix, getUnique, rollUniqueValues, type RolledAffix } from './content';
 import { rollStream } from './items';
 import { ITEM_SLOTS, type SaveState } from './types';
@@ -27,6 +28,9 @@ export const LAYERS_VERSION = 5;
 
 /** First version with a weapon slot, skills, and uniques that roll their values. */
 export const WEAPONS_VERSION = 6;
+
+/** First version where gold is a decimal string rather than a double. */
+export const BIG_GOLD_VERSION = 7;
 
 export interface MigrationResult {
   state: SaveState;
@@ -150,6 +154,22 @@ export function migrateSave(state: SaveState): MigrationResult {
       const rng = rollStream(state.seed, Number(item.uid), item.crafts);
       return { ...item, uniqueRolls: rollUniqueValues(unique, rng) };
     });
+    migrated = true;
+  }
+
+  if (typeof (next.gold as unknown) === 'number' || next.lifetimeGold === undefined) {
+    // v6 -> v7 moves gold from a double to a decimal string.
+    //
+    // Lossless in the direction that matters: whatever the double held is exactly what
+    // the string holds, and from here the value can keep growing past 1.8e308 instead
+    // of becoming Infinity somewhere around stage 6,100.
+    //
+    // lifetimeGold is seeded from the CURRENT balance rather than from zero. It is
+    // wrong either way for an existing player - gold already spent is not recoverable -
+    // but seeding it at zero would tell prestige that a player at stage 300 has never
+    // earned anything, and understating a long-running account is the worse error.
+    next.gold = toSave(fromSave(next.gold as unknown as string | number));
+    if (next.lifetimeGold === undefined) next.lifetimeGold = next.gold;
     migrated = true;
   }
 

@@ -22,7 +22,8 @@ import { BASE_STATS } from '../types';
 /** 4: crafting currency, fragments, spirits, and dissembling. */
 /** 5: modifiers carry a layer - flat, increased, more - instead of add/mul. */
 /** 6: weapons grant skills, skills cost a resource, and uniques roll their values. */
-export const CONTENT_VERSION = 6;
+/** 7: gold is a decimal string, so magnitudes are no longer capped at 1.8e308. */
+export const CONTENT_VERSION = 7;
 
 export * from './schema';
 export * from './affixes';
