@@ -713,7 +713,13 @@ test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) =>
   await page.reload();
 
   await expect(dungeon).toBeEnabled();
-  const keysBefore = Number((await dungeon.textContent())?.match(/(\d+)\s*$/)?.[1] ?? 0);
+  // Read from the accessible name, not from the rendered text. The button now also
+  // carries the dungeon's elemental affinity as two letters, so "the digits at the
+  // end" stopped being the key count the moment that shipped - and it failed here as
+  // a mystery rather than as the display change it was. The label states the count in
+  // words and is what a screen reader gets, so it is the more honest source anyway.
+  const label = (await dungeon.getAttribute('aria-label')) ?? '';
+  const keysBefore = Number(label.match(/(\d+)\s+keys?/)?.[1] ?? 0);
   expect(keysBefore).toBeGreaterThan(0);
 
   await dungeon.click();
@@ -735,7 +741,9 @@ test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) =>
     timeout: REPLAY_TIMEOUT,
   });
   await expect
-    .poll(async () => Number((await dungeon.textContent())?.match(/(\d+)\s*$/)?.[1] ?? -1))
+    .poll(async () =>
+      Number(((await dungeon.getAttribute('aria-label')) ?? '').match(/(\d+)\s+keys?/)?.[1] ?? -1),
+    )
     .toBe(keysBefore - 1);
 });
 

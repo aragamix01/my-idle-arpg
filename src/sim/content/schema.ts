@@ -53,6 +53,27 @@ export const ConditionSchema = z
 export const ModLayerSchema = z.enum(['flat', 'increased', 'more']);
 export type ModLayer = z.infer<typeof ModLayerSchema>;
 
+/**
+ * The five damage types.
+ *
+ * `physical` is one of them rather than "the absence of an element", so there is one
+ * mitigation path instead of two and a physical-resistant target is expressible. The
+ * cost of the extra member is one entry in a resistance table; the cost of the special
+ * case would be a branch in every place that reads a share.
+ *
+ * Deliberately NOT the same axis as SkillKind. Kind is physical-or-magical and decides
+ * which resource the skill spends and which skill-level affixes apply to it; element
+ * decides what the damage is mitigated by. Fireball is `kind: magical, element: fire`,
+ * and a future physical spell would be `kind: magical, element: physical` without
+ * either field lying about the other.
+ *
+ * `lightning` and `darkness` have no skill on day one and are live regardless, because
+ * an "extra element" modifier can name any of them. No dead enum members, no art.
+ */
+export const ElementSchema = z.enum(['physical', 'fire', 'cold', 'lightning', 'darkness']);
+export type Element = z.infer<typeof ElementSchema>;
+export const ELEMENTS = ElementSchema.options;
+
 export const EffectSchema = z.discriminatedUnion('kind', [
   z
     .object({
@@ -90,6 +111,67 @@ export const EffectSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('keyDrop'),
       multiplier: z.number(),
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  /**
+   * Changes how many gear slots the character has.
+   *
+   * A fourth kind rather than a stat, for the same reason keyDrop is one: a slot count
+   * is an integer the layer machinery has nothing to say about. Running it through
+   * `(base + flat) x (1 + increased) x more` would mean a loadout of 4.7 slots.
+   *
+   * Only items in the first ITEM_SLOTS positions are consulted - see equipSlots().
+   */
+  z
+    .object({
+      kind: z.literal('equipSlots'),
+      delta: z.number().int(),
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  /**
+   * Scales what every OTHER equipped item contributes.
+   *
+   * Applies to `flat` and `increased` only. `more` is already the compounding layer,
+   * and multiplying a multiplier turns a bounded effect into an unbounded one - the
+   * same reason a rollable affix may not use `more` at all.
+   *
+   * Never applies to itself, or it would compound against its own downside and two
+   * copies would compound against each other.
+   */
+  z
+    .object({
+      kind: z.literal('amplifyOthers'),
+      multiplier: z.number(),
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  /**
+   * Gain a fraction of your damage as extra damage of another element.
+   *
+   * A hit is not a number, it is SHARES of one number by element: the skill's own
+   * element at 1, plus a fraction for every one of these. The dps a target actually
+   * takes is `damage x speed x critFactor x Σ share x mitigation(element)`.
+   *
+   * So against a target with no resistance `gain 20% as extra cold` is a flat 1.2x,
+   * and against a cold-immune one it is nothing at all. That is the whole mechanic,
+   * and it costs one map plus one stat rather than four damage pools with four sets
+   * of layers.
+   *
+   * An effect rather than four stat keys for the same reason keyDrop is one: it is not
+   * a number the character sheet has a row for, and four of them would be four rows
+   * that are almost always zero.
+   *
+   * NOT amplified by amplifyOthers. It is neither `flat` nor `increased`; it is closer
+   * to a `more` multiplier on part of the hit, and amplifying it would compound.
+   */
+  z
+    .object({
+      kind: z.literal('extraElement'),
+      element: ElementSchema,
+      /** Share of base damage added, so 0.03 is "gain 3% as extra". */
+      fraction: z.number(),
       when: ConditionSchema.optional(),
     })
     .strict(),
@@ -149,7 +231,9 @@ export type AffixKind = 'prefix' | 'suffix';
  */
 export type AffixEffectTemplate =
   | { kind: 'statMod'; stat: StatKey; op: ModLayer }
-  | { kind: 'goldOnKill' };
+  | { kind: 'goldOnKill' }
+  /** The element is part of the affix's identity; only the fraction comes from a tier. */
+  | { kind: 'extraElement'; element: Element };
 
 export interface AffixTier {
   /** Lowest item level that may roll this tier. */
@@ -305,6 +389,18 @@ export const SkillSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     kind: SkillKindSchema,
+    /**
+     * What this skill's damage is, for mitigation purposes.
+     *
+     * The skill carrying the element is what keeps damage a single number. Weapons
+     * already grant skills, so which weapon you bring IS the elemental decision, made
+     * in a slot that already exists - and "gain X% as extra" modifiers are what stop
+     * it being a fixed property of that weapon.
+     *
+     * Separate from `kind`, which is physical-or-magical and drives the resource label
+     * and which skill-level affixes apply. See ElementSchema.
+     */
+    element: ElementSchema,
     /** Damage per hit before any modifier. */
     baseDamage: z.number().positive(),
     /** Hits or casts per second before any modifier. */
@@ -408,6 +504,34 @@ export const UniqueEffectSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('keyDrop'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('equipSlots'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('amplifyOthers'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  /**
+   * The element is authored and only the fraction rolls.
+   *
+   * Which element an item converts to is its identity, not its quality - a lucky drop
+   * should be a bigger version of the same item, not a different one.
+   */
+  z
+    .object({
+      kind: z.literal('extraElement'),
+      element: ElementSchema,
       roll: RollRangeSchema,
       when: ConditionSchema.optional(),
     })

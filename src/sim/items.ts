@@ -617,9 +617,11 @@ export function affixEffect(rolled: RolledAffix): Effect | null {
   const affix = getAffix(rolled.affixId);
   if (!affix) return null; // save referencing an affix that no longer exists
   const template = affix.effect;
-  return template.kind === 'goldOnKill'
-    ? { kind: 'goldOnKill', multiplier: rolled.value }
-    : { kind: 'statMod', stat: template.stat, op: template.op, value: rolled.value };
+  if (template.kind === 'goldOnKill') return { kind: 'goldOnKill', multiplier: rolled.value };
+  if (template.kind === 'extraElement') {
+    return { kind: 'extraElement', element: template.element, fraction: rolled.value };
+  }
+  return { kind: 'statMod', stat: template.stat, op: template.op, value: rolled.value };
 }
 
 /** Everything an item contributes: implicit, rolled affixes, or authored effects. */
@@ -679,8 +681,27 @@ export function itemPower(item: ItemInstance): number {
     // At face value a doubled key chance was the single largest number any item
     // could carry, above `+60% gold per kill`.
     if (effect.kind === 'keyDrop') return power + (effect.multiplier - 1) * 0.3;
+    // A slot is worth roughly what a whole item is, and an item is worth about a
+    // rare's six rolls. Counted at 1.0 per slot so the heuristic ranks a slot-granting
+    // unique above any single affix without pretending to price it exactly - the real
+    // comparison is the power-budget search, which equips the thing and measures.
+    if (effect.kind === 'equipSlots') return power + effect.delta;
+    // Worth what it multiplies, which this function cannot see - it prices one item
+    // in isolation and amplification is a property of the whole loadout. Counted at
+    // its excess so the heuristic ranks it as significant without pretending to know
+    // by how much; the power-budget search is what actually measures it.
+    if (effect.kind === 'amplifyOthers') return power + (effect.multiplier - 1);
+    // An extra share is worth its fraction against a target that resists nothing, and
+    // less or more than that against one that does. Counted at face value, which is
+    // the same convention `increased` uses - both are already fractions of the pool.
+    if (effect.kind === 'extraElement') return power + effect.fraction;
     if (effect.op === 'more') return power + (effect.value - 1);
     if (effect.op === 'increased') return power + effect.value;
+    // Penetration's base is ZERO, so the normalisation below would divide by 1e-9 and
+    // score a 5% roll at fifty million. It is already a fraction of a whole - the
+    // resistance it cancels - so it is worth roughly its own value in damage and is
+    // counted directly, like `increased`.
+    if (effect.stat === 'penetration') return power + effect.value;
     // The base is a Big for damage and max HP, and a plain number for the rest. Read
     // through Number() because this is a heuristic on the SIZE of a flat roll against
     // its base - both are small here, and a Decimal would buy nothing.

@@ -24,6 +24,7 @@ import {
   statsFromWire,
   UPGRADE_TRACKS,
   type Big,
+  type HudSnapshot,
   type UpgradeKey,
   type SimEvent,
   type UpgradeView,
@@ -31,7 +32,7 @@ import {
 import type { AttemptRequest } from '@/render/GameCanvas';
 import { AtlasSprite } from './atlasSprite';
 import { CharacterPanel } from './CharacterPanel';
-import { compact } from './format';
+import { compact, ELEMENT_STYLE, elementName } from './format';
 import { HUD_TICK_MS, useGameStore } from './store';
 
 /** Bulk purchase sizes. 'max' spends everything the track can absorb. */
@@ -283,14 +284,26 @@ export function Game() {
             type="button"
             disabled={pending || attempt !== null || keys < 1 || hud.bestStage < 1}
             onClick={startDungeon}
-            aria-label={`Dungeon, ${keys} keys`}
-            title={
-              keys < 1 ? 'Keys drop from stage bosses' : `Runs a dungeon at stage ${hud.bestStage}`
-            }
+            aria-label={dungeonLabel(keys, hud.dungeon)}
+            title={dungeonLabel(keys, hud.dungeon)}
             className="flex min-h-12 items-center gap-1.5 rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 text-sm text-amber-100 disabled:opacity-40"
           >
             <AtlasSprite id="currency.dungeon_key" scale={1.5} />
             <span className="font-mono text-xs">{keys}</span>
+            {/* The affinity is on the BUTTON, not behind a tooltip, because a key is
+                spent whether the run is won or lost. Two coloured letters is the most
+                this row can carry, and it is enough to say "bring cold, not fire". */}
+            {hud.dungeon && (
+              <span className="font-mono text-[10px] leading-none">
+                <span className={ELEMENT_STYLE[hud.dungeon.weakTo]}>
+                  {hud.dungeon.weakTo[0].toUpperCase()}
+                </span>
+                <span className="text-neutral-600">/</span>
+                <span className={ELEMENT_STYLE[hud.dungeon.resists]}>
+                  {hud.dungeon.resists[0].toUpperCase()}
+                </span>
+              </span>
+            )}
           </button>
 
           <button
@@ -545,6 +558,27 @@ function Stat({ label, value }: { label: string; value: string }) {
  * So loot is summarised rather than enumerated: counts are what a player reads
  * anyway, and the detail is in the inventory.
  */
+/**
+ * What the dungeon button says it will do, in one sentence.
+ *
+ * The affinity is in the label as well as on the face of the button, because the
+ * two-letter badge is a reminder for someone who already knows what it means and this
+ * is where they find out. Shared between `title` and `aria-label` so a screen reader
+ * gets the same sentence rather than a truncated one.
+ */
+function dungeonLabel(keys: number, dungeon: HudSnapshot['dungeon']): string {
+  // Every branch starts with "Dungeon" and states the key count. It is the button's
+  // accessible name as well as its tooltip, so it has to identify the control before
+  // it explains it - and the count is the thing a player is looking for.
+  const head = `Dungeon, ${keys} key${keys === 1 ? '' : 's'}`;
+  if (keys < 1) return `${head} — they drop from stage bosses`;
+  if (!dungeon) return `${head} — clear a stage first`;
+  return (
+    `${head} — stage ${dungeon.stage}, weak to ${elementName(dungeon.weakTo)}, ` +
+    `resists ${elementName(dungeon.resists)}`
+  );
+}
+
 function summarise(events: SimEvent[]): string[] {
   const rest: string[] = [];
   let items = 0;

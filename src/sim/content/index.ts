@@ -23,7 +23,9 @@ import { BASE_STATS } from '../types';
 /** 5: modifiers carry a layer - flat, increased, more - instead of add/mul. */
 /** 6: weapons grant skills, skills cost a resource, and uniques roll their values. */
 /** 7: gold is a decimal string, so magnitudes are no longer capped at 1.8e308. */
-export const CONTENT_VERSION = 7;
+/** 8: equip slots are derived, so the loadout array is MAX_ITEM_SLOTS long. */
+/** 9: skills carry an element, targets carry resistance, and penetration is a stat. */
+export const CONTENT_VERSION = 9;
 
 export * from './schema';
 export * from './affixes';
@@ -62,12 +64,18 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     const sample =
       affix.effect.kind === 'goldOnKill'
         ? { kind: 'goldOnKill' as const, multiplier: affix.tiers[0].value }
-        : {
-            kind: 'statMod' as const,
-            stat: affix.effect.stat,
-            op: affix.effect.op,
-            value: affix.tiers[0].value,
-          };
+        : affix.effect.kind === 'extraElement'
+          ? {
+              kind: 'extraElement' as const,
+              element: affix.effect.element,
+              fraction: affix.tiers[0].value,
+            }
+          : {
+              kind: 'statMod' as const,
+              stat: affix.effect.stat,
+              op: affix.effect.op,
+              value: affix.tiers[0].value,
+            };
     const parsed = EffectSchema.safeParse(sample);
     if (!parsed.success) errors.push(`${affix.id}: produces an invalid effect`);
 
@@ -86,6 +94,13 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
       // and would render as a duplicate line.
       if (op === 'flat' && BASE_STATS[stat] === 1) {
         errors.push(`${affix.id}: ${stat} is a multiplier and has no meaningful flat layer`);
+      }
+
+      // The mirror of the rule above. Penetration's base is zero, so a percentage of
+      // it is zero forever - an affix that reads as a bonus and does literally nothing,
+      // which is worse than one that is merely weak.
+      if (op !== 'flat' && BASE_STATS[stat] === 0) {
+        errors.push(`${affix.id}: ${stat} has a base of zero, so only a flat layer moves it`);
       }
 
       // Crit multiplier already multiplies into DPS through critFactor, so a
@@ -180,10 +195,14 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
       // midpoint - a range straddling a value the schema rejects would produce an
       // item that works until the day someone rolls the bad end of it.
       for (const value of [effect.roll.min, effect.roll.max]) {
+        // Each kind carries its magnitude under a different field name, so the sample
+        // has to be built per kind rather than by dropping `value` into a shared one.
         const sample =
           effect.kind === 'statMod'
             ? { kind: 'statMod' as const, stat: effect.stat, op: effect.op, value }
-            : { kind: effect.kind, multiplier: value };
+            : effect.kind === 'equipSlots'
+              ? { kind: 'equipSlots' as const, delta: Math.round(value) }
+              : { kind: effect.kind as 'goldOnKill' | 'keyDrop' | 'amplifyOthers', multiplier: value };
         if (!EffectSchema.safeParse(sample).success) {
           errors.push(`${unique.id} effect ${i}: ${value} produces an invalid effect`);
         }

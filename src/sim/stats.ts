@@ -8,18 +8,28 @@
 
 import {
   baseSkillId,
+  ELEMENTS,
   getSkill,
   UNARMED,
   type Effect,
+  type Element,
   type ItemInstance,
   type Skill,
 } from './content';
-import { SKILL_LEVEL_GAIN, UPGRADE_TRACKS } from './curves';
+import {
+  MAX_RESISTANCE,
+  MAX_VULNERABILITY,
+  SKILL_LEVEL_GAIN,
+  UPGRADE_TRACKS,
+  type Resistances,
+} from './curves';
 import { itemEffects } from './items';
 import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
   BASE_STATS,
+  ITEM_SLOTS,
   MAGNITUDE_STAT_KEYS,
+  MAX_ITEM_SLOTS,
   STAT_KEYS,
   type MagnitudeStatKey,
   type EffectContext,
@@ -91,12 +101,19 @@ function collectUpgrades(buckets: Buckets, levels: UpgradeLevels): void {
   }
 }
 
-function collectEffects(buckets: Buckets, effects: Effect[]): void {
+/**
+ * @param amplify Scale applied to this source's flat and increased contributions.
+ *
+ * `more` is deliberately not amplified. It is already the compounding layer, and
+ * multiplying a multiplier is how a bounded effect becomes an unbounded one - the
+ * same reasoning that keeps `more` off rollable affixes entirely.
+ */
+function collectEffects(buckets: Buckets, effects: Effect[], amplify = 1): void {
   for (const e of effects) {
     if (e.kind !== 'statMod') continue;
     const layers = buckets[e.stat as StatKey];
-    if (e.op === 'flat') layers.flat += e.value;
-    else if (e.op === 'increased') layers.increased += e.value;
+    if (e.op === 'flat') layers.flat += e.value * amplify;
+    else if (e.op === 'increased') layers.increased += e.value * amplify;
     else layers.more = layers.more.mul(e.value);
   }
 }
@@ -132,20 +149,151 @@ export function equippedWeapon(save: SaveState): ItemInstance | undefined {
 }
 
 /**
+ * How many gear slots are live right now.
+ *
+ * Derived rather than constant, because a unique can grant or remove them. The rule
+ * that makes this terminate is that **only items in the first ITEM_SLOTS positions may
+ * change the count**.
+ *
+ * Without it the fixed point runs away: a `+1 slot` item parked at index 4 is inert at
+ * four slots, becomes live the moment the count reaches five, and grants the fifth slot
+ * that made it live. With the window pinned at `min(ITEM_SLOTS, slots)` the count can
+ * only ever shrink below four, so two passes are enough and there is nothing to
+ * oscillate between.
+ *
+ * Reads items directly instead of calling equippedEffects, which calls this - the
+ * recursion would be immediate.
+ */
+/** What one gear position contributes. Empty, or pointing at a discarded item, is []. */
+function slotEffects(save: SaveState, index: number): Effect[] {
+  const uid = save.loadout[index];
+  if (!uid) return [];
+  const item = findItem(save, uid);
+  return item ? itemEffects(item) : [];
+}
+
+/**
+ * The first ITEM_SLOTS positions - the only ones that can change the slot count.
+ *
+ * Deliberately not the whole array. Positions past the base four exist in every save
+ * but are empty for every character without a slot-granting unique, and resolving
+ * their effects on every deriveStats call is work the overwhelming majority of saves
+ * do not need.
+ */
+function baseGearEffects(save: SaveState): Effect[][] {
+  const out: Effect[][] = [];
+  for (let i = 0; i < ITEM_SLOTS; i++) out.push(slotEffects(save, i));
+  return out;
+}
+
+/**
+ * Resolve the slot count from per-position effects that have already been gathered.
+ *
+ * Deltas are read once and the window is then walked over that array, rather than
+ * re-deriving item effects per pass. deriveStats runs this on every call and the
+ * balance harness runs deriveStats thousands of times per stage; the first cut walked
+ * every equipped item twice and put the 300-stage sweep over its minute budget.
+ */
+function slotsFrom(gear: Effect[][], ctx: EffectContext): number {
+  const deltas = gear.map((effects) =>
+    effects.reduce(
+      (sum, e) => (e.kind === 'equipSlots' && conditionHolds(e, ctx) ? sum + e.delta : sum),
+      0,
+    ),
+  );
+
+  // Nothing worn changes the count, which is every save until a slot unique drops.
+  if (deltas.every((d) => d === 0)) return ITEM_SLOTS;
+
+  let slots = ITEM_SLOTS;
+  for (let pass = 0; pass < 2; pass++) {
+    const window = Math.max(0, Math.min(ITEM_SLOTS, slots));
+    const next = ITEM_SLOTS + deltas.slice(0, window).reduce((a, b) => a + b, 0);
+    if (next === slots) break;
+    slots = next;
+  }
+
+  // At least one slot, and never more than the array holds. A character with zero
+  // slots would be stuck; the ceiling is what MAX_ITEM_SLOTS is for.
+  return Math.max(1, Math.min(MAX_ITEM_SLOTS, slots));
+}
+
+/**
+ * How many gear slots are live right now.
+ *
+ * Derived rather than constant, because a unique can grant or remove them. The rule
+ * that makes this terminate is that **only items in the first ITEM_SLOTS positions may
+ * change the count**.
+ *
+ * Without it the fixed point runs away: a `+1 slot` item parked at index 4 is inert at
+ * four slots, becomes live the moment the count reaches five, and grants the fifth slot
+ * that made it live. With the window pinned at `min(ITEM_SLOTS, slots)` the count can
+ * only ever shrink below four, so two passes are enough and there is nothing to
+ * oscillate between.
+ */
+export function equipSlots(save: SaveState, ctx: EffectContext): number {
+  return slotsFrom(baseGearEffects(save), ctx);
+}
+
+/**
  * Effects from currently equipped items only — owned-but-unequipped do nothing.
+ *
+ * "Equipped" means inside the live slot count. An item sitting past it is still owned
+ * and still worn in the sense that dissembling refuses it, but it contributes nothing -
+ * which is what makes a slot-removing unique a real cost rather than a free swap.
+ *
+ * The gear is walked ONCE and both answers come out of that walk. Asking equipSlots
+ * separately would mean resolving every item's effects twice on the hottest path in
+ * the sim.
  *
  * The weapon counts. It is an ordinary item that happens to also grant a skill, so
  * its affixes and implicit contribute exactly like any other equipped item's.
  */
-export function equippedEffects(save: SaveState): Effect[] {
-  const out: Effect[] = [];
-  for (const uid of [...save.loadout, save.weapon]) {
-    if (!uid) continue;
-    const item = findItem(save, uid);
-    if (!item) continue; // loadout referencing a discarded or migrated-away item
-    out.push(...itemEffects(item));
-  }
+export function equippedGroups(save: SaveState, ctx: EffectContext): Effect[][] {
+  const base = baseGearEffects(save);
+  const slots = slotsFrom(base, ctx);
+
+  const out: Effect[][] = [];
+  for (let i = 0; i < Math.min(slots, ITEM_SLOTS); i++) out.push(base[i]);
+  // Positions past the base four are only resolved when something actually granted
+  // them, which is the uncommon case.
+  for (let i = ITEM_SLOTS; i < slots; i++) out.push(slotEffects(save, i));
+
+  const weapon = equippedWeapon(save);
+  if (weapon) out.push(itemEffects(weapon));
   return out;
+}
+
+export function equippedEffects(save: SaveState, ctx: EffectContext): Effect[] {
+  return equippedGroups(save, ctx).flat();
+}
+
+/**
+ * How much each equipped item's contributions are scaled by the OTHER items.
+ *
+ * One number per group, in the same order. An amplifier multiplies everything worn
+ * except itself: `total / own` is the product of every other source's multiplier,
+ * which is the cheap way to say "all of them but this one".
+ *
+ * Excluding itself is not a nicety. An amplifier that scaled its own effects would
+ * compound against its own downside, and two of them would compound against each
+ * other - the same shape as a rollable `more` affix, which the registry forbids for
+ * exactly this reason.
+ */
+function amplifiers(groups: Effect[][], ctx: EffectContext): number[] {
+  const own = groups.map((effects) =>
+    effects.reduce(
+      (mult, e) =>
+        e.kind === 'amplifyOthers' && conditionHolds(e, ctx) ? mult * e.multiplier : mult,
+      1,
+    ),
+  );
+
+  // Nothing amplifies anything, which is every loadout without that one unique.
+  if (own.every((m) => m === 1)) return own.map(() => 1);
+
+  const total = own.reduce((a, b) => a * b, 1);
+  return own.map((m) => (m === 0 ? total : total / m));
 }
 
 /**
@@ -171,14 +319,19 @@ export function equippedSkill(save: SaveState): Skill {
  * nothing from `+2 to Physical Skill Levels`. Unarmed is level zero and never
  * scales; it is a fallback, not a build.
  */
-export function skillLevel(save: SaveState, ctx: EffectContext): number {
+export function skillLevel(
+  save: SaveState,
+  ctx: EffectContext,
+  /** Pre-walked equipped effects. Passed by deriveStats so the gear is walked once. */
+  effects: Effect[] = equippedEffects(save, ctx),
+): number {
   const weapon = equippedWeapon(save);
   if (!weapon) return 0;
   const skill = equippedSkill(save);
   const stat = skill.kind === 'physical' ? 'physicalSkillLevel' : 'magicalSkillLevel';
 
   let bonus = 0;
-  for (const e of equippedEffects(save)) {
+  for (const e of effects) {
     if (e.kind === 'statMod' && e.stat === stat && conditionHolds(e, ctx)) bonus += e.value;
   }
   return Math.max(0, weapon.itemLevel + bonus);
@@ -191,7 +344,7 @@ export function skillLevel(save: SaveState, ctx: EffectContext): number {
  * skill-level term multiplies the BASE, which is a distinct position from the three
  * layers - see the note on physicalSkillLevel in types.ts.
  */
-function baseStats(save: SaveState, ctx: EffectContext): Stats {
+function baseStats(save: SaveState, ctx: EffectContext, effects: Effect[]): Stats {
   const skill = equippedSkill(save);
   return {
     ...BASE_STATS,
@@ -203,7 +356,7 @@ function baseStats(save: SaveState, ctx: EffectContext): Stats {
     // A Big because this term alone outgrows a double: 1.05 per skill level, and
     // skill level is the weapon's item level, so a stage-6,000 weapon is already past
     // 1.8e308 before a single upgrade or affix is applied.
-    damage: big(skill.baseDamage).mul(big(SKILL_LEVEL_GAIN).pow(skillLevel(save, ctx))),
+    damage: big(skill.baseDamage).mul(big(SKILL_LEVEL_GAIN).pow(skillLevel(save, ctx, effects))),
     attackSpeed: skill.baseSpeed,
     critChance: skill.baseCritChance,
     area: skill.baseArea,
@@ -218,15 +371,33 @@ function baseStats(save: SaveState, ctx: EffectContext): Stats {
  * property is what makes loadouts comparable, and it survived the move from
  * two passes to three.
  */
-export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
+export function deriveStats(
+  save: SaveState,
+  ctx: EffectContext,
+  /**
+   * Pre-walked gear, grouped by source item.
+   *
+   * Passed by callers that need the same walk for something else - the combat layer
+   * needs it for damage shares. Walking gear is the hottest path in the sim, and the
+   * skill-level lookup below used to force a second walk on every single call.
+   */
+  groups: Effect[][] = equippedGroups(save, ctx),
+): Stats {
   const buckets = emptyBuckets();
   collectUpgrades(buckets, save.upgrades);
-  collectEffects(
-    buckets,
-    equippedEffects(save).filter((e) => conditionHolds(e, ctx)),
-  );
 
-  const base = baseStats(save, ctx);
+  // Grouped by source item rather than flattened, because an amplifier scales what
+  // the OTHER items contribute - a flat list has no way to say which is which.
+  const scale = amplifiers(groups, ctx);
+  groups.forEach((effects, i) => {
+    collectEffects(
+      buckets,
+      effects.filter((e) => conditionHolds(e, ctx)),
+      scale[i],
+    );
+  });
+
+  const base = baseStats(save, ctx, groups.flat());
   const stats = { ...base };
   for (const key of STAT_KEYS) {
     // Resolved as a Big in every case, then collapsed back to a double for the stats
@@ -246,6 +417,10 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
   // Coffers take it negative, and a negative multiplier does not mean "earns less" -
   // it means the clear pays out negative gold.
   stats.goldFind = Math.max(0, stats.goldFind);
+  // Negative penetration would mean granting the target resistance, which nothing in
+  // the game is supposed to do. No ceiling here - mitigatedResistance bounds what it
+  // can accomplish, so a huge value is wasted rather than unbounded.
+  stats.penetration = Math.max(0, stats.penetration);
 
   // Attack speed is capped by what the resource can sustain, and the CAP IS WRITTEN
   // INTO THE STAT rather than applied later in the damage formula.
@@ -303,23 +478,35 @@ export function effectiveHp(stats: Stats): Big {
  * has a hard ceiling rather than an unbounded one.
  */
 export function keyDropMultiplier(save: SaveState, ctx: EffectContext): number {
-  return equippedEffects(save)
+  return equippedEffects(save, ctx)
     .filter((e) => e.kind === 'keyDrop' && conditionHolds(e, ctx))
     .reduce((mult, e) => mult * (e.kind === 'keyDrop' ? e.multiplier : 1), 1);
 }
 
 /** Extra gold per kill, as a fraction of the stage's base gold value. */
 export function goldOnKillBonus(save: SaveState, ctx: EffectContext): number {
-  return equippedEffects(save)
+  return equippedEffects(save, ctx)
     .filter((e) => e.kind === 'goldOnKill' && conditionHolds(e, ctx))
     .reduce((sum, e) => sum + (e.kind === 'goldOnKill' ? e.multiplier : 0), 0);
 }
 
-/** Every distinct `enemyHpBelow` threshold in the loadout, plus the band edges. */
+/**
+ * Every distinct `enemyHpBelow` threshold in the loadout, plus the band edges.
+ *
+ * Reads the worn items directly rather than through equippedEffects, and takes no
+ * context, because the question is structural: which thresholds could EVER matter for
+ * this loadout. Asking it through a context would be circular - the bands are what the
+ * contexts are built from.
+ */
 export function hpBands(save: SaveState): number[] {
   const thresholds = new Set<number>([1, 0]);
-  for (const e of equippedEffects(save)) {
-    if (e.when?.enemyHpBelow !== undefined) thresholds.add(e.when.enemyHpBelow);
+  for (const uid of [...save.loadout, save.weapon]) {
+    if (!uid) continue;
+    const item = findItem(save, uid);
+    if (!item) continue;
+    for (const e of itemEffects(item)) {
+      if (e.when?.enemyHpBelow !== undefined) thresholds.add(e.when.enemyHpBelow);
+    }
   }
   return [...thresholds].sort((a, b) => b - a);
 }
@@ -336,4 +523,68 @@ export function critFactor(stats: Stats): number {
  */
 export function statsDps(stats: Stats): Big {
   return stats.damage.mul(stats.attackSpeed).mul(critFactor(stats));
+}
+
+// --- Elements -------------------------------------------------------------
+
+/**
+ * How a hit divides by element. The skill's own element is 1; extras add on top.
+ *
+ * NOT normalised, and that is the mechanic. `gain 20% as extra cold` makes the shares
+ * sum to 1.2, so against a target with no resistance it is a straight 1.2x - the extra
+ * damage is genuinely extra rather than a slice taken out of the physical half. What
+ * makes it a decision instead of free damage is that the new share is mitigated by a
+ * DIFFERENT resistance, so it is worth more or less than 20% depending on the target.
+ */
+export type DamageShares = Record<Element, number>;
+
+export function damageShares(
+  save: SaveState,
+  ctx: EffectContext,
+  effects: Effect[] = equippedEffects(save, ctx),
+): DamageShares {
+  const shares = Object.fromEntries(ELEMENTS.map((e) => [e, 0])) as DamageShares;
+  shares[equippedSkill(save).element] = 1;
+
+  for (const e of effects) {
+    if (e.kind === 'extraElement' && conditionHolds(e, ctx)) shares[e.element] += e.fraction;
+  }
+  return shares;
+}
+
+/**
+ * A target's resistance to one element, after penetration and bounds.
+ *
+ * Penetration moves resistance TOWARD zero and never past it, so over-penetrating a
+ * soft target is wasted rather than a bonus - `Math.min(resistance, 0)` is the floor
+ * it may reach. A resistance that was already negative is a dungeon's vulnerability
+ * and is left alone: penetration is for getting through armour, not for deepening a
+ * weakness that is already yours.
+ */
+export function mitigatedResistance(resistance: number, penetration: number): number {
+  const pierced = Math.max(Math.min(resistance, 0), resistance - Math.max(0, penetration));
+  return Math.max(-MAX_VULNERABILITY, Math.min(MAX_RESISTANCE, pierced));
+}
+
+/**
+ * What fraction of the loadout's raw DPS a given target actually takes.
+ *
+ * Exactly 1 when the shares are `{ own element: 1 }` and the target resists nothing,
+ * which is the property that made this change safe to land: every existing loadout
+ * against a zero-resistance target reproduces the previous numbers to the bit.
+ */
+export function elementalScale(
+  shares: DamageShares,
+  penetration: number,
+  resist: Resistances,
+): number {
+  let total = 0;
+  for (const element of ELEMENTS) {
+    const share = shares[element];
+    if (share === 0) continue;
+    total += share * (1 - mitigatedResistance(resist[element], penetration));
+  }
+  // A negative share is not authored anywhere, but a floor here is cheaper than a
+  // division by a negative dps somewhere downstream reporting a negative clear time.
+  return Math.max(0, total);
 }

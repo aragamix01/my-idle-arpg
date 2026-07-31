@@ -12,7 +12,7 @@
 import { fromSave, toSave } from './big';
 import { CONTENT_VERSION, getAffix, getUnique, rollUniqueValues, type RolledAffix } from './content';
 import { rollStream } from './items';
-import { ITEM_SLOTS, type SaveState } from './types';
+import { ITEM_SLOTS, MAX_ITEM_SLOTS, type SaveState } from './types';
 
 /** First version whose saves use rolled item instances. */
 export const ITEMS_VERSION = 2;
@@ -31,6 +31,9 @@ export const WEAPONS_VERSION = 6;
 
 /** First version where gold is a decimal string rather than a double. */
 export const BIG_GOLD_VERSION = 7;
+
+/** First version whose loadout array is MAX_ITEM_SLOTS long and slots are derived. */
+export const DERIVED_SLOTS_VERSION = 8;
 
 export interface MigrationResult {
   state: SaveState;
@@ -170,6 +173,21 @@ export function migrateSave(state: SaveState): MigrationResult {
     // earned anything, and understating a long-running account is the worse error.
     next.gold = toSave(fromSave(next.gold as unknown as string | number));
     if (next.lifetimeGold === undefined) next.lifetimeGold = next.gold;
+    migrated = true;
+  }
+
+  if (Array.isArray(next.loadout) && next.loadout.length !== MAX_ITEM_SLOTS) {
+    // v7 -> v8 widens the loadout array to its ceiling, padding with nulls.
+    //
+    // Power-neutral and position-preserving: the first four entries keep their
+    // meaning, and the extra positions are inert until something grants the slots.
+    // Truncating rather than growing is equally safe - a longer array can only come
+    // from a save written by a newer build, and the items are still in `items`.
+    const padded = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    for (let i = 0; i < Math.min(MAX_ITEM_SLOTS, next.loadout.length); i++) {
+      padded[i] = next.loadout[i] ?? null;
+    }
+    next.loadout = padded;
     migrated = true;
   }
 

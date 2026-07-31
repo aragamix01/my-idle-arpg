@@ -59,7 +59,11 @@ async function build() {
       `${source.name}: ${basename(source.sheet)} ${width}x${height} -> ${source.columns}x${rows} cells (${capacity} tiles)`,
     );
 
-    for (const [id, index] of Object.entries(source.tiles)) {
+    // Placeholders are built exactly like real bindings - they point at a tile that
+    // exists and produce a frame like any other. The only difference is that they are
+    // declared separately, so the duplicate-tile test can tell a deliberate borrow
+    // from a copy-paste slip.
+    for (const [id, index] of Object.entries({ ...source.tiles, ...source.placeholders })) {
       if (index === undefined) continue;
       if (index < 0 || index >= capacity) {
         throw new Error(`${id}: tile ${index} is outside the sheet (0..${capacity - 1})`);

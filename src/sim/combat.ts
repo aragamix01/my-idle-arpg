@@ -17,13 +17,25 @@ import {
   DUNGEON_BOSS_HP_MULT,
   DUNGEON_GOLD_MULT,
   enemyCount,
+  dungeonResistances,
   enemyDps,
   enemyHp,
   goldPerKill,
   stageOverride,
+  stageResistances,
   STAGE_TIME_LIMIT_SECONDS,
+  type Resistances,
 } from './curves';
-import { deriveStats, effectiveHp, goldOnKillBonus, hpBands, statsDps } from './stats';
+import {
+  damageShares,
+  deriveStats,
+  effectiveHp,
+  elementalScale,
+  equippedGroups,
+  goldOnKillBonus,
+  hpBands,
+  statsDps,
+} from './stats';
 import type { EffectContext, SaveState } from './types';
 
 export interface StageOutcome {
@@ -58,9 +70,22 @@ function ctxFor(stage: number, isBoss: boolean, hpFraction: number): EffectConte
   return { stage, isBoss, enemyHpFraction: hpFraction };
 }
 
-/** Single-target damage per second in a given context. */
-function singleTargetDps(save: SaveState, ctx: EffectContext): Big {
-  return statsDps(deriveStats(save, ctx));
+/**
+ * Single-target damage per second against a given target, in a given context.
+ *
+ * Resistance is a property of the TARGET, so it belongs here rather than in
+ * `statsDps` - the character sheet quotes what the loadout puts out, and this is what
+ * a particular enemy takes. Against a target that resists nothing the two are equal,
+ * which is what kept this change from moving any existing number by itself.
+ *
+ * The gear is walked once and both answers come out of that walk: the stat block and
+ * the elemental shares need the same list of equipped effects.
+ */
+function singleTargetDps(save: SaveState, ctx: EffectContext, resist: Resistances): Big {
+  const groups = equippedGroups(save, ctx);
+  const stats = deriveStats(save, ctx, groups);
+  const scale = elementalScale(damageShares(save, ctx, groups.flat()), stats.penetration, resist);
+  return statsDps(stats).mul(scale);
 }
 
 /**
@@ -74,6 +99,7 @@ function timeToKill(
   stage: number,
   isBoss: boolean,
   aoeTargets: number,
+  resist: Resistances,
 ): number {
   const bands = hpBands(save);
   let seconds = 0;
@@ -81,7 +107,7 @@ function timeToKill(
     const hi = bands[i];
     const lo = bands[i + 1];
     const slice = totalHp.mul(hi - lo);
-    const dps = singleTargetDps(save, ctxFor(stage, isBoss, hi)).mul(aoeTargets);
+    const dps = singleTargetDps(save, ctxFor(stage, isBoss, hi), resist).mul(aoeTargets);
     if (dps.lte(0)) return Infinity;
     // The division is where the magnitudes cancel: an HP pool of 1e400 over a DPS of
     // 1e398 is four seconds. Collapsed to a double here and never carried further,
@@ -116,11 +142,14 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
   // flooring makes a single +0.25 area level round to zero effect - which makes
   // the entire Area track unbuyable. The renderer floors for display only.
   const aoeTargets = Math.min(stats.area, count);
+  // Uniform across elements on the ladder - see stageResistance. Trash and boss share
+  // it, so a stage is one elemental problem rather than two.
+  const resist = stageResistances(stage);
   const trashPoolHp = enemyHp(stage).mul(count).mul(hpMult);
-  const trashPhaseSeconds = timeToKill(save, trashPoolHp, stage, false, aoeTargets);
+  const trashPhaseSeconds = timeToKill(save, trashPoolHp, stage, false, aoeTargets, resist);
 
   const bossStats = deriveStats(save, ctxFor(stage, true, 1));
-  const bossPhaseSeconds = timeToKill(save, bossHp(stage).mul(hpMult), stage, true, 1);
+  const bossPhaseSeconds = timeToKill(save, bossHp(stage).mul(hpMult), stage, true, 1, resist);
 
   const ehp = effectiveHp(stats);
   // A loadout can carry toughness conditional on boss fights, so the boss phase
@@ -195,7 +224,9 @@ export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
   const bossStats = deriveStats(save, bossCtx);
 
   const hp = bossHp(stage).mul(DUNGEON_BOSS_HP_MULT);
-  const seconds = timeToKill(save, hp, stage, true, 1);
+  // Where elements actually bite. The affinity is derived from the account seed and the
+  // stage, so it is the same every time and can be shown before the key is spent.
+  const seconds = timeToKill(save, hp, stage, true, 1, dungeonResistances(save.seed, stage));
   const ehp = effectiveHp(bossStats);
   const incoming = bossDps(stage).mul(DUNGEON_BOSS_DPS_MULT);
 
@@ -266,7 +297,14 @@ export function killsPerSecond(save: SaveState, stage: number): number {
   const hpMult = stageOverride(stage).hpMult ?? 1;
 
   const perEnemyHp = enemyHp(stage).mul(hpMult);
-  const secondsPerWave = timeToKill(save, perEnemyHp.mul(aoeTargets), stage, false, aoeTargets);
+  const secondsPerWave = timeToKill(
+    save,
+    perEnemyHp.mul(aoeTargets),
+    stage,
+    false,
+    aoeTargets,
+    stageResistances(stage),
+  );
   if (!Number.isFinite(secondsPerWave) || secondsPerWave <= 0) return 0;
 
   return aoeTargets / secondsPerWave;

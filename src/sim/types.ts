@@ -49,6 +49,19 @@ export const STAT_KEYS = [
    * changes no outcome is worse than no stat.
    */
   'resourceRegen',
+  /**
+   * Enemy resistance ignored, as a fraction. 0.1 turns a 30% resistance into 20%.
+   *
+   * ONE stat rather than one per element, and that is a deliberate refusal. Four
+   * penetrations means four affixes competing for the same gear rows, each dead
+   * unless it happens to match the element you are dealing - which is book-keeping
+   * dressed as a build decision. One number is a live purchase whatever you wield.
+   *
+   * It reduces resistance TOWARD zero and never past it, so over-penetrating a soft
+   * target is wasted rather than a bonus. A negative resistance - which only a dungeon
+   * affinity produces - stays negative and is not something penetration can deepen.
+   */
+  'penetration',
 ] as const;
 
 export type StatKey = (typeof STAT_KEYS)[number];
@@ -112,6 +125,14 @@ export const BASE_STATS: Stats = {
    * derives exactly what it derived before resources existed.
    */
   resourceRegen: 3,
+  /**
+   * Zero, so elements change nothing until an item grants some.
+   *
+   * The only stat whose base is zero, which makes `increased` meaningless on it - a
+   * percentage of nothing. validateRegistry rejects any affix that tries, the same way
+   * it rejects a flat layer on a stat whose base is already a multiplier.
+   */
+  penetration: 0,
 };
 
 /** The stats an equipped skill supplies the base for, instead of BASE_STATS. */
@@ -132,8 +153,23 @@ export const UPGRADE_KEYS = [
 export type UpgradeKey = (typeof UPGRADE_KEYS)[number];
 export type UpgradeLevels = Record<UpgradeKey, number>;
 
-/** Number of item slots the player can equip at once. */
+/**
+ * Item slots a character has before anything modifies the count.
+ *
+ * The BASE, not the total - see equipSlots() in stats.ts. It is also the window
+ * within which an item is allowed to change the count at all, which is the rule that
+ * keeps that calculation from running away.
+ */
 export const ITEM_SLOTS = 4;
+
+/**
+ * Hard ceiling on the loadout array, and therefore on what any item can grant.
+ *
+ * The array is this long in every save; positions past the live count hold items that
+ * are simply inert. A fixed length is what makes the slot count a derived number
+ * instead of a save migration every time a unique changes it.
+ */
+export const MAX_ITEM_SLOTS = 7;
 
 /**
  * Inventory size.

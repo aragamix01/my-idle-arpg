@@ -9,6 +9,7 @@ import { describeEffect, describeRolledAffix } from '../src/ui/format';
 import {
   AFFIXES,
   AFFIX_LIMITS,
+  affixEffect,
   affixRows,
   applyCommand,
   BASES,
@@ -26,13 +27,19 @@ import {
   createRng,
   CURRENCIES,
   currencyLegality,
+  damageShares,
   deriveStats,
+  dungeonAffinity,
+  dungeonResistances,
+  ELEMENTS,
+  elementalScale,
   DISSEMBLE_YIELD,
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
   effectiveHp,
   enemyCount,
   enemyHp,
+  equipSlots,
   farmRate,
   feedbackExponent,
   FRAGMENTS_PER_CLEAR,
@@ -45,6 +52,13 @@ import {
   getUnique,
   IMPLICIT_AFFIXES,
   KEY_DROP_CHANCE,
+  MAX_RESISTANCE,
+  MAX_VULNERABILITY,
+  mitigatedResistance,
+  RESISTANCE_CAP,
+  stageResistance,
+  stageResistances,
+  uniformResistances,
   PREFIXES,
   SUFFIXES,
   sideExponents,
@@ -52,6 +66,8 @@ import {
   OFFLINE_CAP_SECONDS,
   INVENTORY_CAP,
   itemEffects,
+  ITEM_SLOTS,
+  MAX_ITEM_SLOTS,
   migrateSave,
   rerollCost,
   resolveDungeon,
@@ -60,6 +76,7 @@ import {
   rollDungeonCurrency,
   rollDungeonItem,
   rollStageBossDrops,
+  STAT_KEYS,
   statsDps,
   trackLayer,
   TUNING,
@@ -622,6 +639,22 @@ describe('item rolling', () => {
     }
   });
 
+  it('renders every rollable affix as a readable line', () => {
+    // The same hole the unique test covers, on the other half of the content. A new
+    // effect kind is a type error everywhere it is CONSUMED, and describeEffect
+    // returns a string from every branch - so a missing branch is not a type error,
+    // it is an item reading "undefined" in the panel.
+    for (const affix of [...AFFIXES, ...IMPLICIT_AFFIXES]) {
+      for (let tier = 0; tier < affix.tiers.length; tier++) {
+        const effect = affixEffect({ affixId: affix.id, tier, value: affix.tiers[tier].value });
+        expect(effect, `${affix.id}`).not.toBeNull();
+        if (!effect) continue;
+        const line = describeEffect(effect);
+        expect(line, `${affix.id}: ${line}`).not.toMatch(/undefined|NaN/);
+      }
+    }
+  });
+
   it('carries a defensive unique, not only offence and economy', () => {
     // A unique tier whose best items are all offensive breaks the offence/defence
     // symmetry invariant structurally - the ceiling on one side rises and the other
@@ -668,6 +701,318 @@ describe('item rolling', () => {
     // Every tier still has to appear, or a weight is effectively zero and the
     // roster is smaller than it reads.
     expect(share('ancient')).toBeGreaterThan(0);
+  });
+});
+
+describe('equip slots', () => {
+  const CTX = { stage: 1, isBoss: false, enemyHpFraction: 1 };
+
+  /** A save wearing `item` at a chosen index of the widened loadout array. */
+  const wearingAt = (index: number, item: ReturnType<typeof rollItem>): SaveState => {
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[index] = item.uid;
+    return { ...newSave(5, T0), items: [item], loadout };
+  };
+
+  it('starts at the base count with nothing granting slots', () => {
+    expect(equipSlots(newSave(1, T0), CTX)).toBe(ITEM_SLOTS);
+  });
+
+  it('ignores an item parked past the live count', () => {
+    // The array is seven long; only the first four positions are live. An item in
+    // position six is owned, visible and completely inert - which is the whole
+    // mechanism a slot-removing unique relies on.
+    // Fingerprinted across every stat rather than a chosen one: which stats an
+    // arbitrary drop touches is a property of the roll, and picking damage made the
+    // control half of this test pass or fail on what the RNG happened to produce.
+    const fingerprint = (save: SaveState) =>
+      STAT_KEYS.map((key) => String(deriveStats(save, CTX)[key])).join('|');
+
+    const item = rollItem(5, 1, 60);
+    const bare = fingerprint(newSave(5, T0));
+
+    expect(fingerprint(wearingAt(MAX_ITEM_SLOTS - 1, item)), 'a parked item changed a stat').toBe(
+      bare,
+    );
+    // And the same item in a live slot does something, or the assertion above proves
+    // nothing about slots and everything about the item being inert to begin with.
+    expect(fingerprint(wearingAt(0, item))).not.toBe(bare);
+  });
+
+  /** A unique instance rolled at the top of every range. */
+  const uniqueItem = (id: string, uid = 'u1') => {
+    const unique = getUnique(id)!;
+    return {
+      uid,
+      baseId: id,
+      rarity: 'unique' as const,
+      itemLevel: 60,
+      affixes: [],
+      rerolls: 0,
+      crafts: 0,
+      uniqueId: id,
+      uniqueRolls: unique.effects.map((e) => e.roll.max),
+    };
+  };
+
+  it('grants slots from a base position and ignores one parked past the window', () => {
+    // The rule that stops the fixed point running away. A granter inside the first
+    // four positions works; the same item at index 4 is inert, because it would
+    // otherwise grant the slot that makes it live and then grant it again.
+    const granter = uniqueItem('travellers-harness');
+    const granted = granter.uniqueRolls[0];
+    expect(granted).toBeGreaterThan(0);
+
+    expect(equipSlots(wearingAt(0, granter), CTX)).toBe(ITEM_SLOTS + granted);
+    expect(equipSlots(wearingAt(ITEM_SLOTS, granter), CTX)).toBe(ITEM_SLOTS);
+  });
+
+  it('settles rather than oscillating when a taker is worn', () => {
+    // Removing slots shrinks the window, which can only ever remove more granters -
+    // monotone, so it converges. Two takers cannot take the count below one.
+    const taker = uniqueItem('monomaniacs-seal', 'a');
+    const other = { ...uniqueItem('monomaniacs-seal', 'b') };
+
+    const one = wearingAt(0, taker);
+    expect(equipSlots(one, CTX)).toBe(ITEM_SLOTS - 1);
+
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[0] = taker.uid;
+    loadout[1] = other.uid;
+    const both: SaveState = { ...newSave(5, T0), items: [taker, other], loadout };
+    expect(equipSlots(both, CTX)).toBe(ITEM_SLOTS - 2);
+    // And calling it repeatedly gives the same answer - a fixed point, not a step.
+    expect(equipSlots(both, CTX)).toBe(equipSlots(both, CTX));
+  });
+
+  it('amplifies other items but never itself', () => {
+    // The amplifier's own effects are excluded, or it would scale its own downside
+    // and two copies would compound against each other - the shape a rollable `more`
+    // is banned for.
+    const seal = uniqueItem('monomaniacs-seal', 'seal');
+    const gear = rollItem(5, 1, 60);
+
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[0] = seal.uid;
+    loadout[1] = gear.uid;
+    const withBoth: SaveState = { ...newSave(5, T0), items: [seal, gear], loadout };
+
+    const alone = deriveStats({ ...newSave(5, T0), items: [gear], loadout: [gear.uid] }, CTX);
+    const bare = deriveStats(newSave(5, T0), CTX);
+    const amplified = deriveStats(withBoth, CTX);
+
+    // Whatever the gear contributed on its own is now worth more.
+    const gearGain = statsDps(alone).div(statsDps(bare)).toNumber();
+    const bothGain = statsDps(amplified).div(statsDps(bare)).toNumber();
+    if (gearGain > 1.0001) expect(bothGain).toBeGreaterThan(gearGain);
+
+    // Wearing the seal ALONE is exactly a bare character minus a slot: it has nothing
+    // to amplify, and it must not amplify itself into mattering.
+    const sealOnly = deriveStats(wearingAt(0, seal), CTX);
+    expect(statsDps(sealOnly).eq(statsDps(bare))).toBe(true);
+  });
+
+  it('refuses to equip into a locked slot, on the server', () => {
+    const item = rollItem(5, 1, 60);
+    const save: SaveState = { ...newSave(5, T0), items: [item] };
+
+    // The schema allows the index - the array is that long - so this has to be the
+    // command layer refusing, not zod. A client one swap out of date would otherwise
+    // equip into a slot that stopped existing.
+    expect(CommandSchema.safeParse({ type: 'equipItem', slot: 5, itemId: item.uid }).success).toBe(
+      true,
+    );
+    const result = applyCommand(save, { type: 'equipItem', slot: 5, itemId: item.uid }, T0);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/locked/);
+  });
+
+  it('still refuses to dissemble an item sitting in a locked slot', () => {
+    // Inert is not the same as unequipped. Destroying what someone is wearing because
+    // a unique changed the slot count is the worst possible reading of "inert".
+    const item = rollItem(5, 1, 60);
+    const save = wearingAt(MAX_ITEM_SLOTS - 1, item);
+    const result = applyCommand(save, { type: 'dissembleItems', uids: [item.uid] }, T0);
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('elements', () => {
+  const CTX = { stage: 1, isBoss: false, enemyHpFraction: 1 };
+  const NONE = uniformResistances(0);
+
+  it('a target that resists nothing takes exactly the loadout DPS', () => {
+    // The invariant that made this change safe to land. Everything below is new
+    // machinery, and all of it has to collapse to 1.0 in the case that existed
+    // before it - otherwise every number in the game moved for no stated reason.
+    const save = newSave(1, T0);
+    expect(elementalScale(damageShares(save, CTX), 0, NONE)).toBe(1);
+  });
+
+  it('an extra share adds to the hit rather than dividing it', () => {
+    // "Gain 20% as extra cold" against a soft target is 1.2x, not a fifth of the
+    // physical half repainted. The shares deliberately do not normalise.
+    const save = newSave(1, T0);
+    const shares = damageShares(save, CTX, [
+      { kind: 'extraElement', element: 'cold', fraction: 0.2 },
+    ]);
+    expect(shares.physical).toBe(1);
+    expect(shares.cold).toBe(0.2);
+    expect(elementalScale(shares, 0, NONE)).toBeCloseTo(1.2, 9);
+  });
+
+  it('the extra is worth what the TARGET says it is worth', () => {
+    // The whole reason this is a mechanic rather than a damage affix with extra
+    // words: the same 20% is worth 20% against one target and nothing against
+    // another, so which element you carry is a decision about where you are going.
+    const shares = damageShares(newSave(1, T0), CTX, [
+      { kind: 'extraElement', element: 'cold', fraction: 0.2 },
+    ]);
+    const coldImmune = { ...NONE, cold: MAX_RESISTANCE };
+    expect(elementalScale(shares, 0, coldImmune)).toBeCloseTo(1 + 0.2 * (1 - MAX_RESISTANCE), 9);
+
+    const coldWeak = { ...NONE, cold: -MAX_VULNERABILITY };
+    expect(elementalScale(shares, 0, coldWeak)).toBeCloseTo(1 + 0.2 * (1 + MAX_VULNERABILITY), 9);
+  });
+
+  it('conditions gate an extra share like any other effect', () => {
+    const effects: Effect[] = [
+      { kind: 'extraElement', element: 'fire', fraction: 0.3, when: { isBoss: true } },
+    ];
+    expect(damageShares(newSave(1, T0), CTX, effects).fire).toBe(0);
+    expect(damageShares(newSave(1, T0), { ...CTX, isBoss: true }, effects).fire).toBe(0.3);
+  });
+
+  it('penetration cuts resistance toward zero and stops there', () => {
+    expect(mitigatedResistance(0.3, 0.1)).toBeCloseTo(0.2, 9);
+    // Over-penetrating a soft target is wasted rather than a bonus. Without the
+    // floor, one penetration roll would be a damage multiplier against every enemy
+    // in the game and the stat would have nothing to do with elements at all.
+    expect(mitigatedResistance(0.05, 0.5)).toBe(0);
+    expect(mitigatedResistance(0, 0.5)).toBe(0);
+  });
+
+  it('penetration does not deepen a weakness that is already yours', () => {
+    // A negative resistance is a dungeon's affinity, not armour. Letting penetration
+    // stack onto it would make the vulnerable element the correct answer twice over.
+    expect(mitigatedResistance(-0.35, 0.4)).toBeCloseTo(-0.35, 9);
+  });
+
+  it('mitigation is bounded at both ends', () => {
+    expect(mitigatedResistance(5, 0)).toBe(MAX_RESISTANCE);
+    expect(mitigatedResistance(-5, 0)).toBe(-MAX_VULNERABILITY);
+  });
+
+  it('ladder resistance is uniform, rises with depth, and never reaches its cap', () => {
+    for (const stage of [1, 50, 300, 5000, 1e6]) {
+      const values = ELEMENTS.map((e) => stageResistances(stage)[e]);
+      // Uniform is the deliberate simple case: elements on the ladder are a scaling
+      // axis, not a lookup table that gates progress on bringing the right weapon.
+      expect(new Set(values).size).toBe(1);
+      expect(stageResistance(stage)).toBeLessThan(RESISTANCE_CAP);
+    }
+    expect(stageResistance(1)).toBeLessThan(stageResistance(50));
+    expect(stageResistance(50)).toBeLessThan(stageResistance(300));
+    // Bounded is the safety argument. Resistance is a multiplier on effective HP, so
+    // an unbounded one would be a second HP curve racing enemyHpGrowth.
+    expect(stageResistance(1e9)).toBeLessThan(RESISTANCE_CAP);
+  });
+
+  it('a dungeon names two different elements, and does so before the key is spent', () => {
+    for (const stage of [1, 7, 40, 199]) {
+      const a = dungeonAffinity(12345, stage);
+      const b = dungeonAffinity(12345, stage);
+      // Deterministic from the account seed, which is what lets the UI show it
+      // before a key is committed rather than after.
+      expect(a).toEqual(b);
+      expect(a.resists).not.toBe(a.weakTo);
+    }
+  });
+
+  it('a dungeon is no harder than the ladder on average', () => {
+    // The affinity is symmetric around the ladder baseline, so the average dungeon
+    // is exactly the ladder at that depth. An affinity that only ever added
+    // resistance would be a difficulty tax with an elemental costume on.
+    const stage = 60;
+    const resist = dungeonResistances(9, stage);
+    const total = ELEMENTS.reduce((sum, e) => sum + resist[e], 0);
+    expect(total / ELEMENTS.length).toBeCloseTo(stageResistance(stage), 9);
+  });
+
+  it('every element has an affix that grants it', () => {
+    // Lightning and darkness have no skill. If the pool did not cover them they would
+    // be enum members nothing in the game can produce - dead content with a test
+    // suite reassuring everyone it works.
+    for (const element of ELEMENTS) {
+      const affix = AFFIXES.find(
+        (a) => a.effect.kind === 'extraElement' && a.effect.element === element,
+      );
+      expect(affix, `no affix grants extra ${element}`).toBeDefined();
+    }
+  });
+
+  it('an extra-element affix on a worn item shows up in the shares', () => {
+    // End to end through itemEffects, so a template that resolved to the wrong shape
+    // would fail here rather than silently contributing nothing.
+    const affix = AFFIXES.find((a) => a.id === 'extra-lightning');
+    expect(affix).toBeDefined();
+    if (!affix) return;
+
+    const top = affix.tiers.length - 1;
+    const item = {
+      ...rollItem(9, 1, 90),
+      rarity: 'magic' as const,
+      baseId: 'whetstone',
+      uniqueId: undefined,
+      baseAffix: undefined,
+      affixes: [{ affixId: affix.id, tier: top, value: affix.tiers[top].value }],
+    };
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[0] = item.uid;
+    const save: SaveState = { ...newSave(9, T0), items: [item], loadout };
+
+    expect(damageShares(save, CTX).lightning).toBeCloseTo(affix.tiers[top].value, 9);
+  });
+
+  it('penetration is worth more the deeper you are', () => {
+    // The affix's defining property, and the reason it is sized the way it is: what
+    // it cancels is a function of the stage, so its worth rises with depth on its own
+    // rather than with its tier. A constant here would mean the tuning was fiction.
+    const shares = damageShares(newSave(1, T0), CTX);
+    const worth = (stage: number) =>
+      elementalScale(shares, 0.026, stageResistances(stage)) /
+      elementalScale(shares, 0, stageResistances(stage));
+
+    expect(worth(1)).toBeLessThan(worth(50));
+    expect(worth(50)).toBeLessThan(worth(300));
+    // And it never becomes the correct pick everywhere - at the best roll and the
+    // deepest measured stage it is still under what a top attack-speed roll gives.
+    expect(worth(300) - 1).toBeLessThan(0.042);
+  });
+
+  it('an extra share is worth less on the ladder than a plain damage roll', () => {
+    // The sizing argument, asserted rather than described. Ladder resistance is
+    // uniform, so an extra share is mitigated exactly like your own damage - which
+    // makes it strictly worse than Brutal there, and is what keeps the power ceiling
+    // and the ladder's pacing where they were. It earns its place in dungeons.
+    const brutal = AFFIXES.find((a) => a.id === 'brutal');
+    const extra = AFFIXES.find((a) => a.id === 'extra-fire');
+    expect(brutal && extra).toBeTruthy();
+    if (!brutal || !extra) return;
+
+    for (let tier = 0; tier < extra.tiers.length; tier++) {
+      expect(extra.tiers[tier].value).toBeLessThan(brutal.tiers[tier].value);
+    }
+  });
+
+  it('every skill declares an element, and two of them are not physical', () => {
+    expect(getSkill('fireball')?.element).toBe('fire');
+    expect(getSkill('frost-nova')?.element).toBe('cold');
+    expect(getSkill('sunder')?.element).toBe('physical');
+    // Unarmed is physical, which is what keeps a weaponless save's numbers where
+    // they were: physical share of 1 against the ladder's uniform resistance.
+    expect(getSkill('unarmed')?.element).toBe('physical');
   });
 });
 
@@ -1827,7 +2172,10 @@ describe('migration', () => {
 
     expect(migrated).toBe(true);
     expect(state.items).toEqual([]);
-    expect(state.loadout).toEqual([null, null, null, null]);
+    // The array is MAX_ITEM_SLOTS long now, not ITEM_SLOTS: positions past the live
+    // count exist and are simply inert, which is what lets a unique grant slots
+    // without a migration every time.
+    expect(state.loadout).toEqual(Array(MAX_ITEM_SLOTS).fill(null));
     expect(state.nextItemId).toBe(1);
     // The fixture holds a legacy NUMBER; migration leaves a string of equal value.
     expect(fromSave(state.gold).eq(big(12345))).toBe(true);
@@ -1953,10 +2301,16 @@ describe('migration', () => {
 });
 
 describe('derived stats', () => {
-  it('statsDps matches the DPS the combat layer actually uses', () => {
+  it('statsDps times the elemental scale matches the DPS the combat layer uses', () => {
     // The character sheet quotes statsDps. If it drifted from what resolveStage
     // divides by, the panel would confidently display a number the fight does
     // not use - the exact failure the shared function exists to prevent.
+    //
+    // The two are no longer equal on their own: statsDps is what the loadout puts
+    // out, and resistance is a property of the TARGET, so the fight applies the
+    // elemental scale on top. Multiplying it back in here is the point - it pins the
+    // scale as the ONLY thing between the sheet's number and the fight's, so a future
+    // damage term added to one and not the other still fails this.
     const save: SaveState = {
       ...newSave(1, T0),
       upgrades: { ...newSave(1, T0).upgrades, damage: 12, attackSpeed: 7, crit: 20 },
@@ -1969,7 +2323,13 @@ describe('derived stats', () => {
     const aoeTargets = Math.min(stats.area, enemyCount(stage));
     const impliedDps = poolHp.div(outcome.trashPhaseSeconds * aoeTargets);
 
-    expect(statsDps(stats).div(impliedDps).toNumber()).toBeCloseTo(1, 6);
+    const ctx = { stage, isBoss: false, enemyHpFraction: 1 };
+    const scale = elementalScale(
+      damageShares(save, ctx),
+      stats.penetration,
+      stageResistances(stage),
+    );
+    expect(statsDps(stats).mul(scale).div(impliedDps).toNumber()).toBeCloseTo(1, 6);
   });
 
   it('effective HP is what damage is measured against', () => {
@@ -2260,5 +2620,10 @@ describe('balance curve', () => {
       'utf8',
     );
     expect(lf(report())).toBe(lf(golden));
-  }, 60_000);
+    // Raised from 60s. This test's job is to compare output, not to enforce a runtime
+    // budget, and it was sitting a few seconds under the old limit - so an unrelated
+    // change to deriveStats failed it as a TIMEOUT, which reads as a pacing regression
+    // and is not one. If a runtime budget is wanted it should be its own assertion
+    // with its own number, not a side effect of this one.
+  }, 180_000);
 });

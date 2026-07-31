@@ -21,6 +21,18 @@ export interface GridSource {
   license: string;
   /** Logical ID to tile index, read row-major from the top left. */
   tiles: Partial<Record<SpriteId, number>>;
+  /**
+   * Ids deliberately pointing at a tile something else already uses.
+   *
+   * Kept apart from `tiles` rather than mixed in, because a shared tile is normally a
+   * copy-paste slip and there is a test that says so. Listing one here is a signed
+   * statement that the art is not ready yet - the test skips these and prints them, so
+   * a placeholder stays visible instead of quietly becoming permanent.
+   *
+   * Retiring one is a move from this map to `tiles` plus the new art. No game code
+   * moves, because nothing outside this file knows a sprite id is borrowed.
+   */
+  placeholders?: Partial<Record<SpriteId, number>>;
 }
 
 /**
@@ -110,6 +122,19 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     'currency.angel_flame_shard': 126,
     'currency.angel_droplet_shard': 114,
     'currency.dungeon_key': 90,
+  },
+
+  /**
+   * The two Phase 2 slot uniques. Tiny Dungeon has nothing left that reads as an
+   * object at 16px - what remains unbound is floor, wall, door, fence and townsfolk -
+   * so these borrow tiles until purpose-made art arrives.
+   *
+   * Borrowed on meaning, not at random: the harness takes the pack (a thing you wear
+   * to carry more), the seal takes the amulet-ish gem.
+   */
+  placeholders: {
+    'item.travellers_harness': 82,
+    'item.monomaniacs_seal': 115,
   },
 };
 

@@ -73,7 +73,7 @@
  */
 
 import { BASE_AFFIXES } from './bases';
-import type { AffixDefinition } from './schema';
+import { ELEMENTS, type AffixDefinition, type Element } from './schema';
 
 /**
  * Tier gates. An item may only roll tiers whose minStage it meets, so a stage-3
@@ -84,6 +84,54 @@ const GATES = [1, 15, 40, 80] as const;
 
 const tiers = (values: readonly [number, number, number, number]) =>
   values.map((value, i) => ({ minStage: GATES[i], value }));
+
+/**
+ * The name each element wears as a prefix.
+ *
+ * Written out rather than derived from the element id, because "Shadowed" is not a
+ * transformation of "darkness" and an item called a "Darkness Whetstone" reads like a
+ * placeholder.
+ */
+const ELEMENT_FRAGMENT: Record<Element, string> = {
+  physical: 'Weighted',
+  fire: 'Smouldering',
+  cold: 'Rimed',
+  lightning: 'Charged',
+  darkness: 'Shadowed',
+};
+
+/**
+ * "Gain X% of damage as extra <element>", one per element.
+ *
+ * Generated rather than written out five times. The only thing that differs between
+ * them is which element they name, and five hand-copied blocks is five places for the
+ * tier table to drift.
+ *
+ * ## Sized BELOW Brutal, on purpose
+ *
+ * On the ladder resistance is uniform, so an extra share is mitigated exactly like
+ * your own damage and `gain 3% as extra fire` is worth precisely `3% increased
+ * damage`. Against Brutal's 5.5% these are strictly worse there, which is what keeps
+ * the power ceiling - and therefore the ladder's pacing - exactly where it was.
+ *
+ * They are not worse in a DUNGEON, where the affinity resists one element and is weak
+ * to another. That is the whole design in one number: on the ladder elements are a
+ * scaling axis you can ignore, and in the content that carries an affinity they are
+ * the difference between a clear and a wasted key.
+ *
+ * Five rather than four. The one that names your own skill's element is simply a plain
+ * damage roll - a real if boring modifier, not a dead row - and which one that is
+ * depends on the weapon in your hand, so no entry here is dead for everybody.
+ */
+function extraElementPrefix(element: Element): AffixDefinition {
+  return {
+    id: `extra-${element}`,
+    kind: 'prefix',
+    nameFragment: ELEMENT_FRAGMENT[element],
+    effect: { kind: 'extraElement', element },
+    tiers: tiers([0.012, 0.019, 0.025, 0.033]),
+  };
+}
 
 export const PREFIXES: AffixDefinition[] = [
   {
@@ -213,6 +261,7 @@ export const PREFIXES: AffixDefinition[] = [
     // it, because three overlapping tables are past what anyone eyeballs.
     tiers: tiers([0.019, 0.029, 0.04, 0.052]),
   },
+  ...ELEMENTS.map(extraElementPrefix),
 ];
 
 export const SUFFIXES: AffixDefinition[] = [
@@ -368,6 +417,27 @@ export const SUFFIXES: AffixDefinition[] = [
     effect: { kind: 'statMod', stat: 'magicalSkillLevel', op: 'flat' },
     rollsOn: 'magical',
     tiers: tiers([1, 2, 3, 4]),
+  },
+  {
+    /**
+     * The only affix in the pool whose worth rises with depth rather than with its
+     * own tier, because what it cancels is a function of the stage.
+     *
+     * Flat and nothing else - penetration's base is zero, so a percentage of it is
+     * zero forever. validateRegistry enforces that.
+     *
+     * Sized so that at stage 300, where ladder resistance is about 18%, the best roll
+     * is worth roughly 3% more damage - under Of Haste's 4.2% and well under Brutal.
+     * It is deliberately near-worthless in the first few stages, where there is
+     * almost nothing to penetrate: an affix that grows into relevance is honest, and
+     * the alternative is inflating it until it is the correct pick everywhere and
+     * elements stop being a choice.
+     */
+    id: 'of-sundering',
+    kind: 'suffix',
+    nameFragment: 'of Sundering',
+    effect: { kind: 'statMod', stat: 'penetration', op: 'flat' },
+    tiers: tiers([0.008, 0.014, 0.02, 0.026]),
   },
 ];
 

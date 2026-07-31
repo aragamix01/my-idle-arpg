@@ -9,9 +9,15 @@
 
 import { fromSave, toSave } from './big';
 import { farmRate } from './combat';
-import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from './curves';
+import {
+  dungeonAffinity,
+  OFFLINE_CAP_SECONDS,
+  upgradeCost,
+  isUpgradeMaxed,
+  UPGRADE_TRACKS,
+} from './curves';
 import { computeOffline } from './offline';
-import { deriveStats } from './stats';
+import { deriveStats, equipSlots } from './stats';
 import {
   INVENTORY_CAP,
   UPGRADE_KEYS,
@@ -21,7 +27,7 @@ import {
   type Stats,
   type UpgradeKey,
 } from './types';
-import type { CurrencyPurse, ItemInstance } from './content';
+import type { CurrencyPurse, Element, ItemInstance } from './content';
 
 export interface UpgradeView {
   key: UpgradeKey;
@@ -64,8 +70,26 @@ export interface HudSnapshot {
   pendingOfflineGold: string;
   offlineCapReached: boolean;
   loadout: (string | null)[];
+  /**
+   * How many of those positions are live.
+   *
+   * Derived rather than constant now that a unique can grant or remove slots, and
+   * sent rather than recomputed in the panel so the two cannot disagree about which
+   * slots exist.
+   */
+  equipSlots: number;
   /** Equipped weapon uid, or null for unarmed. */
   weapon: string | null;
+  /**
+   * What the next dungeon resists and what it is weak to, or null before one is
+   * possible.
+   *
+   * Sent rather than derived in the UI, because the affinity is a function of the
+   * ACCOUNT SEED and the seed is server-side. It is also the reason this is worth
+   * sending at all: a key is spent, not refunded, so what the run is going to resist
+   * has to be readable before the decision rather than after it.
+   */
+  dungeon: { stage: number; resists: Element; weakTo: Element } | null;
   items: ItemInstance[];
   currency: CurrencyPurse;
   /** Cap included so the panel can show capacity without importing curves. */
@@ -75,18 +99,15 @@ export interface HudSnapshot {
 export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
   const offline = computeOffline(save, nowMs);
   const gold = fromSave(save.gold);
+  // One context for everything derived here, so the sheet, the slot count and the
+  // DPS figure are all describing the same moment.
+  const ctx = { stage: save.currentStage, isBoss: false, enemyHpFraction: 1 };
 
   return {
     gold: toSave(gold),
     bestStage: save.bestStage,
     currentStage: save.currentStage,
-    stats: statsToWire(
-      deriveStats(save, {
-        stage: save.currentStage,
-        isBoss: false,
-        enemyHpFraction: 1,
-      }),
-    ),
+    stats: statsToWire(deriveStats(save, ctx)),
     goldPerSecond: toSave(farmRate(save, save.bestStage)),
     upgrades: UPGRADE_KEYS.map((key) => {
       const level = save.upgrades[key];
@@ -104,7 +125,12 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     pendingOfflineGold: toSave(offline.goldEarned),
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
+    equipSlots: equipSlots(save, ctx),
     weapon: save.weapon,
+    dungeon:
+      save.bestStage >= 1
+        ? { stage: save.bestStage, ...dungeonAffinity(save.seed, save.bestStage) }
+        : null,
     items: save.items,
     currency: save.currency,
     inventoryCap: INVENTORY_CAP,

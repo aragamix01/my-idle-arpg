@@ -7,7 +7,8 @@
  */
 
 import { big, BIG_ZERO, type Big } from './big';
-import type { ModLayer, Rarity } from './content/schema';
+import { ELEMENTS, type Element, type ModLayer, type Rarity } from './content/schema';
+import { createRng } from './rng';
 import type { UpgradeKey } from './types';
 
 /** The tuned constants. Keep this list short — if it grows past ~12, the model is too loose. */
@@ -214,6 +215,117 @@ const STAGE_OVERRIDES: Record<number, { hpMult?: number; goldMult?: number }> = 
 export function stageOverride(stage: number) {
   return STAGE_OVERRIDES[stage] ?? {};
 }
+
+// --- Resistance -----------------------------------------------------------
+
+/**
+ * What resistance approaches at infinite depth, and never reaches.
+ *
+ * An ASYMPTOTE rather than a cliff, and that is the whole safety argument. Resistance
+ * is a multiplier on effective HP, so a bounded one shifts the ladder by a constant and
+ * cannot touch the exponent. A resistance that grew without limit would be a second HP
+ * curve racing enemyHpGrowth, and one of them would win.
+ *
+ * ## 0.25, and why not 0.4
+ *
+ * A constant on effective HP is not a constant on ELAPSED TIME, because the tracks it
+ * slows are also the tracks that earn the gold. Measured on the harness seed, against
+ * a 7.8d baseline:
+ *
+ *   cap 0.4   ->  16.0d     clear times fine, no wall, and twice the ladder
+ *   cap 0.25  ->   9.2d     the same ladder, 1.2x slower
+ *
+ * Both are survivable and only one of them is a scaling axis. Doubling the game was
+ * not what elements were for, and the difference is the feedback exponent amplifying
+ * a 1.4x damage tax into a 2x time tax - Σα < 1 bounds runaway, it does not bound
+ * this direction.
+ *
+ * The remaining 1.2x is deliberate and is what the penetration and extra-element
+ * content is priced against: a built character should come out roughly where they
+ * were, an unbuilt one slightly behind. That is the point at which the tax becomes
+ * a purchase.
+ */
+export const RESISTANCE_CAP = 0.25;
+
+/** Depth at which ladder resistance reaches half its cap. */
+const RESISTANCE_HALF_STAGE = 120;
+
+/**
+ * Ladder resistance at a given depth. UNIFORM ACROSS ELEMENTS, on purpose.
+ *
+ * Elements on the ladder are a scaling axis, not a puzzle. A per-element ladder
+ * affinity would mean the correct weapon for stage 140 is a fact you look up, and
+ * being wrong about it is a wall - in the one part of the game that has to stay
+ * clearable by whatever dropped. Uniform still keeps penetration a live purchase,
+ * which a flat zero would not.
+ *
+ * Where elements are meant to matter is dungeons, and later the Abyssal content:
+ * places where spending a key is already a deliberate act. See dungeonResistances.
+ */
+export function stageResistance(stage: number): number {
+  return (RESISTANCE_CAP * Math.max(0, stage)) / (Math.max(0, stage) + RESISTANCE_HALF_STAGE);
+}
+
+export type Resistances = Record<Element, number>;
+
+export function uniformResistances(value: number): Resistances {
+  return Object.fromEntries(ELEMENTS.map((e) => [e, value])) as Resistances;
+}
+
+export function stageResistances(stage: number): Resistances {
+  return uniformResistances(stageResistance(stage));
+}
+
+/**
+ * How far a dungeon's two named elements sit from its baseline.
+ *
+ * Symmetric, so the average dungeon is exactly as hard as the ladder at that depth and
+ * the affinity is a decision rather than a tax. The vulnerable element goes NEGATIVE
+ * at shallow depths, which is deliberate: a negative resistance is bonus damage, and
+ * "this one is weak to cold" has to be worth acting on or the affinity is just a
+ * penalty wearing two labels.
+ */
+export const DUNGEON_AFFINITY = 0.35;
+
+/** Arbitrary large odd multiplier, so affinity never shares a stream with a drop roll. */
+const AFFINITY_STREAM = 0x7feb_352d;
+
+/**
+ * Which element a dungeon at this depth resists, and which it is weak to.
+ *
+ * Derived from the account seed and the stage, so it is deterministic and can be shown
+ * BEFORE the key is spent. A dungeon whose affinity is only discovered by entering it
+ * would make the key a coin flip rather than a decision.
+ */
+export function dungeonAffinity(seed: number, stage: number): { resists: Element; weakTo: Element } {
+  const rng = createRng(seed).fork(stage * AFFINITY_STREAM);
+  const i = rng.int(ELEMENTS.length);
+  // Drawn from the remaining members rather than rerolled until distinct, so the two
+  // are never the same element and the stream advances a fixed number of times.
+  let j = rng.int(ELEMENTS.length - 1);
+  if (j >= i) j++;
+  return { resists: ELEMENTS[i], weakTo: ELEMENTS[j] };
+}
+
+export function dungeonResistances(seed: number, stage: number): Resistances {
+  const base = stageResistance(stage);
+  const { resists, weakTo } = dungeonAffinity(seed, stage);
+  const out = uniformResistances(base);
+  out[resists] = base + DUNGEON_AFFINITY;
+  out[weakTo] = base - DUNGEON_AFFINITY;
+  return out;
+}
+
+/**
+ * Bounds on effective resistance after penetration.
+ *
+ * The ceiling stops a target ever being immune - a fight nothing you own can win is
+ * not difficulty, it is a locked door. The floor stops a vulnerability compounding
+ * into an instant kill: at -0.5 the best possible match-up is 1.5x damage, which is
+ * worth building for and is not a different game.
+ */
+export const MAX_RESISTANCE = 0.9;
+export const MAX_VULNERABILITY = 0.5;
 
 // --- Upgrades -------------------------------------------------------------
 

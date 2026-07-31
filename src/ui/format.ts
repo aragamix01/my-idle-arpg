@@ -15,6 +15,7 @@ import {
   SKILL_LEVEL_GAIN,
   type CurrencyTier,
   type Effect,
+  type Element,
   type Rarity,
   type RolledAffix,
   type Skill,
@@ -61,6 +62,30 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   // instead of a bonus to the skill you are wielding.
   physicalSkillLevel: { label: 'to Physical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
   magicalSkillLevel: { label: 'to Magical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
+  // Percentage points of the target's resistance, not a percentage of it - "10%
+  // penetration" against 30% resistance leaves 20%, not 27%.
+  penetration: { label: 'Resistance Penetration', format: percent },
+};
+
+/** Title case for an element, for a line that names one. */
+export function elementName(element: Element): string {
+  return element.charAt(0).toUpperCase() + element.slice(1);
+}
+
+/**
+ * Text colour per element.
+ *
+ * Drawn from the chip vocabulary already in use rather than a second palette - the
+ * same amber the dungeon key wears, the same sky the prefix badge wears. Physical is
+ * deliberately neutral: it is the default a hit already is, and giving it a colour
+ * would make the unmodified case look like it had been modified.
+ */
+export const ELEMENT_STYLE: Record<Element, string> = {
+  physical: 'text-neutral-300',
+  fire: 'text-orange-400',
+  cold: 'text-sky-300',
+  lightning: 'text-amber-300',
+  darkness: 'text-fuchsia-400',
 };
 
 /**
@@ -119,6 +144,33 @@ export function describeEffect(effect: Effect): string {
     return `x${effect.multiplier.toFixed(2)} dungeon key drop chance${suffix}`;
   }
 
+  if (effect.kind === 'amplifyOthers') {
+    // "other equipped items" is load-bearing wording: it does not amplify itself, and
+    // a line reading "x2.0 to your modifiers" would promise that it did.
+    return `x${effect.multiplier.toFixed(2)} to other equipped items' modifiers${suffix}`;
+  }
+
+  if (effect.kind === 'extraElement') {
+    // "as extra" is the load-bearing phrase: it ADDS a share rather than converting
+    // one, so the hit gets bigger and part of it is mitigated differently. A line
+    // reading "20% of damage converted to cold" would promise the opposite.
+    // One decimal, not zero. The tier table lives between 1.2% and 3.3%, and whole
+    // percents collapsed the top two tiers onto "3%" - two different rolls rendering
+    // as the same line, which is the fault the implicit values were given a decimal
+    // for in the first place.
+    return `gain ${(effect.fraction * 100).toFixed(1)}% of damage as extra ${elementName(
+      effect.element,
+    )}${suffix}`;
+  }
+
+  if (effect.kind === 'equipSlots') {
+    const n = Math.abs(effect.delta);
+    const slots = n === 1 ? 'slot' : 'slots';
+    return effect.delta >= 0
+      ? `+${n} equip ${slots}${suffix}`
+      : `−${n} equip ${slots}${suffix}`;
+  }
+
   const { label } = STAT_LABELS[effect.stat];
 
   // The three layers must be visibly different, because they are priced
@@ -154,7 +206,13 @@ export function describeEffect(effect: Effect): string {
   // Crit chance and crit damage are fractions of a whole the player never sees as
   // a raw number - the sheet quotes crit damage as "x2.00", so a flat roll shown
   // as "+0.04 Crit Damage" reads like a rounding error rather than +4%.
-  const asPercent = effect.stat === 'critChance' || effect.stat === 'critMult';
+  // Penetration joins them for the same reason: it is a fraction of a resistance the
+  // sheet quotes as a percentage, so "+0.01 Resistance Penetration" reads as a
+  // rounding error rather than as one point off what the target resists.
+  const asPercent =
+    effect.stat === 'critChance' ||
+    effect.stat === 'critMult' ||
+    effect.stat === 'penetration';
   const shown = asPercent ? percent(effect.value) : String(Number(effect.value.toFixed(2)));
   return `${sign}${shown} ${label}${suffix}`;
 }
