@@ -8,7 +8,9 @@
 
 import {
   affixEffect,
+  big,
   displayTier,
+  formatBig,
   getAffix,
   SKILL_LEVEL_GAIN,
   type CurrencyTier,
@@ -20,18 +22,17 @@ import {
   type Stats,
 } from '@/sim';
 
-/** Short human-readable magnitude: 1.23k, 4.56M, 7.89B. */
+/**
+ * Short human-readable magnitude: 1.23k, 4.56M, 7.89B, then 1.23e45.
+ *
+ * Delegates to the sim's formatter rather than keeping a second one. This used to
+ * have its own suffix list ending at Q and printed `14518740253261.67Q` past it -
+ * technically a number, practically unreadable, and the ladder reaches that range.
+ * One implementation means the HUD, the upgrade panel and a server refusal all read
+ * the same way.
+ */
 export function compact(value: number): string {
-  if (!Number.isFinite(value)) return '-';
-  if (value < 1000) return value.toFixed(value < 10 && value % 1 !== 0 ? 1 : 0);
-  const units = ['k', 'M', 'B', 'T', 'q', 'Q'];
-  let scaled = value;
-  let unit = -1;
-  while (scaled >= 1000 && unit < units.length - 1) {
-    scaled /= 1000;
-    unit++;
-  }
-  return `${scaled.toFixed(2)}${units[unit]}`;
+  return formatBig(big(value));
 }
 
 const percent = (v: number) => `${(v * 100).toFixed(1)}%`;

@@ -16,6 +16,7 @@ import {
   DISSEMBLE_YIELD,
   effectiveHp,
   enemyCount,
+  fromSave,
   getCurrency,
   itemName,
   itemPower,
@@ -652,7 +653,7 @@ function InventoryTab({
         <CraftModal
           item={craftingItem}
           purse={hud.currency}
-          gold={hud.gold}
+          gold={fromSave(hud.gold)}
           equipped={hud.loadout.includes(craftingItem.uid)}
           busy={busy}
           dps={statsDps(hud.stats)}

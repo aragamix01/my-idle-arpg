@@ -7,6 +7,7 @@
  * costs nothing in re-renders.
  */
 
+import { fromSave, toSave } from './big';
 import { farmRate } from './combat';
 import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from './curves';
 import { computeOffline } from './offline';
@@ -18,19 +19,22 @@ export interface UpgradeView {
   key: UpgradeKey;
   label: string;
   level: number;
-  cost: number;
+  /** Decimal string. A maxed track has no cost at all rather than an infinite one. */
+  cost: string | null;
   affordable: boolean;
   maxed: boolean;
 }
 
 export interface HudSnapshot {
-  gold: number;
+  /** Decimal string - see the note on SaveState.gold. */
+  gold: string;
   bestStage: number;
   currentStage: number;
   stats: Stats;
   goldPerSecond: number;
   upgrades: UpgradeView[];
-  pendingOfflineGold: number;
+  /** Decimal string. */
+  pendingOfflineGold: string;
   offlineCapReached: boolean;
   loadout: (string | null)[];
   /** Equipped weapon uid, or null for unarmed. */
@@ -43,10 +47,10 @@ export interface HudSnapshot {
 
 export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
   const offline = computeOffline(save, nowMs);
-  const gold = Math.floor(save.gold);
+  const gold = fromSave(save.gold);
 
   return {
-    gold,
+    gold: toSave(gold),
     bestStage: save.bestStage,
     currentStage: save.currentStage,
     stats: deriveStats(save, {
@@ -58,17 +62,17 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     upgrades: UPGRADE_KEYS.map((key) => {
       const level = save.upgrades[key];
       const maxed = isUpgradeMaxed(key, level);
-      const cost = maxed ? Infinity : upgradeCost(key, level);
+      const cost = maxed ? null : upgradeCost(key, level);
       return {
         key,
         label: UPGRADE_TRACKS[key].label,
         level,
-        cost,
-        affordable: !maxed && gold >= cost,
+        cost: cost && toSave(cost),
+        affordable: cost !== null && gold.gte(cost),
         maxed,
       };
     }),
-    pendingOfflineGold: offline.goldEarned,
+    pendingOfflineGold: toSave(offline.goldEarned),
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
     weapon: save.weapon,

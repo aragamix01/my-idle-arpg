@@ -28,9 +28,11 @@
 import {
   CURRENCIES,
   currencyLegality,
+  formatBig,
   itemName,
   itemSprite,
   rerollCost,
+  type Big,
   type CurrencyDefinition,
   type CurrencyId,
   type CurrencyPurse,
@@ -43,7 +45,7 @@ import { ItemMods } from './ItemMods';
 interface Props {
   item: ItemInstance;
   purse: CurrencyPurse;
-  gold: number;
+  gold: Big;
   equipped: boolean;
   busy: boolean;
   /** Live character figures, so the effect of an equipped item's roll is visible. */
@@ -68,7 +70,9 @@ export function CraftModal({
 }: Props) {
   const style = RARITY_STYLE[item.rarity];
   const isUnique = item.rarity === 'unique';
-  const goldCost = isUnique ? Infinity : rerollCost(item.rarity, item.itemLevel, item.rerolls);
+  // Uniques have no gold price at all, rather than an infinite one - see the trailing
+  // cell below. Computing a cost for them would mean formatting Infinity.
+  const goldCost = isUnique ? null : rerollCost(item.rarity, item.itemLevel, item.rerolls);
 
   // Only what the player holds, and only what can act on an item. Fragments
   // combine in the stash and keys open dungeons; listing them here just to
@@ -142,15 +146,14 @@ export function CraftModal({
               sprite="item.coin_purse"
               name="Gold Reroll"
               description="Rerolls every modifier except the implicit. There is no way to keep one."
-              // A unique has no gold price at all, and compact(Infinity) renders as
-              // "-g" - a number that looks like a bug rather than an absence. The
-              // refusal below already says why.
-              trailing={isUnique ? '—' : `${compact(goldCost)}g`}
+              // A unique has no gold price at all, and a formatted Infinity reads as a
+              // bug rather than an absence. The refusal below already says why.
+              trailing={goldCost ? `${formatBig(goldCost)}g` : '—'}
               reason={
-                isUnique
+                goldCost === null
                   ? 'uniques cannot be modified'
-                  : gold < goldCost
-                    ? `need ${compact(goldCost)} gold`
+                  : gold.lt(goldCost)
+                    ? `need ${formatBig(goldCost)} gold`
                     : null
               }
               busy={busy}

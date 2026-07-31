@@ -144,7 +144,27 @@ export interface SaveState {
   contentVersion: number;
   /** Root seed for all deterministic rolls on this account. */
   seed: number;
-  gold: number;
+  /**
+   * Gold, as a decimal STRING.
+   *
+   * Not a number, and the reason is range rather than tidiness: a double dies at
+   * 1.8e308 and stops being an exact integer at 2^53 (around stage 215), while this
+   * ladder is meant to keep going. JSON numbers are doubles on the way back in and
+   * Postgres `jsonb` would return 1e5000 as Infinity, so the wire format has to be a
+   * string for the value to survive the round trip at all.
+   *
+   * Read it with `fromSave`, write it with `toSave` - see src/sim/big.ts.
+   */
+  gold: string;
+  /**
+   * Every gold ever earned, never spent down.
+   *
+   * Nothing reads it yet. It is here because prestige will be computed from lifetime
+   * earnings rather than current balance, and a field added later starts at zero for
+   * every existing player - which would mean everyone's first prestige is priced off
+   * an empty history.
+   */
+  lifetimeGold: string;
   /** Highest stage index fully cleared. 0 = none. Farm rate is derived from this. */
   bestStage: number;
   /** Stage the player is currently attempting. */

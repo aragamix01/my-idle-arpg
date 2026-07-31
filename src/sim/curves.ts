@@ -6,6 +6,7 @@
  * (tests/__snapshots__/balance.golden.txt) before committing.
  */
 
+import { big, BIG_ZERO, type Big } from './big';
 import type { ModLayer, Rarity } from './content/schema';
 import type { UpgradeKey } from './types';
 
@@ -375,10 +376,20 @@ export function sideExponents(): { offence: number; defence: number } {
   };
 }
 
-/** Cost to go from `level` to `level + 1`. */
-export function upgradeCost(key: UpgradeKey, level: number): number {
+/**
+ * Cost to go from `level` to `level + 1`.
+ *
+ * A Big, because `costGrowth^level` is exactly the shape that outruns a double: at
+ * 1.405 per level the damage track passes 1e308 near level 2,100, which the ladder
+ * reaches long before it runs out of stages.
+ *
+ * Still rounded up per level. The rounding is invisible once the exponent is large,
+ * but it is what makes buying ten at once cost exactly what buying one ten times
+ * costs - see bulkUpgradeCost.
+ */
+export function upgradeCost(key: UpgradeKey, level: number): Big {
   const t = UPGRADE_TRACKS[key];
-  return Math.ceil(t.baseCost * Math.pow(t.costGrowth, level));
+  return big(t.baseCost).mul(big(t.costGrowth).pow(level)).ceil();
 }
 
 export function isUpgradeMaxed(key: UpgradeKey, level: number): boolean {
@@ -408,21 +419,21 @@ export const BULK_PURCHASE_LIMIT = 1000;
  * upgradeCost rounds each level up. Buying ten at once must cost exactly what
  * buying one ten times costs, or the bulk button becomes a discount.
  */
-export function bulkUpgradeCost(key: UpgradeKey, level: number, count: number): number {
-  let total = 0;
-  for (let i = 0; i < count; i++) total += upgradeCost(key, level + i);
+export function bulkUpgradeCost(key: UpgradeKey, level: number, count: number): Big {
+  let total = BIG_ZERO;
+  for (let i = 0; i < count; i++) total = total.add(upgradeCost(key, level + i));
   return total;
 }
 
 /** How many levels `gold` can buy, respecting the track cap and the bulk limit. */
-export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: number): number {
+export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: Big): number {
   const ceiling = Math.min(remainingLevels(key, level), BULK_PURCHASE_LIMIT);
   let count = 0;
-  let spent = 0;
+  let spent = BIG_ZERO;
 
   while (count < ceiling) {
-    const next = spent + upgradeCost(key, level + count);
-    if (next > gold) break;
+    const next = spent.add(upgradeCost(key, level + count));
+    if (next.gt(gold)) break;
     spent = next;
     count++;
   }
@@ -494,7 +505,7 @@ export const DUNGEON_CURRENCY_PER_CLEAR = { min: 1, max: 2 } as const;
  * player park on one item and grind it to perfect tiers for pocket change,
  * which turns a loot system into a slot machine with no cost.
  */
-export function rerollCost(rarity: Rarity, itemLevel: number, rerolls: number): number {
+export function rerollCost(rarity: Rarity, itemLevel: number, rerolls: number): Big {
   const rarityMultiplier: Record<Rarity, number> = {
     common: 1,
     magic: 2.5,
@@ -503,7 +514,7 @@ export function rerollCost(rarity: Rarity, itemLevel: number, rerolls: number): 
     unique: Infinity,
   };
   const base = goldPerKill(Math.max(1, itemLevel)) * 30 * rarityMultiplier[rarity];
-  return Math.ceil(base * Math.pow(1.35, rerolls));
+  return big(base).mul(big(1.35).pow(rerolls)).ceil();
 }
 
 // --- Offline --------------------------------------------------------------

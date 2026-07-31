@@ -13,6 +13,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   bulkUpgradeCost,
+  formatBig,
+  fromSave,
   killsPerSecond,
   maxAffordableUpgrades,
   remainingLevels,
@@ -20,6 +22,7 @@ import {
   resolveStage,
   STAGE_TIME_LIMIT_SECONDS,
   UPGRADE_TRACKS,
+  type Big,
   type UpgradeKey,
   type SimEvent,
   type UpgradeView,
@@ -110,6 +113,10 @@ export function Game() {
 
   const rate = killsPerSecond(state, Math.max(1, state.bestStage || 1));
   const keys = hud.currency['dungeon-key'] ?? 0;
+  // Parsed once per render rather than at each of the five places that read it -
+  // the HUD ticks ten times a second and this is a string every time it arrives.
+  const gold = fromSave(hud.gold);
+  const offlineGold = fromSave(hud.pendingOfflineGold);
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-100">
@@ -127,7 +134,7 @@ export function Game() {
 
       <div className="pointer-events-none relative z-10 flex min-h-screen flex-col justify-between p-6">
         <header className="pointer-events-auto flex flex-wrap gap-6 text-sm">
-          <Stat label="gold" value={compact(hud.gold)} />
+          <Stat label="gold" value={formatBig(gold)} />
           <Stat label="gold/s" value={compact(hud.goldPerSecond)} />
           <Stat label="stage" value={String(hud.currentStage)} />
           <Stat label="best" value={String(hud.bestStage)} />
@@ -194,7 +201,7 @@ export function Game() {
                 key={upgrade.key}
                 upgrade={upgrade}
                 amount={buyAmount}
-                gold={hud.gold}
+                gold={gold}
                 disabled={pending}
                 onBuy={(count) => void send({ type: 'buyUpgrade', key: upgrade.key, count })}
               />
@@ -233,11 +240,11 @@ export function Game() {
 
             <button
               type="button"
-              disabled={pending || hud.pendingOfflineGold <= 0}
+              disabled={pending || offlineGold.lte(0)}
               onClick={() => void send({ type: 'claimOffline' })}
               className="rounded border border-neutral-700 px-4 py-2 text-sm disabled:opacity-40"
             >
-              Claim {compact(hud.pendingOfflineGold)} idle gold
+              Claim {formatBig(offlineGold)} idle gold
             </button>
           </div>
         </footer>
@@ -296,23 +303,24 @@ function effectText(key: string): string {
  * actually do: a fixed multiplier is all-or-nothing, 'max' takes what fits.
  * Both call the same sim functions the server calls, so they cannot disagree.
  */
-function plannedPurchase(upgrade: UpgradeView, amount: BuyAmount, gold: number) {
+function plannedPurchase(upgrade: UpgradeView, amount: BuyAmount, gold: Big) {
   const key = upgrade.key as UpgradeKey;
-  if (upgrade.maxed) return { count: 0, cost: Infinity, affordable: false };
+  const none = { count: 0, cost: null, affordable: false };
+  if (upgrade.maxed) return none;
 
   if (amount === 'max') {
     const count = maxAffordableUpgrades(key, upgrade.level, gold);
     return {
       count,
-      cost: count > 0 ? bulkUpgradeCost(key, upgrade.level, count) : upgrade.cost,
+      cost: count > 0 ? bulkUpgradeCost(key, upgrade.level, count) : fromSave(upgrade.cost),
       affordable: count > 0,
     };
   }
 
   const count = Math.min(amount, remainingLevels(key, upgrade.level));
-  if (count <= 0) return { count: 0, cost: Infinity, affordable: false };
+  if (count <= 0) return none;
   const cost = bulkUpgradeCost(key, upgrade.level, count);
-  return { count, cost, affordable: gold >= cost };
+  return { count, cost, affordable: gold.gte(cost) };
 }
 
 function UpgradeButton({
@@ -324,7 +332,7 @@ function UpgradeButton({
 }: {
   upgrade: UpgradeView;
   amount: BuyAmount;
-  gold: number;
+  gold: Big;
   disabled: boolean;
   onBuy: (count: number | 'max') => void;
 }) {
@@ -355,7 +363,7 @@ function UpgradeButton({
       <span className="font-mono text-[11px]">
         {upgrade.maxed
           ? 'MAX'
-          : `Lv ${upgrade.level}${plan.count > 1 ? ` +${plan.count}` : ''} · ${compact(plan.cost)}g`}
+          : `Lv ${upgrade.level}${plan.count > 1 ? ` +${plan.count}` : ''} · ${plan.cost ? formatBig(plan.cost) : '—'}g`}
       </span>
     </button>
   );
