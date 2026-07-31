@@ -24,6 +24,14 @@
  * second half matters as much as the first: matching totals with matching phases
  * would mean the two skills were the same skill.
  *
+ * ## Element
+ *
+ * Each skill also names the ELEMENT its damage is, which is a separate axis from
+ * `kind` - kind decides the resource and which skill-level affixes apply, element
+ * decides what mitigates the hit. Two of the four are physical, one fire, one cold;
+ * lightning and darkness have no skill yet and are reachable through "gain X% as
+ * extra" modifiers, which is what stops your element being fixed by your weapon.
+ *
  * ## Crit
  *
  * Physical skills carry a real base crit chance and spells carry almost none. That
@@ -50,6 +58,7 @@ export const UNARMED: Skill = {
   id: 'unarmed',
   name: 'Unarmed',
   kind: 'physical',
+  element: 'physical',
   baseDamage: 60,
   baseSpeed: 1.5,
   baseCritChance: 0.05,
@@ -70,6 +79,7 @@ export const SKILLS = [
     id: 'sunder',
     name: 'Sunder',
     kind: 'physical',
+    element: 'physical',
     baseDamage: 110,
     baseSpeed: 1.5,
     baseCritChance: 0.1,
@@ -93,6 +103,7 @@ export const SKILLS = [
     id: 'cleave',
     name: 'Cleave',
     kind: 'physical',
+    element: 'physical',
     baseDamage: 54,
     baseSpeed: 1.3,
     baseCritChance: 0.07,
@@ -111,6 +122,7 @@ export const SKILLS = [
     id: 'fireball',
     name: 'Fireball',
     kind: 'magical',
+    element: 'fire',
     baseDamage: 48,
     baseSpeed: 1,
     baseCritChance: 0.01,
@@ -130,6 +142,7 @@ export const SKILLS = [
     id: 'frost-nova',
     name: 'Frost Nova',
     kind: 'magical',
+    element: 'cold',
     baseDamage: 38,
     baseSpeed: 0.9,
     baseCritChance: 0.01,

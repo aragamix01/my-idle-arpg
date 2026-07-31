@@ -26,7 +26,12 @@ import {
   createRng,
   CURRENCIES,
   currencyLegality,
+  damageShares,
   deriveStats,
+  dungeonAffinity,
+  dungeonResistances,
+  ELEMENTS,
+  elementalScale,
   DISSEMBLE_YIELD,
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
@@ -46,6 +51,13 @@ import {
   getUnique,
   IMPLICIT_AFFIXES,
   KEY_DROP_CHANCE,
+  MAX_RESISTANCE,
+  MAX_VULNERABILITY,
+  mitigatedResistance,
+  RESISTANCE_CAP,
+  stageResistance,
+  stageResistances,
+  uniformResistances,
   PREFIXES,
   SUFFIXES,
   sideExponents,
@@ -806,6 +818,118 @@ describe('equip slots', () => {
     const save = wearingAt(MAX_ITEM_SLOTS - 1, item);
     const result = applyCommand(save, { type: 'dissembleItems', uids: [item.uid] }, T0);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('elements', () => {
+  const CTX = { stage: 1, isBoss: false, enemyHpFraction: 1 };
+  const NONE = uniformResistances(0);
+
+  it('a target that resists nothing takes exactly the loadout DPS', () => {
+    // The invariant that made this change safe to land. Everything below is new
+    // machinery, and all of it has to collapse to 1.0 in the case that existed
+    // before it - otherwise every number in the game moved for no stated reason.
+    const save = newSave(1, T0);
+    expect(elementalScale(damageShares(save, CTX), 0, NONE)).toBe(1);
+  });
+
+  it('an extra share adds to the hit rather than dividing it', () => {
+    // "Gain 20% as extra cold" against a soft target is 1.2x, not a fifth of the
+    // physical half repainted. The shares deliberately do not normalise.
+    const save = newSave(1, T0);
+    const shares = damageShares(save, CTX, [
+      { kind: 'extraElement', element: 'cold', fraction: 0.2 },
+    ]);
+    expect(shares.physical).toBe(1);
+    expect(shares.cold).toBe(0.2);
+    expect(elementalScale(shares, 0, NONE)).toBeCloseTo(1.2, 9);
+  });
+
+  it('the extra is worth what the TARGET says it is worth', () => {
+    // The whole reason this is a mechanic rather than a damage affix with extra
+    // words: the same 20% is worth 20% against one target and nothing against
+    // another, so which element you carry is a decision about where you are going.
+    const shares = damageShares(newSave(1, T0), CTX, [
+      { kind: 'extraElement', element: 'cold', fraction: 0.2 },
+    ]);
+    const coldImmune = { ...NONE, cold: MAX_RESISTANCE };
+    expect(elementalScale(shares, 0, coldImmune)).toBeCloseTo(1 + 0.2 * (1 - MAX_RESISTANCE), 9);
+
+    const coldWeak = { ...NONE, cold: -MAX_VULNERABILITY };
+    expect(elementalScale(shares, 0, coldWeak)).toBeCloseTo(1 + 0.2 * (1 + MAX_VULNERABILITY), 9);
+  });
+
+  it('conditions gate an extra share like any other effect', () => {
+    const effects: Effect[] = [
+      { kind: 'extraElement', element: 'fire', fraction: 0.3, when: { isBoss: true } },
+    ];
+    expect(damageShares(newSave(1, T0), CTX, effects).fire).toBe(0);
+    expect(damageShares(newSave(1, T0), { ...CTX, isBoss: true }, effects).fire).toBe(0.3);
+  });
+
+  it('penetration cuts resistance toward zero and stops there', () => {
+    expect(mitigatedResistance(0.3, 0.1)).toBeCloseTo(0.2, 9);
+    // Over-penetrating a soft target is wasted rather than a bonus. Without the
+    // floor, one penetration roll would be a damage multiplier against every enemy
+    // in the game and the stat would have nothing to do with elements at all.
+    expect(mitigatedResistance(0.05, 0.5)).toBe(0);
+    expect(mitigatedResistance(0, 0.5)).toBe(0);
+  });
+
+  it('penetration does not deepen a weakness that is already yours', () => {
+    // A negative resistance is a dungeon's affinity, not armour. Letting penetration
+    // stack onto it would make the vulnerable element the correct answer twice over.
+    expect(mitigatedResistance(-0.35, 0.4)).toBeCloseTo(-0.35, 9);
+  });
+
+  it('mitigation is bounded at both ends', () => {
+    expect(mitigatedResistance(5, 0)).toBe(MAX_RESISTANCE);
+    expect(mitigatedResistance(-5, 0)).toBe(-MAX_VULNERABILITY);
+  });
+
+  it('ladder resistance is uniform, rises with depth, and never reaches its cap', () => {
+    for (const stage of [1, 50, 300, 5000, 1e6]) {
+      const values = ELEMENTS.map((e) => stageResistances(stage)[e]);
+      // Uniform is the deliberate simple case: elements on the ladder are a scaling
+      // axis, not a lookup table that gates progress on bringing the right weapon.
+      expect(new Set(values).size).toBe(1);
+      expect(stageResistance(stage)).toBeLessThan(RESISTANCE_CAP);
+    }
+    expect(stageResistance(1)).toBeLessThan(stageResistance(50));
+    expect(stageResistance(50)).toBeLessThan(stageResistance(300));
+    // Bounded is the safety argument. Resistance is a multiplier on effective HP, so
+    // an unbounded one would be a second HP curve racing enemyHpGrowth.
+    expect(stageResistance(1e9)).toBeLessThan(RESISTANCE_CAP);
+  });
+
+  it('a dungeon names two different elements, and does so before the key is spent', () => {
+    for (const stage of [1, 7, 40, 199]) {
+      const a = dungeonAffinity(12345, stage);
+      const b = dungeonAffinity(12345, stage);
+      // Deterministic from the account seed, which is what lets the UI show it
+      // before a key is committed rather than after.
+      expect(a).toEqual(b);
+      expect(a.resists).not.toBe(a.weakTo);
+    }
+  });
+
+  it('a dungeon is no harder than the ladder on average', () => {
+    // The affinity is symmetric around the ladder baseline, so the average dungeon
+    // is exactly the ladder at that depth. An affinity that only ever added
+    // resistance would be a difficulty tax with an elemental costume on.
+    const stage = 60;
+    const resist = dungeonResistances(9, stage);
+    const total = ELEMENTS.reduce((sum, e) => sum + resist[e], 0);
+    expect(total / ELEMENTS.length).toBeCloseTo(stageResistance(stage), 9);
+  });
+
+  it('every skill declares an element, and two of them are not physical', () => {
+    expect(getSkill('fireball')?.element).toBe('fire');
+    expect(getSkill('frost-nova')?.element).toBe('cold');
+    expect(getSkill('sunder')?.element).toBe('physical');
+    // Unarmed is physical, which is what keeps a weaponless save's numbers where
+    // they were: physical share of 1 against the ladder's uniform resistance.
+    expect(getSkill('unarmed')?.element).toBe('physical');
   });
 });
 
@@ -2094,10 +2218,16 @@ describe('migration', () => {
 });
 
 describe('derived stats', () => {
-  it('statsDps matches the DPS the combat layer actually uses', () => {
+  it('statsDps times the elemental scale matches the DPS the combat layer uses', () => {
     // The character sheet quotes statsDps. If it drifted from what resolveStage
     // divides by, the panel would confidently display a number the fight does
     // not use - the exact failure the shared function exists to prevent.
+    //
+    // The two are no longer equal on their own: statsDps is what the loadout puts
+    // out, and resistance is a property of the TARGET, so the fight applies the
+    // elemental scale on top. Multiplying it back in here is the point - it pins the
+    // scale as the ONLY thing between the sheet's number and the fight's, so a future
+    // damage term added to one and not the other still fails this.
     const save: SaveState = {
       ...newSave(1, T0),
       upgrades: { ...newSave(1, T0).upgrades, damage: 12, attackSpeed: 7, crit: 20 },
@@ -2110,7 +2240,13 @@ describe('derived stats', () => {
     const aoeTargets = Math.min(stats.area, enemyCount(stage));
     const impliedDps = poolHp.div(outcome.trashPhaseSeconds * aoeTargets);
 
-    expect(statsDps(stats).div(impliedDps).toNumber()).toBeCloseTo(1, 6);
+    const ctx = { stage, isBoss: false, enemyHpFraction: 1 };
+    const scale = elementalScale(
+      damageShares(save, ctx),
+      stats.penetration,
+      stageResistances(stage),
+    );
+    expect(statsDps(stats).mul(scale).div(impliedDps).toNumber()).toBeCloseTo(1, 6);
   });
 
   it('effective HP is what damage is measured against', () => {

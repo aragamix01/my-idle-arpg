@@ -365,6 +365,9 @@ export function uniqueEffects(unique: Unique, rolls: number[] | undefined): Effe
     if (effect.kind === 'amplifyOthers') {
       return { kind: 'amplifyOthers', multiplier: value, ...when };
     }
+    if (effect.kind === 'extraElement') {
+      return { kind: 'extraElement', element: effect.element, fraction: value, ...when };
+    }
     return { kind: 'statMod', stat: effect.stat, op: effect.op, value, ...when };
   });
 }

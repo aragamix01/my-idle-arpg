@@ -24,7 +24,8 @@ import { BASE_STATS } from '../types';
 /** 6: weapons grant skills, skills cost a resource, and uniques roll their values. */
 /** 7: gold is a decimal string, so magnitudes are no longer capped at 1.8e308. */
 /** 8: equip slots are derived, so the loadout array is MAX_ITEM_SLOTS long. */
-export const CONTENT_VERSION = 8;
+/** 9: skills carry an element, targets carry resistance, and penetration is a stat. */
+export const CONTENT_VERSION = 9;
 
 export * from './schema';
 export * from './affixes';
@@ -63,12 +64,18 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     const sample =
       affix.effect.kind === 'goldOnKill'
         ? { kind: 'goldOnKill' as const, multiplier: affix.tiers[0].value }
-        : {
-            kind: 'statMod' as const,
-            stat: affix.effect.stat,
-            op: affix.effect.op,
-            value: affix.tiers[0].value,
-          };
+        : affix.effect.kind === 'extraElement'
+          ? {
+              kind: 'extraElement' as const,
+              element: affix.effect.element,
+              fraction: affix.tiers[0].value,
+            }
+          : {
+              kind: 'statMod' as const,
+              stat: affix.effect.stat,
+              op: affix.effect.op,
+              value: affix.tiers[0].value,
+            };
     const parsed = EffectSchema.safeParse(sample);
     if (!parsed.success) errors.push(`${affix.id}: produces an invalid effect`);
 
@@ -87,6 +94,13 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
       // and would render as a duplicate line.
       if (op === 'flat' && BASE_STATS[stat] === 1) {
         errors.push(`${affix.id}: ${stat} is a multiplier and has no meaningful flat layer`);
+      }
+
+      // The mirror of the rule above. Penetration's base is zero, so a percentage of
+      // it is zero forever - an affix that reads as a bonus and does literally nothing,
+      // which is worse than one that is merely weak.
+      if (op !== 'flat' && BASE_STATS[stat] === 0) {
+        errors.push(`${affix.id}: ${stat} has a base of zero, so only a flat layer moves it`);
       }
 
       // Crit multiplier already multiplies into DPS through critFactor, so a

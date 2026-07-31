@@ -15,6 +15,7 @@ import {
   SKILL_LEVEL_GAIN,
   type CurrencyTier,
   type Effect,
+  type Element,
   type Rarity,
   type RolledAffix,
   type Skill,
@@ -61,7 +62,15 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   // instead of a bonus to the skill you are wielding.
   physicalSkillLevel: { label: 'to Physical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
   magicalSkillLevel: { label: 'to Magical Skill Levels', format: (v) => `+${v.toFixed(0)}` },
+  // Percentage points of the target's resistance, not a percentage of it - "10%
+  // penetration" against 30% resistance leaves 20%, not 27%.
+  penetration: { label: 'Resistance Penetration', format: percent },
 };
+
+/** Title case for an element, for a line that names one. */
+export function elementName(element: Element): string {
+  return element.charAt(0).toUpperCase() + element.slice(1);
+}
 
 /**
  * Stats the character sheet does not list.
@@ -123,6 +132,15 @@ export function describeEffect(effect: Effect): string {
     // "other equipped items" is load-bearing wording: it does not amplify itself, and
     // a line reading "x2.0 to your modifiers" would promise that it did.
     return `x${effect.multiplier.toFixed(2)} to other equipped items' modifiers${suffix}`;
+  }
+
+  if (effect.kind === 'extraElement') {
+    // "as extra" is the load-bearing phrase: it ADDS a share rather than converting
+    // one, so the hit gets bigger and part of it is mitigated differently. A line
+    // reading "20% of damage converted to cold" would promise the opposite.
+    return `gain ${(effect.fraction * 100).toFixed(0)}% of damage as extra ${elementName(
+      effect.element,
+    )}${suffix}`;
   }
 
   if (effect.kind === 'equipSlots') {

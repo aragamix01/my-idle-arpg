@@ -8,13 +8,21 @@
 
 import {
   baseSkillId,
+  ELEMENTS,
   getSkill,
   UNARMED,
   type Effect,
+  type Element,
   type ItemInstance,
   type Skill,
 } from './content';
-import { SKILL_LEVEL_GAIN, UPGRADE_TRACKS } from './curves';
+import {
+  MAX_RESISTANCE,
+  MAX_VULNERABILITY,
+  SKILL_LEVEL_GAIN,
+  UPGRADE_TRACKS,
+  type Resistances,
+} from './curves';
 import { itemEffects } from './items';
 import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
@@ -311,14 +319,19 @@ export function equippedSkill(save: SaveState): Skill {
  * nothing from `+2 to Physical Skill Levels`. Unarmed is level zero and never
  * scales; it is a fallback, not a build.
  */
-export function skillLevel(save: SaveState, ctx: EffectContext): number {
+export function skillLevel(
+  save: SaveState,
+  ctx: EffectContext,
+  /** Pre-walked equipped effects. Passed by deriveStats so the gear is walked once. */
+  effects: Effect[] = equippedEffects(save, ctx),
+): number {
   const weapon = equippedWeapon(save);
   if (!weapon) return 0;
   const skill = equippedSkill(save);
   const stat = skill.kind === 'physical' ? 'physicalSkillLevel' : 'magicalSkillLevel';
 
   let bonus = 0;
-  for (const e of equippedEffects(save, ctx)) {
+  for (const e of effects) {
     if (e.kind === 'statMod' && e.stat === stat && conditionHolds(e, ctx)) bonus += e.value;
   }
   return Math.max(0, weapon.itemLevel + bonus);
@@ -331,7 +344,7 @@ export function skillLevel(save: SaveState, ctx: EffectContext): number {
  * skill-level term multiplies the BASE, which is a distinct position from the three
  * layers - see the note on physicalSkillLevel in types.ts.
  */
-function baseStats(save: SaveState, ctx: EffectContext): Stats {
+function baseStats(save: SaveState, ctx: EffectContext, effects: Effect[]): Stats {
   const skill = equippedSkill(save);
   return {
     ...BASE_STATS,
@@ -343,7 +356,7 @@ function baseStats(save: SaveState, ctx: EffectContext): Stats {
     // A Big because this term alone outgrows a double: 1.05 per skill level, and
     // skill level is the weapon's item level, so a stage-6,000 weapon is already past
     // 1.8e308 before a single upgrade or affix is applied.
-    damage: big(skill.baseDamage).mul(big(SKILL_LEVEL_GAIN).pow(skillLevel(save, ctx))),
+    damage: big(skill.baseDamage).mul(big(SKILL_LEVEL_GAIN).pow(skillLevel(save, ctx, effects))),
     attackSpeed: skill.baseSpeed,
     critChance: skill.baseCritChance,
     area: skill.baseArea,
@@ -358,13 +371,23 @@ function baseStats(save: SaveState, ctx: EffectContext): Stats {
  * property is what makes loadouts comparable, and it survived the move from
  * two passes to three.
  */
-export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
+export function deriveStats(
+  save: SaveState,
+  ctx: EffectContext,
+  /**
+   * Pre-walked gear, grouped by source item.
+   *
+   * Passed by callers that need the same walk for something else - the combat layer
+   * needs it for damage shares. Walking gear is the hottest path in the sim, and the
+   * skill-level lookup below used to force a second walk on every single call.
+   */
+  groups: Effect[][] = equippedGroups(save, ctx),
+): Stats {
   const buckets = emptyBuckets();
   collectUpgrades(buckets, save.upgrades);
 
   // Grouped by source item rather than flattened, because an amplifier scales what
   // the OTHER items contribute - a flat list has no way to say which is which.
-  const groups = equippedGroups(save, ctx);
   const scale = amplifiers(groups, ctx);
   groups.forEach((effects, i) => {
     collectEffects(
@@ -374,7 +397,7 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
     );
   });
 
-  const base = baseStats(save, ctx);
+  const base = baseStats(save, ctx, groups.flat());
   const stats = { ...base };
   for (const key of STAT_KEYS) {
     // Resolved as a Big in every case, then collapsed back to a double for the stats
@@ -394,6 +417,10 @@ export function deriveStats(save: SaveState, ctx: EffectContext): Stats {
   // Coffers take it negative, and a negative multiplier does not mean "earns less" -
   // it means the clear pays out negative gold.
   stats.goldFind = Math.max(0, stats.goldFind);
+  // Negative penetration would mean granting the target resistance, which nothing in
+  // the game is supposed to do. No ceiling here - mitigatedResistance bounds what it
+  // can accomplish, so a huge value is wasted rather than unbounded.
+  stats.penetration = Math.max(0, stats.penetration);
 
   // Attack speed is capped by what the resource can sustain, and the CAP IS WRITTEN
   // INTO THE STAT rather than applied later in the damage formula.
@@ -496,4 +523,68 @@ export function critFactor(stats: Stats): number {
  */
 export function statsDps(stats: Stats): Big {
   return stats.damage.mul(stats.attackSpeed).mul(critFactor(stats));
+}
+
+// --- Elements -------------------------------------------------------------
+
+/**
+ * How a hit divides by element. The skill's own element is 1; extras add on top.
+ *
+ * NOT normalised, and that is the mechanic. `gain 20% as extra cold` makes the shares
+ * sum to 1.2, so against a target with no resistance it is a straight 1.2x - the extra
+ * damage is genuinely extra rather than a slice taken out of the physical half. What
+ * makes it a decision instead of free damage is that the new share is mitigated by a
+ * DIFFERENT resistance, so it is worth more or less than 20% depending on the target.
+ */
+export type DamageShares = Record<Element, number>;
+
+export function damageShares(
+  save: SaveState,
+  ctx: EffectContext,
+  effects: Effect[] = equippedEffects(save, ctx),
+): DamageShares {
+  const shares = Object.fromEntries(ELEMENTS.map((e) => [e, 0])) as DamageShares;
+  shares[equippedSkill(save).element] = 1;
+
+  for (const e of effects) {
+    if (e.kind === 'extraElement' && conditionHolds(e, ctx)) shares[e.element] += e.fraction;
+  }
+  return shares;
+}
+
+/**
+ * A target's resistance to one element, after penetration and bounds.
+ *
+ * Penetration moves resistance TOWARD zero and never past it, so over-penetrating a
+ * soft target is wasted rather than a bonus - `Math.min(resistance, 0)` is the floor
+ * it may reach. A resistance that was already negative is a dungeon's vulnerability
+ * and is left alone: penetration is for getting through armour, not for deepening a
+ * weakness that is already yours.
+ */
+export function mitigatedResistance(resistance: number, penetration: number): number {
+  const pierced = Math.max(Math.min(resistance, 0), resistance - Math.max(0, penetration));
+  return Math.max(-MAX_VULNERABILITY, Math.min(MAX_RESISTANCE, pierced));
+}
+
+/**
+ * What fraction of the loadout's raw DPS a given target actually takes.
+ *
+ * Exactly 1 when the shares are `{ own element: 1 }` and the target resists nothing,
+ * which is the property that made this change safe to land: every existing loadout
+ * against a zero-resistance target reproduces the previous numbers to the bit.
+ */
+export function elementalScale(
+  shares: DamageShares,
+  penetration: number,
+  resist: Resistances,
+): number {
+  let total = 0;
+  for (const element of ELEMENTS) {
+    const share = shares[element];
+    if (share === 0) continue;
+    total += share * (1 - mitigatedResistance(resist[element], penetration));
+  }
+  // A negative share is not authored anywhere, but a floor here is cheaper than a
+  // division by a negative dps somewhere downstream reporting a negative clear time.
+  return Math.max(0, total);
 }
