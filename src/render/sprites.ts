@@ -80,7 +80,29 @@ export const ENEMY_SPRITES: SpriteId[] = [
   'enemy.ogre',
 ];
 
+/**
+ * One packed sheet.
+ *
+ * The dimensions are here for the DOM, not for Pixi: Pixi slices frames out of a
+ * loaded texture, while rendering one frame as a CSS background means scaling the
+ * WHOLE sheet with background-size, which is impossible without knowing how big it is.
+ */
+export interface AtlasSheet {
+  image: string;
+  width: number;
+  height: number;
+}
+
 export interface AtlasFrame {
+  /**
+   * Index into AtlasManifest.sheets.
+   *
+   * Per frame rather than per manifest, because one pack rarely covers a whole game -
+   * a dungeon tileset has creatures and no inventory icons, an icon pack has the
+   * reverse. Without this the second source silently repointed every frame from the
+   * first at its own image, which renders as the wrong art rather than as an error.
+   */
+  sheet: number;
   x: number;
   y: number;
   w: number;
@@ -88,19 +110,7 @@ export interface AtlasFrame {
 }
 
 export interface AtlasManifest {
-  image: string;
-  /** Source cell size, before any display scaling. */
-  cell: number;
-  /**
-   * Full sheet dimensions.
-   *
-   * Pixi never needs these - it slices frames from a loaded texture. The DOM
-   * does: rendering one frame as a CSS background requires scaling the whole
-   * sheet with background-size, which is impossible without knowing how big it
-   * is.
-   */
-  imageWidth: number;
-  imageHeight: number;
+  sheets: AtlasSheet[];
   frames: Record<string, AtlasFrame>;
 }
 

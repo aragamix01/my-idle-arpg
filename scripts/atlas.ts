@@ -15,7 +15,12 @@
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { SPRITE_IDS, type AtlasFrame, type AtlasManifest } from '../src/render/sprites';
+import {
+  SPRITE_IDS,
+  type AtlasFrame,
+  type AtlasManifest,
+  type AtlasSheet,
+} from '../src/render/sprites';
 import { SOURCES } from './atlas/sources';
 
 const ASSETS = resolve(process.cwd(), 'assets/source');
@@ -33,11 +38,9 @@ async function build() {
   await mkdir(OUT_DIR, { recursive: true });
 
   const frames: Record<string, AtlasFrame> = {};
+  const sheets: AtlasSheet[] = [];
   const licenses: string[] = [];
-  let cell = 16;
-  let image = '';
-  let imageWidth = 0;
-  let imageHeight = 0;
+  const claimed = new Map<string, string>();
 
   for (const source of SOURCES) {
     const sheetPath = join(ASSETS, source.sheet);
@@ -49,10 +52,10 @@ async function build() {
 
     const outName = `${source.name}.png`;
     await copyFile(sheetPath, join(OUT_DIR, outName));
-    image = `/atlas/${outName}`;
-    cell = source.cell;
-    imageWidth = width;
-    imageHeight = height;
+    // Recorded BEFORE the frames that point at it, so the index is simply its
+    // position - every frame below belongs to the sheet just pushed.
+    const sheetIndex = sheets.length;
+    sheets.push({ image: `/atlas/${outName}`, width, height });
     licenses.push(`${source.name}: ${source.license}`);
 
     console.log(
@@ -68,9 +71,17 @@ async function build() {
       if (index < 0 || index >= capacity) {
         throw new Error(`${id}: tile ${index} is outside the sheet (0..${capacity - 1})`);
       }
+      // Two sources binding the same id is the failure this whole file exists to
+      // avoid quietly: the later one wins, the earlier pack's art vanishes, and
+      // nothing says so. Cheaper to refuse than to debug from a screenshot.
+      const owner = claimed.get(id);
+      if (owner) throw new Error(`${id}: bound by both ${owner} and ${source.name}`);
+      claimed.set(id, source.name);
+
       const column = index % source.columns;
       const row = Math.floor(index / source.columns);
       frames[id] = {
+        sheet: sheetIndex,
         x: column * stride,
         y: row * stride,
         w: source.cell,
@@ -87,11 +98,13 @@ async function build() {
     for (const id of missing) console.log(`  ${id}`);
   }
 
-  const manifest: AtlasManifest = { image, cell, imageWidth, imageHeight, frames };
+  const manifest: AtlasManifest = { sheets, frames };
   await writeFile(join(OUT_DIR, 'atlas.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   await writeFile(join(OUT_DIR, 'LICENSE.txt'), `${licenses.join('\n')}\n`, 'utf8');
 
-  console.log(`\n${Object.keys(frames).length}/${SPRITE_IDS.length} sprites mapped -> public/atlas/`);
+  console.log(
+    `\n${Object.keys(frames).length}/${SPRITE_IDS.length} sprites mapped across ${sheets.length} sheet(s) -> public/atlas/`,
+  );
 }
 
 build().catch((error) => {

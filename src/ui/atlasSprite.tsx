@@ -67,9 +67,13 @@ export function AtlasSprite({
 }) {
   const manifest = useAtlasManifest();
   const frame = manifest?.frames[id];
-  const size = (manifest?.cell ?? 16) * scale;
+  const sheet = frame ? manifest?.sheets[frame.sheet] : undefined;
+  // Sized from the FRAME, not from a manifest-wide cell size. Two packs can have
+  // different cell sizes, and 16 is only the fallback for a sprite with no art -
+  // where the box exists to hold the space the icon would have taken.
+  const size = (frame?.w ?? 16) * scale;
 
-  if (!manifest || !frame) {
+  if (!manifest || !frame || !sheet) {
     // Same tolerance as the renderer: a sprite with no art is a gap, not a
     // crash, so a partly-migrated pack still shows a usable panel.
     return (
@@ -88,9 +92,9 @@ export function AtlasSprite({
       style={{
         width: size,
         height: size,
-        backgroundImage: `url(${manifest.image})`,
+        backgroundImage: `url(${sheet.image})`,
         backgroundPosition: `-${frame.x * scale}px -${frame.y * scale}px`,
-        backgroundSize: `${manifest.imageWidth * scale}px ${manifest.imageHeight * scale}px`,
+        backgroundSize: `${sheet.width * scale}px ${sheet.height * scale}px`,
         // Without this the browser smooths 16px art into mush when scaled.
         imageRendering: 'pixelated',
       }}

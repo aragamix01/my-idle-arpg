@@ -59,3 +59,11 @@ assets/source/*.jpg
 assets/source/*.jpeg
 # Original pack downloads - the extracted files are what the build reads.
 assets/source/*.zip
+
+# Icon packs ship the same art several times over - one file per icon at three
+# sizes, plus per-engine exports. The atlas reads ONE packed sheet per pack and
+# never opens the rest, so only that sheet is kept; the Raven pack went from
+# 14.6MB to 348KB by deleting the copies. These patterns stop the next download
+# from putting them back.
+assets/source/**/Separated Files/
+assets/source/**/RPG Maker MV and MZ/

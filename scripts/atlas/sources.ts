@@ -47,6 +47,11 @@ export interface GridSource {
  * art for exactly that job. A test asserts every ID resolves to a frame with a
  * non-empty alpha channel, which catches an index pointing at blank space. It
  * cannot catch an index pointing at the wrong creature.
+ *
+ * This pack now carries CREATURES ONLY. Every item and currency icon moved to the
+ * Raven pack below, which is drawn for inventories rather than for floors - Tiny
+ * Dungeon is a tileset, and its "items" were furniture and potions doing a job they
+ * were not drawn for. What remains here is what a tileset is actually good at.
  */
 export const KENNEY_TINY_DUNGEON: GridSource = {
   kind: 'grid',
@@ -70,72 +75,109 @@ export const KENNEY_TINY_DUNGEON: GridSource = {
     'boss.warlock': 84,
 
     'player.knight': 96,
-    // 106 is a sword too, but it is already bound to giant_slayer and the
-    // duplicate-tile test would reject sharing it.
-    'weapon.sword': 104,
-
-    'item.whetstone': 102,
-    'item.quickdraw_glove': 103,
-    'item.coin_purse': 89,
-    'item.executioners_mark': 119,
-    'item.giant_slayer': 106,
-    'item.swarm_lens': 130,
-    'item.bloodstone': 115,
-    'item.deep_delvers_idol': 129,
-
-    // The four Phase 2 uniques, and these were the last readable item tiles the
-    // pack has. 94 of 132 tiles are unbound but nearly all are floor, wall, door or
-    // fence; the free ones that read as an OBJECT at 16px are down to furniture and
-    // townsfolk. A fifth unique needs a second GridSource, which is what this
-    // indirection exists for - no game code moves when one is added.
-    'item.berserkers_anvil': 74,
-    'item.duelists_visor': 124,
-    'item.wardens_coffer': 91,
-    'item.bulwark_of_the_deep': 82,
-
-    // Weapon bases. Picked by rendering the sheet at 6x and reading it, not by
-    // guessing indices - 117 is the double axe and 131 the staff, and both were the
-    // only free tiles that read unmistakably as a weapon at 16px. There is no free
-    // sword: 104 is the player's swing animation and 105-107 are bound to
-    // giant_slayer and two shards.
-    'item.axe': 117,
-    'item.wand': 131,
-    'item.maul': 118,
-    'item.staff': 128,
-
-    // Currency. Tiny Dungeon has no purpose-drawn crafting icons, so these are
-    // the closest readable stand-ins from what the pack ships: potions for the
-    // ores, torches for the flames, chests and tomes for the rest. The colour
-    // pairings are deliberate - magic ore is the blue potion because magic
-    // items are blue, rare ore the orange gem because rares are yellow.
-    'currency.sacred_idol': 64,
-    'currency.dark_idol': 56,
-    'currency.magic_ore': 116,
-    'currency.rare_ore': 101,
-    'currency.angel_flame': 127,
-    'currency.angel_droplet': 113,
-    'currency.bishop_spirit': 65,
-    'currency.devil_spirit': 92,
-    'currency.dune_spirit': 125,
-    'currency.magic_ore_shard': 105,
-    'currency.rare_ore_shard': 107,
-    'currency.angel_flame_shard': 126,
-    'currency.angel_droplet_shard': 114,
-    'currency.dungeon_key': 90,
-  },
-
-  /**
-   * The two Phase 2 slot uniques. Tiny Dungeon has nothing left that reads as an
-   * object at 16px - what remains unbound is floor, wall, door, fence and townsfolk -
-   * so these borrow tiles until purpose-made art arrives.
-   *
-   * Borrowed on meaning, not at random: the harness takes the pack (a thing you wear
-   * to carry more), the seal takes the amulet-ish gem.
-   */
-  placeholders: {
-    'item.travellers_harness': 82,
-    'item.monomaniacs_seal': 115,
   },
 };
 
-export const SOURCES: GridSource[] = [KENNEY_TINY_DUNGEON];
+/**
+ * Clockwork Raven "Free Fantasy Icons", 2192 icons at 16 columns.
+ *
+ * Purpose-drawn inventory icons, which is exactly what Tiny Dungeon does not have -
+ * that pack is a TILESET, so its items were furniture and potions pressed into service
+ * and the roster had run out of tiles that read as an object at 16px.
+ *
+ * The two packs split by what each is for: creatures, the player and the world stay
+ * Kenney; everything that lives in an inventory comes from here. Neither is a partial
+ * replacement of the other, which is why the atlas holds both rather than migrating.
+ *
+ * ## Reading the indices
+ *
+ * Row-major over 16 columns, so index = row x 16 + column, same convention as above.
+ * They were read off contact sheets rendered at 4x rather than guessed - the pack
+ * groups by category (gems around 160, keys at 176, weapons from 1440, armour and
+ * accessories from 2048), which is what makes picking by meaning possible at all.
+ *
+ * The 16px sheet, not the 32px or 64px ones it also ships. Kenney's cells are 16, and
+ * matching them keeps every existing `scale` in the UI meaning the same thing. Moving
+ * to 32px art is a real improvement and a separate change: the frames already carry
+ * their own size, so it is a swap here plus reading the sizes the callers ask for.
+ */
+export const RAVEN_FANTASY_ICONS: GridSource = {
+  kind: 'grid',
+  name: 'raven-fantasy-icons',
+  sheet: 'Free - Raven Fantasy Icons/Full Spritesheet/16x16.png',
+  cell: 16,
+  columns: 16,
+  spacing: 0,
+  license: 'Clockwork Raven Studios - Free Fantasy Icons (see CREDITS.md)',
+  tiles: {
+    // Weapons. The pack draws each in several metal tints; these are the steel ones,
+    // so a weapon's colour never implies a rarity the item does not have.
+    'item.axe': 1457,
+    'item.maul': 1471,
+    // The wand is short and the staff is long, which is the only thing separating
+    // them at 16px - the pack draws both as a rod with a red gem, and the first pick
+    // had them near-identical on the proof sheet.
+    'item.wand': 1488,
+    'item.staff': 1497,
+    // The player's swing. A plain arming sword rather than anything ornate - it is
+    // drawn every frame of every fight and should not compete with the loot.
+    'weapon.sword': 1440,
+
+    // Gear bases. Each shares its icon with the unique of the same name, which is a
+    // property of the content rather than a shortcut: The Whetstone IS a whetstone.
+    'item.whetstone': 208,
+    'item.quickdraw_glove': 1487,
+    'item.coin_purse': 157,
+    'item.executioners_mark': 316,
+    'item.giant_slayer': 1455,
+    'item.swarm_lens': 292,
+    'item.bloodstone': 162,
+    'item.deep_delvers_idol': 134,
+
+    // The remaining uniques, picked on meaning: an anvil for the Anvil, a visored helm
+    // for the Visor, a round shield for the Bulwark, a signet for the Seal.
+    'item.berserkers_anvil': 124,
+    'item.duelists_visor': 2051,
+    'item.wardens_coffer': 304,
+    'item.bulwark_of_the_deep': 2114,
+    'item.travellers_harness': 2092,
+    'item.monomaniacs_seal': 2060,
+
+    // Currency. Tiny Dungeon had no crafting icons at all and these were the weakest
+    // art in the game - potions and torches standing in for ores and flames.
+    //
+    // Every fragment is the ORE VEIN of its finished currency's colour, so "ten of
+    // these make one of those" reads without a legend: blue gem and blue vein, gold
+    // gem and gold vein. The first cut claimed that pairing in a comment and did not
+    // deliver it - the proof sheet had a silver shard under a gold ore - which is
+    // exactly the kind of thing no test can see.
+    //
+    // The colours carry the rarity they always did: magic is blue, rare is gold. The
+    // Droplet is purple because it is the one currency that makes a unique, and the
+    // Flame is white because it changes magnitudes rather than identity.
+    'currency.magic_ore': 160,
+    'currency.magic_ore_shard': 186,
+    'currency.rare_ore': 163,
+    'currency.rare_ore_shard': 189,
+    'currency.angel_flame': 173,
+    'currency.angel_flame_shard': 188,
+    'currency.angel_droplet': 121,
+    'currency.angel_droplet_shard': 191,
+
+    // The idols are ritual masks, gold for the Sacred and red for the Dark. The
+    // spirits are what a spirit is bound in: a rosary, a skull, a desert stone.
+    'currency.sacred_idol': 135,
+    'currency.dark_idol': 133,
+    'currency.bishop_spirit': 2066,
+    'currency.devil_spirit': 226,
+    'currency.dune_spirit': 197,
+
+    'currency.dungeon_key': 178,
+  },
+};
+
+/**
+ * Order matters only for reading the build log - ids may not be claimed twice, and the
+ * builder refuses rather than letting the later pack silently win.
+ */
+export const SOURCES: GridSource[] = [KENNEY_TINY_DUNGEON, RAVEN_FANTASY_ICONS];

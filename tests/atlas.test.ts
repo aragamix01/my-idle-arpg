@@ -18,12 +18,16 @@ const MANIFEST = resolve(ATLAS_DIR, 'atlas.json');
 
 describe('atlas', () => {
   let manifest: AtlasManifest;
-  let sheet: PNG;
+  let sheets: PNG[];
 
   beforeAll(() => {
     if (!existsSync(MANIFEST)) throw new Error('run `pnpm atlas` first');
     manifest = JSON.parse(readFileSync(MANIFEST, 'utf8')) as AtlasManifest;
-    sheet = PNG.sync.read(readFileSync(resolve(process.cwd(), `public${manifest.image}`)));
+    // Decoded once each and indexed by position, matching the manifest's own
+    // ordering - a frame's `sheet` is the index into both.
+    sheets = manifest.sheets.map((s) =>
+      PNG.sync.read(readFileSync(resolve(process.cwd(), `public${s.image}`))),
+    );
   });
 
   it('resolves every declared sprite id', () => {
@@ -35,6 +39,7 @@ describe('atlas', () => {
     const blank: string[] = [];
 
     for (const [id, frame] of Object.entries(manifest.frames)) {
+      const sheet = sheets[frame.sheet];
       let opaque = 0;
       for (let y = frame.y; y < frame.y + frame.h; y++) {
         for (let x = frame.x; x < frame.x + frame.w; x++) {
@@ -53,12 +58,24 @@ describe('atlas', () => {
   it('records the sheet dimensions the DOM renderer needs', () => {
     // Pixi slices frames from a loaded texture and never needs these. CSS
     // background-size does, and a wrong value silently offsets every icon.
-    expect(manifest.imageWidth).toBe(sheet.width);
-    expect(manifest.imageHeight).toBe(sheet.height);
+    manifest.sheets.forEach((declared, i) => {
+      expect(declared.width, `${declared.image} width`).toBe(sheets[i].width);
+      expect(declared.height, `${declared.image} height`).toBe(sheets[i].height);
+    });
   });
 
-  it('keeps every frame inside the sheet', () => {
+  it('points every frame at a sheet that exists', () => {
+    // The failure the per-frame sheet index was added to prevent: before it, a
+    // second source's frames were read out of the first source's image, which
+    // renders as confidently wrong art rather than as a missing sprite.
     for (const [id, frame] of Object.entries(manifest.frames)) {
+      expect(manifest.sheets[frame.sheet], `${id} names sheet ${frame.sheet}`).toBeDefined();
+    }
+  });
+
+  it('keeps every frame inside its own sheet', () => {
+    for (const [id, frame] of Object.entries(manifest.frames)) {
+      const sheet = sheets[frame.sheet];
       expect(frame.x + frame.w, `${id} overflows horizontally`).toBeLessThanOrEqual(sheet.width);
       expect(frame.y + frame.h, `${id} overflows vertically`).toBeLessThanOrEqual(sheet.height);
     }
