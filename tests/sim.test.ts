@@ -9,6 +9,7 @@ import { describeEffect, describeRolledAffix } from '../src/ui/format';
 import {
   AFFIXES,
   AFFIX_LIMITS,
+  affixEffect,
   affixRows,
   applyCommand,
   BASES,
@@ -638,6 +639,22 @@ describe('item rolling', () => {
     }
   });
 
+  it('renders every rollable affix as a readable line', () => {
+    // The same hole the unique test covers, on the other half of the content. A new
+    // effect kind is a type error everywhere it is CONSUMED, and describeEffect
+    // returns a string from every branch - so a missing branch is not a type error,
+    // it is an item reading "undefined" in the panel.
+    for (const affix of [...AFFIXES, ...IMPLICIT_AFFIXES]) {
+      for (let tier = 0; tier < affix.tiers.length; tier++) {
+        const effect = affixEffect({ affixId: affix.id, tier, value: affix.tiers[tier].value });
+        expect(effect, `${affix.id}`).not.toBeNull();
+        if (!effect) continue;
+        const line = describeEffect(effect);
+        expect(line, `${affix.id}: ${line}`).not.toMatch(/undefined|NaN/);
+      }
+    }
+  });
+
   it('carries a defensive unique, not only offence and economy', () => {
     // A unique tier whose best items are all offensive breaks the offence/defence
     // symmetry invariant structurally - the ceiling on one side rises and the other
@@ -921,6 +938,72 @@ describe('elements', () => {
     const resist = dungeonResistances(9, stage);
     const total = ELEMENTS.reduce((sum, e) => sum + resist[e], 0);
     expect(total / ELEMENTS.length).toBeCloseTo(stageResistance(stage), 9);
+  });
+
+  it('every element has an affix that grants it', () => {
+    // Lightning and darkness have no skill. If the pool did not cover them they would
+    // be enum members nothing in the game can produce - dead content with a test
+    // suite reassuring everyone it works.
+    for (const element of ELEMENTS) {
+      const affix = AFFIXES.find(
+        (a) => a.effect.kind === 'extraElement' && a.effect.element === element,
+      );
+      expect(affix, `no affix grants extra ${element}`).toBeDefined();
+    }
+  });
+
+  it('an extra-element affix on a worn item shows up in the shares', () => {
+    // End to end through itemEffects, so a template that resolved to the wrong shape
+    // would fail here rather than silently contributing nothing.
+    const affix = AFFIXES.find((a) => a.id === 'extra-lightning');
+    expect(affix).toBeDefined();
+    if (!affix) return;
+
+    const top = affix.tiers.length - 1;
+    const item = {
+      ...rollItem(9, 1, 90),
+      rarity: 'magic' as const,
+      baseId: 'whetstone',
+      uniqueId: undefined,
+      baseAffix: undefined,
+      affixes: [{ affixId: affix.id, tier: top, value: affix.tiers[top].value }],
+    };
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[0] = item.uid;
+    const save: SaveState = { ...newSave(9, T0), items: [item], loadout };
+
+    expect(damageShares(save, CTX).lightning).toBeCloseTo(affix.tiers[top].value, 9);
+  });
+
+  it('penetration is worth more the deeper you are', () => {
+    // The affix's defining property, and the reason it is sized the way it is: what
+    // it cancels is a function of the stage, so its worth rises with depth on its own
+    // rather than with its tier. A constant here would mean the tuning was fiction.
+    const shares = damageShares(newSave(1, T0), CTX);
+    const worth = (stage: number) =>
+      elementalScale(shares, 0.026, stageResistances(stage)) /
+      elementalScale(shares, 0, stageResistances(stage));
+
+    expect(worth(1)).toBeLessThan(worth(50));
+    expect(worth(50)).toBeLessThan(worth(300));
+    // And it never becomes the correct pick everywhere - at the best roll and the
+    // deepest measured stage it is still under what a top attack-speed roll gives.
+    expect(worth(300) - 1).toBeLessThan(0.042);
+  });
+
+  it('an extra share is worth less on the ladder than a plain damage roll', () => {
+    // The sizing argument, asserted rather than described. Ladder resistance is
+    // uniform, so an extra share is mitigated exactly like your own damage - which
+    // makes it strictly worse than Brutal there, and is what keeps the power ceiling
+    // and the ladder's pacing where they were. It earns its place in dungeons.
+    const brutal = AFFIXES.find((a) => a.id === 'brutal');
+    const extra = AFFIXES.find((a) => a.id === 'extra-fire');
+    expect(brutal && extra).toBeTruthy();
+    if (!brutal || !extra) return;
+
+    for (let tier = 0; tier < extra.tiers.length; tier++) {
+      expect(extra.tiers[tier].value).toBeLessThan(brutal.tiers[tier].value);
+    }
   });
 
   it('every skill declares an element, and two of them are not physical', () => {

@@ -40,7 +40,15 @@ import {
 import { AtlasSprite } from './atlasSprite';
 import { CraftModal } from './CraftModal';
 import { CurrencyStash } from './CurrencyStash';
-import { compact, RARITY_STYLE, resourceName, skillSummary, statEntries } from './format';
+import {
+  compact,
+  ELEMENT_STYLE,
+  elementName,
+  RARITY_STYLE,
+  resourceName,
+  skillSummary,
+  statEntries,
+} from './format';
 import { ItemMods } from './ItemMods';
 
 type Tab = 'character' | 'inventory' | 'currency';
@@ -1052,7 +1060,13 @@ function WeaponSkill({
   return (
     <div className="rounded border border-neutral-800 bg-neutral-950/60 p-2 text-[11px]">
       <p className="text-neutral-200">
-        {skill.name} <span className="text-neutral-500">· {skill.kind}</span>
+        {skill.name} <span className="text-neutral-500">· {skill.kind} skill</span>{' '}
+        {/* The element belongs beside the kind rather than in the damage line, because
+            the two are the axes that describe the skill: kind decides what it costs to
+            use, element decides what shrugs it off. Both carry a NOUN - "physical ·
+            Physical" is technically complete and reads as a stutter, where "physical
+            skill · Physical damage" says which axis each word is on. */}
+        <span className={ELEMENT_STYLE[skill.element]}>· {elementName(skill.element)} damage</span>
       </p>
       {/* "base" is load-bearing: these are what the layers build on, not what the
           character sheet will read once gear and upgrades are applied. */}

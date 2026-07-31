@@ -320,6 +320,141 @@ exports[`content registry > matches its snapshot 1`] = `
     },
     {
       "effect": {
+        "element": "physical",
+        "kind": "extraElement",
+      },
+      "id": "extra-physical",
+      "kind": "prefix",
+      "nameFragment": "Weighted",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.012,
+        },
+        {
+          "minStage": 15,
+          "value": 0.019,
+        },
+        {
+          "minStage": 40,
+          "value": 0.025,
+        },
+        {
+          "minStage": 80,
+          "value": 0.033,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "element": "fire",
+        "kind": "extraElement",
+      },
+      "id": "extra-fire",
+      "kind": "prefix",
+      "nameFragment": "Smouldering",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.012,
+        },
+        {
+          "minStage": 15,
+          "value": 0.019,
+        },
+        {
+          "minStage": 40,
+          "value": 0.025,
+        },
+        {
+          "minStage": 80,
+          "value": 0.033,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "element": "cold",
+        "kind": "extraElement",
+      },
+      "id": "extra-cold",
+      "kind": "prefix",
+      "nameFragment": "Rimed",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.012,
+        },
+        {
+          "minStage": 15,
+          "value": 0.019,
+        },
+        {
+          "minStage": 40,
+          "value": 0.025,
+        },
+        {
+          "minStage": 80,
+          "value": 0.033,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "element": "lightning",
+        "kind": "extraElement",
+      },
+      "id": "extra-lightning",
+      "kind": "prefix",
+      "nameFragment": "Charged",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.012,
+        },
+        {
+          "minStage": 15,
+          "value": 0.019,
+        },
+        {
+          "minStage": 40,
+          "value": 0.025,
+        },
+        {
+          "minStage": 80,
+          "value": 0.033,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "element": "darkness",
+        "kind": "extraElement",
+      },
+      "id": "extra-darkness",
+      "kind": "prefix",
+      "nameFragment": "Shadowed",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.012,
+        },
+        {
+          "minStage": 15,
+          "value": 0.019,
+        },
+        {
+          "minStage": 40,
+          "value": 0.025,
+        },
+        {
+          "minStage": 80,
+          "value": 0.033,
+        },
+      ],
+    },
+    {
+      "effect": {
         "kind": "statMod",
         "op": "increased",
         "stat": "attackSpeed",
@@ -715,6 +850,34 @@ exports[`content registry > matches its snapshot 1`] = `
         {
           "minStage": 80,
           "value": 4,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "penetration",
+      },
+      "id": "of-sundering",
+      "kind": "suffix",
+      "nameFragment": "of Sundering",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.008,
+        },
+        {
+          "minStage": 15,
+          "value": 0.014,
+        },
+        {
+          "minStage": 40,
+          "value": 0.02,
+        },
+        {
+          "minStage": 80,
+          "value": 0.026,
         },
       ],
     },

@@ -9,7 +9,13 @@
 
 import { fromSave, toSave } from './big';
 import { farmRate } from './combat';
-import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from './curves';
+import {
+  dungeonAffinity,
+  OFFLINE_CAP_SECONDS,
+  upgradeCost,
+  isUpgradeMaxed,
+  UPGRADE_TRACKS,
+} from './curves';
 import { computeOffline } from './offline';
 import { deriveStats, equipSlots } from './stats';
 import {
@@ -21,7 +27,7 @@ import {
   type Stats,
   type UpgradeKey,
 } from './types';
-import type { CurrencyPurse, ItemInstance } from './content';
+import type { CurrencyPurse, Element, ItemInstance } from './content';
 
 export interface UpgradeView {
   key: UpgradeKey;
@@ -74,6 +80,16 @@ export interface HudSnapshot {
   equipSlots: number;
   /** Equipped weapon uid, or null for unarmed. */
   weapon: string | null;
+  /**
+   * What the next dungeon resists and what it is weak to, or null before one is
+   * possible.
+   *
+   * Sent rather than derived in the UI, because the affinity is a function of the
+   * ACCOUNT SEED and the seed is server-side. It is also the reason this is worth
+   * sending at all: a key is spent, not refunded, so what the run is going to resist
+   * has to be readable before the decision rather than after it.
+   */
+  dungeon: { stage: number; resists: Element; weakTo: Element } | null;
   items: ItemInstance[];
   currency: CurrencyPurse;
   /** Cap included so the panel can show capacity without importing curves. */
@@ -111,6 +127,10 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     loadout: save.loadout,
     equipSlots: equipSlots(save, ctx),
     weapon: save.weapon,
+    dungeon:
+      save.bestStage >= 1
+        ? { stage: save.bestStage, ...dungeonAffinity(save.seed, save.bestStage) }
+        : null,
     items: save.items,
     currency: save.currency,
     inventoryCap: INVENTORY_CAP,

@@ -73,6 +73,22 @@ export function elementName(element: Element): string {
 }
 
 /**
+ * Text colour per element.
+ *
+ * Drawn from the chip vocabulary already in use rather than a second palette - the
+ * same amber the dungeon key wears, the same sky the prefix badge wears. Physical is
+ * deliberately neutral: it is the default a hit already is, and giving it a colour
+ * would make the unmodified case look like it had been modified.
+ */
+export const ELEMENT_STYLE: Record<Element, string> = {
+  physical: 'text-neutral-300',
+  fire: 'text-orange-400',
+  cold: 'text-sky-300',
+  lightning: 'text-amber-300',
+  darkness: 'text-fuchsia-400',
+};
+
+/**
  * Stats the character sheet does not list.
  *
  * The two skill-level stats are modifier *inputs* - they feed the equipped skill's
@@ -138,7 +154,11 @@ export function describeEffect(effect: Effect): string {
     // "as extra" is the load-bearing phrase: it ADDS a share rather than converting
     // one, so the hit gets bigger and part of it is mitigated differently. A line
     // reading "20% of damage converted to cold" would promise the opposite.
-    return `gain ${(effect.fraction * 100).toFixed(0)}% of damage as extra ${elementName(
+    // One decimal, not zero. The tier table lives between 1.2% and 3.3%, and whole
+    // percents collapsed the top two tiers onto "3%" - two different rolls rendering
+    // as the same line, which is the fault the implicit values were given a decimal
+    // for in the first place.
+    return `gain ${(effect.fraction * 100).toFixed(1)}% of damage as extra ${elementName(
       effect.element,
     )}${suffix}`;
   }
@@ -186,7 +206,13 @@ export function describeEffect(effect: Effect): string {
   // Crit chance and crit damage are fractions of a whole the player never sees as
   // a raw number - the sheet quotes crit damage as "x2.00", so a flat roll shown
   // as "+0.04 Crit Damage" reads like a rounding error rather than +4%.
-  const asPercent = effect.stat === 'critChance' || effect.stat === 'critMult';
+  // Penetration joins them for the same reason: it is a fraction of a resistance the
+  // sheet quotes as a percentage, so "+0.01 Resistance Penetration" reads as a
+  // rounding error rather than as one point off what the target resists.
+  const asPercent =
+    effect.stat === 'critChance' ||
+    effect.stat === 'critMult' ||
+    effect.stat === 'penetration';
   const shown = asPercent ? percent(effect.value) : String(Number(effect.value.toFixed(2)));
   return `${sign}${shown} ${label}${suffix}`;
 }
