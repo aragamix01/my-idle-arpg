@@ -33,6 +33,7 @@ import {
   effectiveHp,
   enemyCount,
   enemyHp,
+  farmRate,
   feedbackExponent,
   FRAGMENTS_PER_CLEAR,
   getAffix,
@@ -643,7 +644,7 @@ describe('item rolling', () => {
         uniqueId: unique.id,
       };
       const equipped: SaveState = { ...base, items: [item], loadout: [item.uid, null, null, null] };
-      return effectiveHp(deriveStats(equipped, ctx)) / baseline;
+      return effectiveHp(deriveStats(equipped, ctx)).div(baseline).toNumber();
     }).reduce((a, b) => Math.max(a, b), 0);
 
     expect(best, 'no unique raises effective HP').toBeGreaterThan(1.3);
@@ -716,6 +717,36 @@ describe('big numbers', () => {
       // And the same value as a double is exactly the failure being escaped.
       expect(TUNING.enemyHpBase * Math.pow(TUNING.enemyHpGrowth, stage - 1)).toBe(Infinity);
     }
+  });
+
+  it('resolves a stage far past where a double gives up', () => {
+    // The whole point, end to end. At stage 100,000 enemy HP is ~10^4,920 and a
+    // weapon's skill-level damage term is 1.05^100,000 - both Infinity as doubles,
+    // and Infinity anywhere in resolveStage means NaN seconds and NaN gold.
+    //
+    // Their RATIO is an ordinary number of seconds, which is exactly why the
+    // magnitudes are Bigs and the outcome fields are not.
+    const stage = 100_000;
+    const weapon = { ...rollItem(9, 1, stage), baseId: 'axe', rarity: 'rare' as const };
+    const save: SaveState = {
+      ...newSave(9, T0),
+      bestStage: stage,
+      currentStage: stage,
+      items: [weapon],
+      weapon: weapon.uid,
+      upgrades: { ...newSave(9, T0).upgrades, damage: 4000, health: 4000, toughness: 4000 },
+    };
+
+    const stats = deriveStats(save, { stage, isBoss: false, enemyHpFraction: 1 });
+    expect(Number.isFinite(stats.damage.exponent)).toBe(true);
+    expect(stats.damage.exponent).toBeGreaterThan(308);
+    expect(formatBig(statsDps(stats))).not.toMatch(/NaN|Infinity/);
+
+    const outcome = resolveStage(save, stage);
+    expect(Number.isFinite(outcome.seconds)).toBe(true);
+    expect(Number.isFinite(outcome.damageTakenFraction)).toBe(true);
+    expect(Number.isFinite(outcome.goldEarned.exponent)).toBe(true);
+    expect(Number.isFinite(farmRate(save, stage).exponent)).toBe(true);
   });
 
   it('migrates a v6 double into a string without changing what it holds', () => {
@@ -1504,10 +1535,13 @@ describe('power budget', () => {
     return { ...base, items, loadout: items.map((i) => i.uid) };
   };
 
+  // Ratios of two Bigs, collapsed to ordinary numbers. That is the shape the whole
+  // power budget is expressed in, and the reason the magnitudes themselves can be
+  // astronomical without anything downstream having to care.
   const dpsRatio = (save: SaveState) =>
-    statsDps(deriveStats(save, CTX)) / statsDps(deriveStats(base, CTX));
+    statsDps(deriveStats(save, CTX)).div(statsDps(deriveStats(base, CTX))).toNumber();
   const ehpRatio = (save: SaveState) =>
-    effectiveHp(deriveStats(save, CTX)) / effectiveHp(deriveStats(base, CTX));
+    effectiveHp(deriveStats(save, CTX)).div(effectiveHp(deriveStats(base, CTX))).toNumber();
 
   const combos = <T,>(xs: T[], k: number): T[][] =>
     k === 0
@@ -1931,11 +1965,11 @@ describe('derived stats', () => {
     const outcome = resolveStage(save, stage);
     const stats = deriveStats(save, { stage, isBoss: false, enemyHpFraction: 1 });
 
-    const poolHp = enemyCount(stage) * enemyHp(stage);
+    const poolHp = enemyHp(stage).mul(enemyCount(stage));
     const aoeTargets = Math.min(stats.area, enemyCount(stage));
-    const impliedDps = poolHp / (outcome.trashPhaseSeconds * aoeTargets);
+    const impliedDps = poolHp.div(outcome.trashPhaseSeconds * aoeTargets);
 
-    expect(statsDps(stats)).toBeCloseTo(impliedDps, 6);
+    expect(statsDps(stats).div(impliedDps).toNumber()).toBeCloseTo(1, 6);
   });
 
   it('effective HP is what damage is measured against', () => {
@@ -1944,7 +1978,7 @@ describe('derived stats', () => {
       upgrades: { ...newSave(1, T0).upgrades, health: 9, toughness: 5 },
     };
     const stats = deriveStats(save, { stage: 1, isBoss: false, enemyHpFraction: 1 });
-    expect(effectiveHp(stats)).toBeCloseTo(stats.maxHp * stats.toughness, 6);
+    expect(effectiveHp(stats).eq(stats.maxHp.mul(stats.toughness))).toBe(true);
   });
 });
 
@@ -1966,7 +2000,7 @@ describe('modifier layers', () => {
       else if (e.op === 'increased') buckets.increased += e.value;
       else buckets.more *= e.value;
     }
-    return (BASE_STATS.damage + buckets.flat) * (1 + buckets.increased) * buckets.more;
+    return BASE_STATS.damage.add(buckets.flat).mul(1 + buckets.increased).mul(buckets.more).toNumber();
   };
 
   const mod = (op: 'flat' | 'increased' | 'more', value: number): Effect => ({
@@ -2020,7 +2054,10 @@ describe('modifier layers', () => {
     const save = { ...newSave(1, T0), upgrades: { ...newSave(1, T0).upgrades, damage: 3 } };
     const stats = deriveStats(save, CTX);
     // The damage track is uncapped and therefore `more` - see trackLayer().
-    expect(stats.damage).toBeCloseTo(BASE_STATS.damage * Math.pow(1.07, 3), 9);
+    expect(stats.damage.toNumber()).toBeCloseTo(
+      BASE_STATS.damage.mul(Math.pow(1.07, 3)).toNumber(),
+      9,
+    );
   });
 
   it('keeps every uncapped upgrade track in the more layer', () => {

@@ -7,6 +7,7 @@
  * drift apart.
  */
 
+import { bigMax, BIG_ZERO, type Big } from './big';
 import {
   bossDps,
   bossGold,
@@ -31,7 +32,14 @@ export interface StageOutcome {
   failure: 'none' | 'died' | 'timeout';
   /** Seconds of the attempt — up to the point of death/timeout. */
   seconds: number;
-  goldEarned: number;
+  /**
+   * A Big, unlike every other field here.
+   *
+   * Seconds and fractions are ratios of astronomical quantities and stay small
+   * forever - which is exactly why the magnitudes have to be Bigs: `poolHp / dps` is
+   * only a normal number if both sides can be represented in the first place.
+   */
+  goldEarned: Big;
   trashPhaseSeconds: number;
   bossPhaseSeconds: number;
   /** Fraction of effective HP consumed. >1 means death. */
@@ -51,7 +59,7 @@ function ctxFor(stage: number, isBoss: boolean, hpFraction: number): EffectConte
 }
 
 /** Single-target damage per second in a given context. */
-function singleTargetDps(save: SaveState, ctx: EffectContext): number {
+function singleTargetDps(save: SaveState, ctx: EffectContext): Big {
   return statsDps(deriveStats(save, ctx));
 }
 
@@ -62,7 +70,7 @@ function singleTargetDps(save: SaveState, ctx: EffectContext): number {
  */
 function timeToKill(
   save: SaveState,
-  totalHp: number,
+  totalHp: Big,
   stage: number,
   isBoss: boolean,
   aoeTargets: number,
@@ -72,20 +80,23 @@ function timeToKill(
   for (let i = 0; i < bands.length - 1; i++) {
     const hi = bands[i];
     const lo = bands[i + 1];
-    const slice = totalHp * (hi - lo);
-    const dps = singleTargetDps(save, ctxFor(stage, isBoss, hi)) * aoeTargets;
-    if (dps <= 0) return Infinity;
-    seconds += slice / dps;
+    const slice = totalHp.mul(hi - lo);
+    const dps = singleTargetDps(save, ctxFor(stage, isBoss, hi)).mul(aoeTargets);
+    if (dps.lte(0)) return Infinity;
+    // The division is where the magnitudes cancel: an HP pool of 1e400 over a DPS of
+    // 1e398 is four seconds. Collapsed to a double here and never carried further,
+    // because everything downstream of this is time.
+    seconds += slice.div(dps).toNumber();
   }
   return seconds;
 }
 
 /** Gold from one trash kill, including artifact goldOnKill bonuses. */
-function goldPerTrashKill(save: SaveState, stage: number): number {
+function goldPerTrashKill(save: SaveState, stage: number): Big {
   const ctx = ctxFor(stage, false, 1);
   const stats = deriveStats(save, ctx);
-  const base = goldPerKill(stage) * (stageOverride(stage).goldMult ?? 1);
-  return base * stats.goldFind * (1 + goldOnKillBonus(save, ctx));
+  const base = goldPerKill(stage).mul(stageOverride(stage).goldMult ?? 1);
+  return base.mul(stats.goldFind).mul(1 + goldOnKillBonus(save, ctx));
 }
 
 /**
@@ -105,33 +116,33 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
   // flooring makes a single +0.25 area level round to zero effect - which makes
   // the entire Area track unbuyable. The renderer floors for display only.
   const aoeTargets = Math.min(stats.area, count);
-  const trashPoolHp = count * enemyHp(stage) * hpMult;
+  const trashPoolHp = enemyHp(stage).mul(count).mul(hpMult);
   const trashPhaseSeconds = timeToKill(save, trashPoolHp, stage, false, aoeTargets);
 
   const bossStats = deriveStats(save, ctxFor(stage, true, 1));
-  const bossPhaseSeconds = timeToKill(save, bossHp(stage) * hpMult, stage, true, 1);
+  const bossPhaseSeconds = timeToKill(save, bossHp(stage).mul(hpMult), stage, true, 1);
 
   const ehp = effectiveHp(stats);
   // A loadout can carry toughness conditional on boss fights, so the boss phase
   // is measured against its own effective HP, expressed as a scale on the pool.
-  const bossIncomingScale = ehp / effectiveHp(bossStats);
+  const bossIncomingScale = ehp.div(effectiveHp(bossStats));
 
-  const trashIncoming = enemyDps(stage) * contactCount(stage);
-  const bossIncoming = bossDps(stage) * bossIncomingScale;
+  const trashIncoming = enemyDps(stage).mul(contactCount(stage));
+  const bossIncoming = bossDps(stage).mul(bossIncomingScale);
 
-  const damageDuringTrash = trashPhaseSeconds * trashIncoming;
-  const damageDuringBoss = bossPhaseSeconds * bossIncoming;
-  const totalDamage = damageDuringTrash + damageDuringBoss;
+  const damageDuringTrash = trashIncoming.mul(trashPhaseSeconds);
+  const damageDuringBoss = bossIncoming.mul(bossPhaseSeconds);
+  const totalDamage = damageDuringTrash.add(damageDuringBoss);
   const totalSeconds = trashPhaseSeconds + bossPhaseSeconds;
 
-  const diedInTrash = damageDuringTrash >= ehp;
-  const died = totalDamage >= ehp;
+  const diedInTrash = damageDuringTrash.gte(ehp);
+  const died = totalDamage.gte(ehp);
   const timedOut = totalSeconds > STAGE_TIME_LIMIT_SECONDS;
 
   if (died || timedOut) {
     // Partial credit: gold for whatever was killed before the run ended.
     const survivedSeconds = diedInTrash
-      ? Math.min(trashPhaseSeconds, ehp / Math.max(trashIncoming, 1e-9))
+      ? Math.min(trashPhaseSeconds, ehp.div(bigMax(trashIncoming, 1e-9)).toNumber())
       : trashPhaseSeconds;
     const cappedSeconds = Math.min(survivedSeconds, STAGE_TIME_LIMIT_SECONDS);
     const fractionOfTrash =
@@ -140,32 +151,31 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
       cleared: false,
       failure: died && !diedInTrash && timedOut ? 'timeout' : died ? 'died' : 'timeout',
       seconds: cappedSeconds,
-      goldEarned: count * fractionOfTrash * goldPerTrashKill(save, stage),
+      goldEarned: goldPerTrashKill(save, stage).mul(count).mul(fractionOfTrash),
       trashPhaseSeconds,
       bossPhaseSeconds,
-      damageTakenFraction: totalDamage / ehp,
-      trashDamageFraction: damageDuringTrash / ehp,
-      bossDamageFraction: damageDuringBoss / ehp,
+      damageTakenFraction: totalDamage.div(ehp).toNumber(),
+      trashDamageFraction: damageDuringTrash.div(ehp).toNumber(),
+      bossDamageFraction: damageDuringBoss.div(ehp).toNumber(),
     };
   }
 
   const bossCtx = ctxFor(stage, true, 1);
-  const bossReward =
-    bossGold(stage) *
-    (stageOverride(stage).goldMult ?? 1) *
-    bossStats.goldFind *
-    (1 + goldOnKillBonus(save, bossCtx));
+  const bossReward = bossGold(stage)
+    .mul(stageOverride(stage).goldMult ?? 1)
+    .mul(bossStats.goldFind)
+    .mul(1 + goldOnKillBonus(save, bossCtx));
 
   return {
     cleared: true,
     failure: 'none',
     seconds: totalSeconds,
-    goldEarned: count * goldPerTrashKill(save, stage) + bossReward,
+    goldEarned: goldPerTrashKill(save, stage).mul(count).add(bossReward),
     trashPhaseSeconds,
     bossPhaseSeconds,
-    damageTakenFraction: totalDamage / ehp,
-    trashDamageFraction: damageDuringTrash / ehp,
-    bossDamageFraction: damageDuringBoss / ehp,
+    damageTakenFraction: totalDamage.div(ehp).toNumber(),
+    trashDamageFraction: damageDuringTrash.div(ehp).toNumber(),
+    bossDamageFraction: damageDuringBoss.div(ehp).toNumber(),
   };
 }
 
@@ -184,33 +194,35 @@ export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
   const bossCtx = ctxFor(stage, true, 1);
   const bossStats = deriveStats(save, bossCtx);
 
-  const hp = bossHp(stage) * DUNGEON_BOSS_HP_MULT;
+  const hp = bossHp(stage).mul(DUNGEON_BOSS_HP_MULT);
   const seconds = timeToKill(save, hp, stage, true, 1);
   const ehp = effectiveHp(bossStats);
-  const incoming = bossDps(stage) * DUNGEON_BOSS_DPS_MULT;
+  const incoming = bossDps(stage).mul(DUNGEON_BOSS_DPS_MULT);
 
-  const damage = seconds * incoming;
-  const died = damage >= ehp;
+  const damage = incoming.mul(seconds);
+  const died = damage.gte(ehp);
   const timedOut = seconds > STAGE_TIME_LIMIT_SECONDS;
 
   const outcome = {
     trashPhaseSeconds: 0,
     bossPhaseSeconds: seconds,
-    damageTakenFraction: damage / ehp,
+    damageTakenFraction: damage.div(ehp).toNumber(),
     trashDamageFraction: 0,
-    bossDamageFraction: damage / ehp,
+    bossDamageFraction: damage.div(ehp).toNumber(),
   };
 
   if (died || timedOut) {
     // No partial credit. A dungeon pays on the kill or not at all - that is
     // what makes spending the key a decision rather than a formality.
-    const survived = died ? Math.min(seconds, ehp / Math.max(incoming, 1e-9)) : seconds;
+    const survived = died
+      ? Math.min(seconds, ehp.div(bigMax(incoming, 1e-9)).toNumber())
+      : seconds;
     return {
       ...outcome,
       cleared: false,
       failure: died ? 'died' : 'timeout',
       seconds: Math.min(survived, STAGE_TIME_LIMIT_SECONDS),
-      goldEarned: 0,
+      goldEarned: BIG_ZERO,
       bossPhaseSeconds: Math.min(survived, STAGE_TIME_LIMIT_SECONDS),
     };
   }
@@ -220,11 +232,10 @@ export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
     cleared: true,
     failure: 'none',
     seconds,
-    goldEarned:
-      bossGold(stage) *
-      DUNGEON_GOLD_MULT *
-      bossStats.goldFind *
-      (1 + goldOnKillBonus(save, bossCtx)),
+    goldEarned: bossGold(stage)
+      .mul(DUNGEON_GOLD_MULT)
+      .mul(bossStats.goldFind)
+      .mul(1 + goldOnKillBonus(save, bossCtx)),
   };
 }
 
@@ -235,9 +246,9 @@ export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
  * the function the server uses for offline progress, which is why it takes no
  * elapsed time and no randomness.
  */
-export function farmRate(save: SaveState, stage: number): number {
-  if (stage < 1) return 0;
-  return killsPerSecond(save, stage) * goldPerTrashKill(save, stage);
+export function farmRate(save: SaveState, stage: number): Big {
+  if (stage < 1) return BIG_ZERO;
+  return goldPerTrashKill(save, stage).mul(killsPerSecond(save, stage));
 }
 
 /**
@@ -254,8 +265,8 @@ export function killsPerSecond(save: SaveState, stage: number): number {
   const aoeTargets = Math.min(stats.area, enemyCount(stage));
   const hpMult = stageOverride(stage).hpMult ?? 1;
 
-  const perEnemyHp = enemyHp(stage) * hpMult;
-  const secondsPerWave = timeToKill(save, perEnemyHp * aoeTargets, stage, false, aoeTargets);
+  const perEnemyHp = enemyHp(stage).mul(hpMult);
+  const secondsPerWave = timeToKill(save, perEnemyHp.mul(aoeTargets), stage, false, aoeTargets);
   if (!Number.isFinite(secondsPerWave) || secondsPerWave <= 0) return 0;
 
   return aoeTargets / secondsPerWave;

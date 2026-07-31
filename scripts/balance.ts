@@ -19,6 +19,7 @@ import {
   applyCommand,
   applyCurrencyToItem,
   availableTiers,
+  big,
   CURRENCIES,
   currencyLegality,
   DISSEMBLE_YIELD,
@@ -71,7 +72,9 @@ function clearScore(save: SaveState, stage: number): number {
 
 /** Objective the greedy agent maximises: beat the stage, and farm faster. */
 function value(save: SaveState, stage: number): number {
-  return Math.log(clearScore(save, stage)) + 0.5 * Math.log(farmRate(save, save.bestStage) + 1);
+  // Farm rate enters in log space. It is a Big and can sit past 1e300, so `+ 1` on the
+  // raw value would be a no-op and Math.log of it would be Infinity.
+  return Math.log(clearScore(save, stage)) + 0.5 * farmRate(save, save.bestStage).add(1).ln();
 }
 
 function withUpgrade(save: SaveState, key: UpgradeKey): SaveState {
@@ -121,7 +124,7 @@ function diagnose(save: SaveState, stage: number): string {
     `  outcome: cleared=${o.cleared} failure=${o.failure} seconds=${o.seconds.toFixed(2)} ` +
       `damageTaken=${o.damageTakenFraction.toFixed(3)} trash=${o.trashPhaseSeconds.toFixed(2)}s ` +
       `boss=${o.bossPhaseSeconds.toFixed(2)}s`,
-    `  gold=${formatBig(fromSave(save.gold))} value=${before.toFixed(4)} farm=${farmRate(save, save.bestStage).toExponential(2)}`,
+    `  gold=${formatBig(fromSave(save.gold))} value=${before.toFixed(4)} farm=${formatBig(farmRate(save, save.bestStage))}`,
   ];
   for (const key of UPGRADE_KEYS) {
     const level = save.upgrades[key];
@@ -515,18 +518,18 @@ export function runLadder(seed = SEED): {
           stalled = true;
           break;
         }
-        if (rate <= 0) continue; // no farm income yet; keep re-attempting for partial gold
+        if (rate.lte(0)) continue; // no farm income yet; keep re-attempting for partial gold
         // Divided as Bigs and only then collapsed to a number of seconds. The deficit
         // and the rate are both astronomical late on; their RATIO is a normal number,
         // which is exactly the shape this type handles and a double cannot.
         const seconds = fromSave(save.gold).sub(buy.cost).neg().div(rate).toNumber();
         if (!Number.isFinite(seconds) || seconds > PATIENCE_SECONDS) {
           stalled = true;
-          stallReason = `next upgrade (${buy.key}) costs ${formatBig(buy.cost)} at ${rate.toExponential(2)} gold/s = ${fmtDuration(seconds)} of farming`;
+          stallReason = `next upgrade (${buy.key}) costs ${formatBig(buy.cost)} at ${formatBig(rate)} gold/s = ${fmtDuration(seconds)} of farming`;
           break;
         }
         elapsed += seconds;
-        save = { ...save, gold: toSave(fromSave(save.gold).add(rate * seconds)) };
+        save = { ...save, gold: toSave(fromSave(save.gold).add(rate.mul(seconds))) };
       }
 
       if (attempts > 5000) {
@@ -543,7 +546,7 @@ export function runLadder(seed = SEED): {
       cumulativeSeconds: elapsed,
       stageSeconds: elapsed - stageStart,
       clearSeconds: resolveStage(save, stage).seconds,
-      goldPerSecond: farmRate(save, stage),
+      goldPerSecond: farmRate(save, stage).toNumber(),
       totalLevels: UPGRADE_KEYS.reduce((n, k) => n + save.upgrades[k], 0),
     });
   }
@@ -575,7 +578,11 @@ export function report(): string {
         fmtDuration(r.stageSeconds).padStart(14),
         fmtDuration(r.cumulativeSeconds).padStart(14),
         `${r.clearSeconds.toFixed(1)}s`.padStart(11),
-        r.goldPerSecond.toFixed(1).padStart(10),
+        // Formatted, not printed raw. `toFixed(1)` on a value of 1e20 is twenty-one
+        // digits of false precision, and the last two of them move when an unrelated
+        // multiplication is reordered - which made the golden fail on a change that
+        // altered no outcome. Three significant figures is what the column is for.
+        formatBig(big(r.goldPerSecond)).padStart(10),
         String(r.totalLevels).padStart(7),
       ].join(' |'),
     );

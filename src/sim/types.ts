@@ -6,6 +6,7 @@
  * route handler (authoritative). The ESLint boundary rule enforces this.
  */
 
+import { big, type Big } from './big';
 import type { CurrencyPurse } from './content/currency';
 import type { ItemInstance } from './content/schema';
 
@@ -51,7 +52,26 @@ export const STAT_KEYS = [
 ] as const;
 
 export type StatKey = (typeof STAT_KEYS)[number];
-export type Stats = Record<StatKey, number>;
+
+/**
+ * Which stats are magnitudes rather than rates, probabilities or counts.
+ *
+ * These two are the ones that outgrow a double, and for the same reason gold does:
+ * every uncapped upgrade track is a `more` multiplier, so their value is a product
+ * that compounds without bound. Damage additionally carries the weapon's skill-level
+ * term, which is 1.05 per stage on its own.
+ *
+ * The rest stay doubles ON PURPOSE. Crit chance is clamped to 0..1, area is a target
+ * count, toughness and gold find sit behind capped tracks. Attack speed and resource
+ * regen are the two that could eventually overflow - 1.04 per level puts them past
+ * 1.8e308 near **18,000 levels**, which the cost curve reaches only far beyond stage
+ * 1e5. When that matters they move here; the number above is what makes it a data
+ * change rather than another investigation.
+ */
+export const MAGNITUDE_STAT_KEYS = ['damage', 'maxHp'] as const;
+export type MagnitudeStatKey = (typeof MAGNITUDE_STAT_KEYS)[number];
+
+export type Stats = { [K in StatKey]: K extends MagnitudeStatKey ? Big : number };
 
 /**
  * Stats with zero upgrades and no items.
@@ -70,12 +90,12 @@ export type Stats = Record<StatKey, number>;
  * so every clear time, every gold figure and the whole ladder are unchanged.
  */
 export const BASE_STATS: Stats = {
-  damage: 60,
+  damage: big(60),
   attackSpeed: 1.5,
   area: 2,
   critChance: 0.05,
   critMult: 2.0,
-  maxHp: 100,
+  maxHp: big(100),
   /** A multiplier on effective HP, so its base is 1 and it has no flat layer. */
   toughness: 1.0,
   goldFind: 1.0,

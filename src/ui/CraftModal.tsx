@@ -39,7 +39,7 @@ import {
   type ItemInstance,
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
-import { compact, CURRENCY_TIER_STYLE, RARITY_STYLE } from './format';
+import { CURRENCY_TIER_STYLE, RARITY_STYLE } from './format';
 import { ItemMods } from './ItemMods';
 
 interface Props {
@@ -49,8 +49,8 @@ interface Props {
   equipped: boolean;
   busy: boolean;
   /** Live character figures, so the effect of an equipped item's roll is visible. */
-  dps: number;
-  effectiveHp: number;
+  dps: Big;
+  effectiveHp: Big;
   onApply: (currencyId: CurrencyId) => void;
   onReroll: () => void;
   onClose: () => void;
@@ -126,11 +126,11 @@ export function CraftModal({
             <dl className="mt-2 flex gap-4 border-t border-neutral-800 pt-2 text-[11px]">
               <div className="flex gap-1.5">
                 <dt className="text-neutral-500">DPS</dt>
-                <dd className="font-mono text-neutral-200">{compact(dps)}</dd>
+                <dd className="font-mono text-neutral-200">{formatBig(dps)}</dd>
               </div>
               <div className="flex gap-1.5">
                 <dt className="text-neutral-500">Effective HP</dt>
-                <dd className="font-mono text-neutral-200">{compact(effectiveHp)}</dd>
+                <dd className="font-mono text-neutral-200">{formatBig(effectiveHp)}</dd>
               </div>
               {/* Only while equipped: an item on the bench changes nothing, and
                   showing unmoving numbers would suggest the roll did nothing. */}

@@ -26,7 +26,7 @@ export interface AttemptRequest {
 
 interface Props {
   killsPerSecond: number;
-  hitSize: number;
+  hitLabel: (jitter: number) => string;
   attacksPerSecond: number;
   stage: number;
   stageTimeLimit: number;
@@ -72,7 +72,7 @@ function drawBar(
 
 export function GameCanvas({
   killsPerSecond,
-  hitSize,
+  hitLabel,
   attacksPerSecond,
   stage,
   stageTimeLimit,
@@ -85,10 +85,10 @@ export function GameCanvas({
   // Written in an effect rather than during render: React may render a
   // component without committing it, and the ticker would then be drawing from
   // numbers that were never real.
-  const optionsRef = useRef({ killsPerSecond, hitSize, attacksPerSecond, stage });
+  const optionsRef = useRef({ killsPerSecond, hitLabel, attacksPerSecond, stage });
   useEffect(() => {
-    optionsRef.current = { killsPerSecond, hitSize, attacksPerSecond, stage };
-  }, [killsPerSecond, hitSize, attacksPerSecond, stage]);
+    optionsRef.current = { killsPerSecond, hitLabel, attacksPerSecond, stage };
+  }, [killsPerSecond, hitLabel, attacksPerSecond, stage]);
 
   // The ticker is created once, so anything React changes later has to reach it
   // through a ref rather than through the closure it captured.

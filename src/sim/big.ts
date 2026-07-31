@@ -60,6 +60,14 @@ export function big(value: BigInput): Big {
 export const BIG_ZERO = new Decimal(0);
 export const BIG_ONE = new Decimal(1);
 
+export function bigMax(a: BigInput, b: BigInput): Big {
+  return Decimal.max(a, b);
+}
+
+export function bigMin(a: BigInput, b: BigInput): Big {
+  return Decimal.min(a, b);
+}
+
 /**
  * Read a magnitude out of a save.
  *

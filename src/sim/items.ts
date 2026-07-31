@@ -681,6 +681,9 @@ export function itemPower(item: ItemInstance): number {
     if (effect.kind === 'keyDrop') return power + (effect.multiplier - 1) * 0.3;
     if (effect.op === 'more') return power + (effect.value - 1);
     if (effect.op === 'increased') return power + effect.value;
-    return power + effect.value / Math.max(BASE_STATS[effect.stat], 1e-9);
+    // The base is a Big for damage and max HP, and a plain number for the rest. Read
+    // through Number() because this is a heuristic on the SIZE of a flat roll against
+    // its base - both are small here, and a Decimal would buy nothing.
+    return power + effect.value / Math.max(Number(BASE_STATS[effect.stat]), 1e-9);
   }, 0);
 }

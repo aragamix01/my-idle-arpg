@@ -21,6 +21,7 @@ import {
   resolveDungeon,
   resolveStage,
   STAGE_TIME_LIMIT_SECONDS,
+  statsFromWire,
   UPGRADE_TRACKS,
   type Big,
   type UpgradeKey,
@@ -117,14 +118,20 @@ export function Game() {
   // the HUD ticks ten times a second and this is a string every time it arrives.
   const gold = fromSave(hud.gold);
   const offlineGold = fromSave(hud.pendingOfflineGold);
+  // The snapshot crosses the wire as JSON, so its magnitudes arrive as strings.
+  const stats = statsFromWire(hud.stats);
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-100">
       <div className="absolute inset-0">
         <GameCanvas
           killsPerSecond={rate}
-          hitSize={hud.stats.damage}
-          attacksPerSecond={hud.stats.attackSpeed}
+          // A formatter rather than a number. Damage is a Big and the cosmetic layer
+          // is deliberately kept on bounded values - handing it the raw stat would put
+          // `Infinity` in the floating combat text the moment the ladder ran deep.
+          // The renderer owns the jitter; the UI owns how a magnitude reads.
+          hitLabel={(jitter) => formatBig(stats.damage.mul(jitter))}
+          attacksPerSecond={stats.attackSpeed}
           stage={Math.max(1, hud.bestStage || 1)}
           stageTimeLimit={STAGE_TIME_LIMIT_SECONDS}
           attempt={attempt}
@@ -135,10 +142,10 @@ export function Game() {
       <div className="pointer-events-none relative z-10 flex min-h-screen flex-col justify-between p-6">
         <header className="pointer-events-auto flex flex-wrap gap-6 text-sm">
           <Stat label="gold" value={formatBig(gold)} />
-          <Stat label="gold/s" value={compact(hud.goldPerSecond)} />
+          <Stat label="gold/s" value={formatBig(fromSave(hud.goldPerSecond))} />
           <Stat label="stage" value={String(hud.currentStage)} />
           <Stat label="best" value={String(hud.bestStage)} />
-          <Stat label="damage" value={compact(hud.stats.damage)} />
+          <Stat label="damage" value={formatBig(stats.damage)} />
           <Stat label="kills/s" value={compact(rate)} />
         </header>
 

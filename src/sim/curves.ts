@@ -97,29 +97,37 @@ export function contactCount(stage: number): number {
   return Math.min(3 + Math.floor(stage / 8), 12);
 }
 
-export function enemyHp(stage: number): number {
-  return TUNING.enemyHpBase * Math.pow(TUNING.enemyHpGrowth, stage - 1);
+/**
+ * The four curves that grow exponentially in stage, and therefore have to be Bigs.
+ *
+ * `1.12^stage` passes 1.8e308 near **stage 6,100**. As doubles these returned
+ * Infinity from there on, and Infinity in enemyHp means NaN clear times, NaN gold and
+ * a game that stops working at a stage number nobody chose. Their RATIOS - clear
+ * time, damage fractions - stay ordinary numbers, which is what makes this work.
+ */
+export function enemyHp(stage: number): Big {
+  return big(TUNING.enemyHpBase).mul(big(TUNING.enemyHpGrowth).pow(stage - 1));
 }
 
-export function bossHp(stage: number): number {
-  return enemyHp(stage) * TUNING.bossHpMult;
+export function bossHp(stage: number): Big {
+  return enemyHp(stage).mul(TUNING.bossHpMult);
 }
 
-export function enemyDps(stage: number): number {
-  return TUNING.enemyDpsBase * Math.pow(TUNING.enemyDpsGrowth, stage - 1);
+export function enemyDps(stage: number): Big {
+  return big(TUNING.enemyDpsBase).mul(big(TUNING.enemyDpsGrowth).pow(stage - 1));
 }
 
-export function bossDps(stage: number): number {
-  return enemyDps(stage) * TUNING.bossDpsMult;
+export function bossDps(stage: number): Big {
+  return enemyDps(stage).mul(TUNING.bossDpsMult);
 }
 
-export function goldPerKill(stage: number): number {
-  return TUNING.goldBase * Math.pow(TUNING.goldGrowth, stage - 1);
+export function goldPerKill(stage: number): Big {
+  return big(TUNING.goldBase).mul(big(TUNING.goldGrowth).pow(stage - 1));
 }
 
 /** Boss kill pays a lump sum on top of trash gold. */
-export function bossGold(stage: number): number {
-  return goldPerKill(stage) * 25;
+export function bossGold(stage: number): Big {
+  return goldPerKill(stage).mul(25);
 }
 
 /**
@@ -513,8 +521,8 @@ export function rerollCost(rarity: Rarity, itemLevel: number, rerolls: number): 
     // Uniques have no affixes to reroll; commands.ts refuses before reaching here.
     unique: Infinity,
   };
-  const base = goldPerKill(Math.max(1, itemLevel)) * 30 * rarityMultiplier[rarity];
-  return big(base).mul(big(1.35).pow(rerolls)).ceil();
+  const base = goldPerKill(Math.max(1, itemLevel)).mul(30).mul(rarityMultiplier[rarity]);
+  return base.mul(big(1.35).pow(rerolls)).ceil();
 }
 
 // --- Offline --------------------------------------------------------------

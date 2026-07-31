@@ -12,7 +12,15 @@ import { farmRate } from './combat';
 import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from './curves';
 import { computeOffline } from './offline';
 import { deriveStats } from './stats';
-import { INVENTORY_CAP, UPGRADE_KEYS, type SaveState, type Stats, type UpgradeKey } from './types';
+import {
+  INVENTORY_CAP,
+  UPGRADE_KEYS,
+  type MagnitudeStatKey,
+  type SaveState,
+  type StatKey,
+  type Stats,
+  type UpgradeKey,
+} from './types';
 import type { CurrencyPurse, ItemInstance } from './content';
 
 export interface UpgradeView {
@@ -25,13 +33,32 @@ export interface UpgradeView {
   maxed: boolean;
 }
 
+/**
+ * Stats as they cross the wire.
+ *
+ * A Decimal is an object with a prototype, and JSON keeps the fields while losing the
+ * prototype - so a snapshot that travelled through `NextResponse.json` arrives as
+ * `{mantissa, exponent}` with no `.mul`, and the first thing the panel does with it
+ * throws. Strings survive; the UI revives them with `statsFromWire`.
+ */
+export type WireStats = { [K in StatKey]: K extends MagnitudeStatKey ? string : number };
+
+export function statsToWire(stats: Stats): WireStats {
+  return { ...stats, damage: toSave(stats.damage), maxHp: toSave(stats.maxHp) };
+}
+
+export function statsFromWire(stats: WireStats): Stats {
+  return { ...stats, damage: fromSave(stats.damage), maxHp: fromSave(stats.maxHp) };
+}
+
 export interface HudSnapshot {
   /** Decimal string - see the note on SaveState.gold. */
   gold: string;
   bestStage: number;
   currentStage: number;
-  stats: Stats;
-  goldPerSecond: number;
+  stats: WireStats;
+  /** Decimal string, like every other magnitude that crosses the wire. */
+  goldPerSecond: string;
   upgrades: UpgradeView[];
   /** Decimal string. */
   pendingOfflineGold: string;
@@ -53,12 +80,14 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     gold: toSave(gold),
     bestStage: save.bestStage,
     currentStage: save.currentStage,
-    stats: deriveStats(save, {
-      stage: save.currentStage,
-      isBoss: false,
-      enemyHpFraction: 1,
-    }),
-    goldPerSecond: farmRate(save, save.bestStage),
+    stats: statsToWire(
+      deriveStats(save, {
+        stage: save.currentStage,
+        isBoss: false,
+        enemyHpFraction: 1,
+      }),
+    ),
+    goldPerSecond: toSave(farmRate(save, save.bestStage)),
     upgrades: UPGRADE_KEYS.map((key) => {
       const level = save.upgrades[key];
       const maxed = isUpgradeMaxed(key, level);

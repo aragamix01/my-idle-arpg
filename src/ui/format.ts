@@ -256,6 +256,12 @@ export function statEntries(stats: Stats): { key: StatKey; label: string; value:
     .map((key) => ({
       key,
       label: STAT_LABELS[key].label,
-      value: STAT_LABELS[key].format(stats[key]),
+      // Damage and Max HP arrive as Bigs; the rest as numbers. Both formatters below
+      // take a number, and these two are the only stats whose formatter is `compact` -
+      // so a Big goes straight through formatBig instead of being narrowed first.
+      value:
+        typeof stats[key] === 'number'
+          ? STAT_LABELS[key].format(stats[key])
+          : formatBig(stats[key]),
     }));
 }
