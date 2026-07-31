@@ -30,6 +30,7 @@ import {
   getCurrency,
   INVENTORY_CAP,
   isUpgradeMaxed,
+  equipSlots,
   ITEM_SLOTS,
   isWeaponBase,
   itemPower,
@@ -388,7 +389,11 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
       .sort((a, b) => itemPower(b) - itemPower(a))
       .slice(0, LOADOUT_CANDIDATES);
 
-    for (let slot = 0; slot < ITEM_SLOTS; slot++) {
+    // The LIVE count, not the base one. A unique that grants slots would otherwise
+    // give the agent positions it never tries to fill, and the harness would report
+    // the item as worthless because nothing ever went in the slots it opened.
+    const slots = equipSlots(current, { stage, isBoss: false, enemyHpFraction: 1 });
+    for (let slot = 0; slot < slots; slot++) {
       for (const item of candidates) {
         if (current.loadout.includes(item.uid)) continue;
         if (isWeaponBase(item.baseId)) continue; // weapons have their own slot

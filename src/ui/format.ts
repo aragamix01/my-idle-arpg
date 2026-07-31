@@ -119,6 +119,14 @@ export function describeEffect(effect: Effect): string {
     return `x${effect.multiplier.toFixed(2)} dungeon key drop chance${suffix}`;
   }
 
+  if (effect.kind === 'equipSlots') {
+    const n = Math.abs(effect.delta);
+    const slots = n === 1 ? 'slot' : 'slots';
+    return effect.delta >= 0
+      ? `+${n} equip ${slots}${suffix}`
+      : `−${n} equip ${slots}${suffix}`;
+  }
+
   const { label } = STAT_LABELS[effect.stat];
 
   // The three layers must be visibly different, because they are priced

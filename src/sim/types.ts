@@ -132,8 +132,23 @@ export const UPGRADE_KEYS = [
 export type UpgradeKey = (typeof UPGRADE_KEYS)[number];
 export type UpgradeLevels = Record<UpgradeKey, number>;
 
-/** Number of item slots the player can equip at once. */
+/**
+ * Item slots a character has before anything modifies the count.
+ *
+ * The BASE, not the total - see equipSlots() in stats.ts. It is also the window
+ * within which an item is allowed to change the count at all, which is the rule that
+ * keeps that calculation from running away.
+ */
 export const ITEM_SLOTS = 4;
+
+/**
+ * Hard ceiling on the loadout array, and therefore on what any item can grant.
+ *
+ * The array is this long in every save; positions past the live count hold items that
+ * are simply inert. A fixed length is what makes the slot count a derived number
+ * instead of a save migration every time a unique changes it.
+ */
+export const MAX_ITEM_SLOTS = 7;
 
 /**
  * Inventory size.

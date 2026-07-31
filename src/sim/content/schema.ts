@@ -93,6 +93,22 @@ export const EffectSchema = z.discriminatedUnion('kind', [
       when: ConditionSchema.optional(),
     })
     .strict(),
+  /**
+   * Changes how many gear slots the character has.
+   *
+   * A fourth kind rather than a stat, for the same reason keyDrop is one: a slot count
+   * is an integer the layer machinery has nothing to say about. Running it through
+   * `(base + flat) x (1 + increased) x more` would mean a loadout of 4.7 slots.
+   *
+   * Only items in the first ITEM_SLOTS positions are consulted - see equipSlots().
+   */
+  z
+    .object({
+      kind: z.literal('equipSlots'),
+      delta: z.number().int(),
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
 ]);
 
 export type Effect = z.infer<typeof EffectSchema>;
@@ -408,6 +424,13 @@ export const UniqueEffectSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('keyDrop'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('equipSlots'),
       roll: RollRangeSchema,
       when: ConditionSchema.optional(),
     })

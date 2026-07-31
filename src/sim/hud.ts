@@ -11,7 +11,7 @@ import { fromSave, toSave } from './big';
 import { farmRate } from './combat';
 import { OFFLINE_CAP_SECONDS, upgradeCost, isUpgradeMaxed, UPGRADE_TRACKS } from './curves';
 import { computeOffline } from './offline';
-import { deriveStats } from './stats';
+import { deriveStats, equipSlots } from './stats';
 import {
   INVENTORY_CAP,
   UPGRADE_KEYS,
@@ -64,6 +64,14 @@ export interface HudSnapshot {
   pendingOfflineGold: string;
   offlineCapReached: boolean;
   loadout: (string | null)[];
+  /**
+   * How many of those positions are live.
+   *
+   * Derived rather than constant now that a unique can grant or remove slots, and
+   * sent rather than recomputed in the panel so the two cannot disagree about which
+   * slots exist.
+   */
+  equipSlots: number;
   /** Equipped weapon uid, or null for unarmed. */
   weapon: string | null;
   items: ItemInstance[];
@@ -75,18 +83,15 @@ export interface HudSnapshot {
 export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
   const offline = computeOffline(save, nowMs);
   const gold = fromSave(save.gold);
+  // One context for everything derived here, so the sheet, the slot count and the
+  // DPS figure are all describing the same moment.
+  const ctx = { stage: save.currentStage, isBoss: false, enemyHpFraction: 1 };
 
   return {
     gold: toSave(gold),
     bestStage: save.bestStage,
     currentStage: save.currentStage,
-    stats: statsToWire(
-      deriveStats(save, {
-        stage: save.currentStage,
-        isBoss: false,
-        enemyHpFraction: 1,
-      }),
-    ),
+    stats: statsToWire(deriveStats(save, ctx)),
     goldPerSecond: toSave(farmRate(save, save.bestStage)),
     upgrades: UPGRADE_KEYS.map((key) => {
       const level = save.upgrades[key];
@@ -104,6 +109,7 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     pendingOfflineGold: toSave(offline.goldEarned),
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
+    equipSlots: equipSlots(save, ctx),
     weapon: save.weapon,
     items: save.items,
     currency: save.currency,

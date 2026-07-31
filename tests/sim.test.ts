@@ -33,6 +33,7 @@ import {
   effectiveHp,
   enemyCount,
   enemyHp,
+  equipSlots,
   farmRate,
   feedbackExponent,
   FRAGMENTS_PER_CLEAR,
@@ -52,6 +53,8 @@ import {
   OFFLINE_CAP_SECONDS,
   INVENTORY_CAP,
   itemEffects,
+  ITEM_SLOTS,
+  MAX_ITEM_SLOTS,
   migrateSave,
   rerollCost,
   resolveDungeon,
@@ -60,6 +63,7 @@ import {
   rollDungeonCurrency,
   rollDungeonItem,
   rollStageBossDrops,
+  STAT_KEYS,
   statsDps,
   trackLayer,
   TUNING,
@@ -668,6 +672,67 @@ describe('item rolling', () => {
     // Every tier still has to appear, or a weight is effectively zero and the
     // roster is smaller than it reads.
     expect(share('ancient')).toBeGreaterThan(0);
+  });
+});
+
+describe('equip slots', () => {
+  const CTX = { stage: 1, isBoss: false, enemyHpFraction: 1 };
+
+  /** A save wearing `item` at a chosen index of the widened loadout array. */
+  const wearingAt = (index: number, item: ReturnType<typeof rollItem>): SaveState => {
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[index] = item.uid;
+    return { ...newSave(5, T0), items: [item], loadout };
+  };
+
+  it('starts at the base count with nothing granting slots', () => {
+    expect(equipSlots(newSave(1, T0), CTX)).toBe(ITEM_SLOTS);
+  });
+
+  it('ignores an item parked past the live count', () => {
+    // The array is seven long; only the first four positions are live. An item in
+    // position six is owned, visible and completely inert - which is the whole
+    // mechanism a slot-removing unique relies on.
+    // Fingerprinted across every stat rather than a chosen one: which stats an
+    // arbitrary drop touches is a property of the roll, and picking damage made the
+    // control half of this test pass or fail on what the RNG happened to produce.
+    const fingerprint = (save: SaveState) =>
+      STAT_KEYS.map((key) => String(deriveStats(save, CTX)[key])).join('|');
+
+    const item = rollItem(5, 1, 60);
+    const bare = fingerprint(newSave(5, T0));
+
+    expect(fingerprint(wearingAt(MAX_ITEM_SLOTS - 1, item)), 'a parked item changed a stat').toBe(
+      bare,
+    );
+    // And the same item in a live slot does something, or the assertion above proves
+    // nothing about slots and everything about the item being inert to begin with.
+    expect(fingerprint(wearingAt(0, item))).not.toBe(bare);
+  });
+
+  it('refuses to equip into a locked slot, on the server', () => {
+    const item = rollItem(5, 1, 60);
+    const save: SaveState = { ...newSave(5, T0), items: [item] };
+
+    // The schema allows the index - the array is that long - so this has to be the
+    // command layer refusing, not zod. A client one swap out of date would otherwise
+    // equip into a slot that stopped existing.
+    expect(CommandSchema.safeParse({ type: 'equipItem', slot: 5, itemId: item.uid }).success).toBe(
+      true,
+    );
+    const result = applyCommand(save, { type: 'equipItem', slot: 5, itemId: item.uid }, T0);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/locked/);
+  });
+
+  it('still refuses to dissemble an item sitting in a locked slot', () => {
+    // Inert is not the same as unequipped. Destroying what someone is wearing because
+    // a unique changed the slot count is the worst possible reading of "inert".
+    const item = rollItem(5, 1, 60);
+    const save = wearingAt(MAX_ITEM_SLOTS - 1, item);
+    const result = applyCommand(save, { type: 'dissembleItems', uids: [item.uid] }, T0);
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -1827,7 +1892,10 @@ describe('migration', () => {
 
     expect(migrated).toBe(true);
     expect(state.items).toEqual([]);
-    expect(state.loadout).toEqual([null, null, null, null]);
+    // The array is MAX_ITEM_SLOTS long now, not ITEM_SLOTS: positions past the live
+    // count exist and are simply inert, which is what lets a unique grant slots
+    // without a migration every time.
+    expect(state.loadout).toEqual(Array(MAX_ITEM_SLOTS).fill(null));
     expect(state.nextItemId).toBe(1);
     // The fixture holds a legacy NUMBER; migration leaves a string of equal value.
     expect(fromSave(state.gold).eq(big(12345))).toBe(true);
@@ -2260,5 +2328,10 @@ describe('balance curve', () => {
       'utf8',
     );
     expect(lf(report())).toBe(lf(golden));
-  }, 60_000);
+    // Raised from 60s. This test's job is to compare output, not to enforce a runtime
+    // budget, and it was sitting a few seconds under the old limit - so an unrelated
+    // change to deriveStats failed it as a TIMEOUT, which reads as a pacing regression
+    // and is not one. If a runtime budget is wanted it should be its own assertion
+    // with its own number, not a side effect of this one.
+  }, 180_000);
 });

@@ -42,9 +42,9 @@ import {
   rollItem,
   rollStageBossDrops,
 } from './items';
-import { findItem, keyDropMultiplier } from './stats';
+import { equipSlots, findItem, keyDropMultiplier } from './stats';
 import {
-  ITEM_SLOTS,
+  MAX_ITEM_SLOTS,
   INVENTORY_CAP,
   UPGRADE_KEYS,
   err,
@@ -76,7 +76,10 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('equipItem'),
-      slot: z.number().int().min(0).max(ITEM_SLOTS - 1),
+      // Bounded by the ARRAY, not by the live slot count - the schema cannot see a
+      // save. applyCommand refuses a slot past the live count, so the server decides
+      // whether the seventh position is real for this character.
+      slot: z.number().int().min(0).max(MAX_ITEM_SLOTS - 1),
       /** Item uid, or null to clear the slot. */
       itemId: z.string().nullable(),
     })
@@ -200,7 +203,7 @@ export function newSave(seed: number, nowMs: number): SaveState {
     upgrades: emptyUpgrades(),
     items: [],
     currency: {},
-    loadout: Array<string | null>(ITEM_SLOTS).fill(null),
+    loadout: Array<string | null>(MAX_ITEM_SLOTS).fill(null),
     // A new character starts unarmed, and Unarmed's bases are the old global
     // BASE_STATS - so stage 1 plays exactly as it did before weapons existed.
     weapon: null,
@@ -351,6 +354,11 @@ export function applyCommand(
 
     case 'equipItem': {
       const { slot, itemId } = command;
+      // The live count, decided here rather than by the client. A slot only exists
+      // while whatever granted it is still worn, so this has to be re-checked on the
+      // server for every equip - the client's copy could be a swap out of date.
+      const live = equipSlots(next, { stage: next.currentStage, isBoss: false, enemyHpFraction: 1 });
+      if (slot >= live) return err(`slot ${slot + 1} is locked: you have ${live} slots`);
       if (itemId !== null) {
         if (!findItem(next, itemId)) return err(`not owned: ${itemId}`);
         const existing = next.loadout.indexOf(itemId);

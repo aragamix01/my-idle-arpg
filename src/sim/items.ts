@@ -679,6 +679,11 @@ export function itemPower(item: ItemInstance): number {
     // At face value a doubled key chance was the single largest number any item
     // could carry, above `+60% gold per kill`.
     if (effect.kind === 'keyDrop') return power + (effect.multiplier - 1) * 0.3;
+    // A slot is worth roughly what a whole item is, and an item is worth about a
+    // rare's six rolls. Counted at 1.0 per slot so the heuristic ranks a slot-granting
+    // unique above any single affix without pretending to price it exactly - the real
+    // comparison is the power-budget search, which equips the thing and measures.
+    if (effect.kind === 'equipSlots') return power + effect.delta;
     if (effect.op === 'more') return power + (effect.value - 1);
     if (effect.op === 'increased') return power + effect.value;
     // The base is a Big for damage and max HP, and a plain number for the rest. Read

@@ -308,6 +308,11 @@ export function uniqueEffects(unique: Unique, rolls: number[] | undefined): Effe
     const when = effect.when ? { when: effect.when } : {};
     if (effect.kind === 'goldOnKill') return { kind: 'goldOnKill', multiplier: value, ...when };
     if (effect.kind === 'keyDrop') return { kind: 'keyDrop', multiplier: value, ...when };
+    // Rounded, because a slot count is an integer and a range like 1..3 would
+    // otherwise resolve to 2.4 slots at the midpoint.
+    if (effect.kind === 'equipSlots') {
+      return { kind: 'equipSlots', delta: Math.round(value), ...when };
+    }
     return { kind: 'statMod', stat: effect.stat, op: effect.op, value, ...when };
   });
 }

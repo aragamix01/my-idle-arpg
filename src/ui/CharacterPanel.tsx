@@ -12,7 +12,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ITEM_SLOTS,
   DISSEMBLE_YIELD,
   effectiveHp,
   enemyCount,
@@ -470,21 +469,38 @@ function InventoryTab({
         </button>
       </Section>
 
-      <Section title={`Equipped (${hud.loadout.filter(Boolean).length}/${ITEM_SLOTS})`}>
+      <Section
+        title={`Equipped (${hud.loadout.slice(0, hud.equipSlots).filter(Boolean).length}/${hud.equipSlots})`}
+      >
         <div className="grid grid-cols-4 gap-2">
           {hud.loadout.map((uid, slot) => {
             const item = uid ? byUid.get(uid) : undefined;
+            // Past the live count the slot is locked: whatever is in it is still owned
+            // and still refuses to be dissembled, but contributes nothing. Rendered
+            // rather than hidden, because a slot that silently disappears with an item
+            // inside it is the worst possible reading of a slot-removing unique.
+            const locked = slot >= hud.equipSlots;
+            if (locked && !item) return null;
+
             return (
               <button
                 key={slot}
                 type="button"
                 disabled={busy || !item}
                 onClick={() => item && setSelected(item.uid)}
-                title={item ? itemName(item) : 'Empty slot'}
+                title={
+                  locked
+                    ? `${item ? itemName(item) : 'Empty'} — slot locked, nothing here applies`
+                    : item
+                      ? itemName(item)
+                      : 'Empty slot'
+                }
                 className={`flex flex-col items-center gap-1 rounded border p-2 text-center ${
-                  item
-                    ? `${RARITY_STYLE[item.rarity].border} bg-neutral-900 hover:bg-neutral-800`
-                    : 'border-dashed border-neutral-800 bg-neutral-900/50'
+                  locked
+                    ? 'border-dashed border-amber-800/70 bg-neutral-900/40 opacity-60'
+                    : item
+                      ? `${RARITY_STYLE[item.rarity].border} bg-neutral-900 hover:bg-neutral-800`
+                      : 'border-dashed border-neutral-800 bg-neutral-900/50'
                 }`}
               >
                 {item ? (
@@ -500,6 +516,7 @@ function InventoryTab({
                     <span className="text-[10px] text-neutral-600">empty</span>
                   </>
                 )}
+                {locked && <span className="text-[10px] text-amber-500">locked</span>}
               </button>
             );
           })}
