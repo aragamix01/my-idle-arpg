@@ -260,6 +260,48 @@ test('the buy multiplier applies to every track', async ({ page }) => {
   expect(level).toBeGreaterThan(1);
 });
 
+test('fits a phone without scrolling, and every control stays reachable', async ({ page }) => {
+  // The rest of this file runs at Playwright's 1280x720, which is exactly why the
+  // mobile layout could rot unnoticed: the reported failure was the action row
+  // hidden behind Safari's chrome and sprites crawling through the upgrade text,
+  // and a desktop viewport shows neither.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: /Attempt stage/ })).toBeVisible();
+
+  // The shell is three fixed rows summing to the viewport. If it scrolls, something
+  // has been pushed off the bottom - which is the whole bug.
+  const overflow = await page.evaluate(
+    () => document.body.scrollHeight - window.innerHeight,
+  );
+  expect(overflow, 'the page scrolls vertically on a phone').toBeLessThanOrEqual(1);
+
+  // Reachable means inside the viewport, not merely present in the DOM.
+  for (const name of [/Attempt stage/, /^Upgrades$/]) {
+    const box = await page.getByRole('button', { name }).boundingBox();
+    expect(box, `${name} has no box`).not.toBeNull();
+    expect(box!.y + box!.height, `${name} sits below the fold`).toBeLessThanOrEqual(812);
+    // Apple's minimum comfortable target. These were text-sized before.
+    expect(box!.height, `${name} is too small to tap`).toBeGreaterThanOrEqual(40);
+  }
+
+  // The tracks live in a pull-up sheet on a phone rather than eating the screen.
+  await expect(page.getByRole('dialog', { name: 'Upgrades' })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Upgrades$/ }).click();
+
+  const sheet = page.getByRole('dialog', { name: 'Upgrades' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByLabel('Buy')).toBeVisible();
+
+  const damage = sheet.getByRole('button', { name: /^Damage/ });
+  const box = await damage.boundingBox();
+  expect(box!.y + box!.height).toBeLessThanOrEqual(812);
+
+  // And it closes, or the sheet is a trap on a device with no Escape key.
+  await sheet.getByRole('button', { name: 'Close' }).click();
+  await expect(sheet).toHaveCount(0);
+});
+
 test('the character panel shows every stat and the empty inventory', async ({ page }) => {
   await page.goto('/');
 
