@@ -27,6 +27,7 @@ import {
   DISSEMBLE_YIELD,
   getCurrency,
   isWeaponBase,
+  WAVE_RARITY_WEIGHTS,
   type CurrencyId,
   type CurrencyPurse,
 } from './content';
@@ -41,6 +42,7 @@ import {
   rollDungeonItem,
   rollItem,
   rollStageBossDrops,
+  rollWaveDropCount,
 } from './items';
 import { equipSlots, findItem, keyDropMultiplier } from './stats';
 import {
@@ -245,9 +247,11 @@ export function applyCommand(
           gold: toSave(earned),
         });
 
-        // Every clear drops one to three. Rarity and count are what vary, not
-        // whether anything falls.
+        // Two sources now, and they mean different things. The WAVE pays for the
+        // kills - common material to dissemble - and the CLEAR pays for finishing,
+        // which is where the rarity table and therefore the chase still lives.
         const firstUid = next.nextItemId;
+        const waveDrops = rollWaveDropCount(next.seed, firstUid, stage);
         const drops = rollDropCount(next.seed, firstUid);
         let lost = 0;
 
@@ -271,7 +275,9 @@ export function applyCommand(
           });
         }
 
-        for (let i = 0; i < drops; i++) {
+        // Wave drops take the first uids, so the sequence is the order they fell in -
+        // which is what lets the renderer show them during the trash phase.
+        for (let i = 0; i < waveDrops + drops; i++) {
           // A full inventory swallows the rest of the wave rather than
           // discarding silently. The uid counter still advances for the ones
           // that fell on the floor: reusing a uid later would make the
@@ -284,7 +290,12 @@ export function applyCommand(
             continue;
           }
 
-          const item = rollItem(next.seed, uid, stage);
+          const item = rollItem(
+            next.seed,
+            uid,
+            stage,
+            i < waveDrops ? WAVE_RARITY_WEIGHTS : undefined,
+          );
           next.items.push(item);
           events.push({
             type: 'itemDropped',

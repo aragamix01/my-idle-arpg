@@ -43,6 +43,8 @@ import {
   rollDropCount,
   rollItem,
   rollStageBossDrops,
+  rollWaveDropCount,
+  WAVE_RARITY_WEIGHTS,
   STAGE_TIME_LIMIT_SECONDS,
   toSave,
   upgradeCost,
@@ -157,6 +159,7 @@ function takeDrop(save: SaveState, stage: number): SaveState {
   let owned = [...save.items];
   const firstUid = save.nextItemId;
   let uid = firstUid;
+  const waveDrops = rollWaveDropCount(save.seed, firstUid, stage);
   const drops = rollDropCount(save.seed, firstUid);
   const currency = { ...save.currency };
 
@@ -169,7 +172,11 @@ function takeDrop(save: SaveState, stage: number): SaveState {
     currency[id] = (currency[id] ?? 0) + count;
   }
 
-  for (let i = 0; i < drops; i++) {
+  // Wave loot first and on its own rarity table, exactly as the command grants it.
+  // This is most of the harness's crafting income now - the wave pays commons and
+  // commons are what dissemble into the fragment stream - so a harness that skipped
+  // it would understate currency and make the ladder look slower than it is.
+  for (let i = 0; i < waveDrops + drops; i++) {
     if (owned.length >= INVENTORY_CAP) {
       // Dissemble rather than delete: the weakest spare is now raw material,
       // and an agent that threw it away would model a player who ignores half
@@ -185,7 +192,7 @@ function takeDrop(save: SaveState, stage: number): SaveState {
       const yielded = DISSEMBLE_YIELD[spare.rarity];
       currency[yielded] = (currency[yielded] ?? 0) + 1;
     }
-    owned.push(rollItem(save.seed, uid, stage));
+    owned.push(rollItem(save.seed, uid, stage, i < waveDrops ? WAVE_RARITY_WEIGHTS : undefined));
     uid++;
   }
 

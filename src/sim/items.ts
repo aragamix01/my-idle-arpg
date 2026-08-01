@@ -34,8 +34,11 @@ import { getUnique, pickUnique, rollUniqueValues, uniqueEffects } from './conten
 import {
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
+  enemyCount,
   FRAGMENTS_PER_CLEAR,
   KEY_DROP_CHANCE,
+  WAVE_DROP_CHANCE,
+  WAVE_DROP_MAX,
   WEAPON_DROP_SHARE,
 } from './curves';
 import { createRng, type Rng } from './rng';
@@ -53,6 +56,9 @@ const BOSS_DROP_STREAM = 0xc2b2_ae35;
 /** And for dungeon rewards, which must not collide with the stage-clear rolls. */
 const DUNGEON_STREAM = 0x27d4_eb2f;
 
+/** And for how much the trash wave dropped, which must not move the drops themselves. */
+const WAVE_DROP_STREAM = 0x1656_67b1;
+
 /**
  * The RNG stream for an item's current roll.
  *
@@ -64,11 +70,15 @@ export function rollStream(accountSeed: number, uid: number, crafts: number): Rn
   return createRng(accountSeed).fork(uid * 7919 + crafts * REROLL_STREAM);
 }
 
-function weightedRarity(rng: Rng): Rarity {
-  const entries = Object.entries(RARITY_WEIGHTS) as [Rarity, number][];
+function weightedRarity(rng: Rng, weights: Record<Rarity, number> = RARITY_WEIGHTS): Rarity {
+  const entries = Object.entries(weights) as [Rarity, number][];
   const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
   let roll = rng.next() * total;
   for (const [rarity, weight] of entries) {
+    // Skipped rather than merely improbable: a zero-weight rarity must be
+    // unreachable, and `roll <= 0` would hand one out whenever the draw landed
+    // exactly on a boundary. WAVE_RARITY_WEIGHTS zeroes uniques deliberately.
+    if (weight <= 0) continue;
     roll -= weight;
     if (roll <= 0) return rarity;
   }
@@ -189,9 +199,21 @@ function rollBaseAffix(baseId: string, itemLevel: number, rng: Rng): RolledAffix
  * `uid` is taken from the save's monotonic counter, so the same account
  * clearing the same stages always produces the same items in the same order.
  */
-export function rollItem(accountSeed: number, uid: number, itemLevel: number): ItemInstance {
+export function rollItem(
+  accountSeed: number,
+  uid: number,
+  itemLevel: number,
+  /**
+   * Which rarity table to draw from. Wave loot passes WAVE_RARITY_WEIGHTS.
+   *
+   * A parameter rather than a second near-identical function: everything after the
+   * rarity draw - base, affixes, implicit - is identical, and a copy would be a second
+   * place for the weapon share and the affix rows to go stale.
+   */
+  weights = RARITY_WEIGHTS,
+): ItemInstance {
   const rng = rollStream(accountSeed, uid, 0);
-  let rarity = weightedRarity(rng);
+  let rarity = weightedRarity(rng, weights);
 
   if (rarity === 'unique') {
     const unique = pickUnique(itemLevel, rng);
@@ -243,6 +265,31 @@ export function rollDropCount(accountSeed: number, firstUid: number): number {
   const rng = createRng(accountSeed).fork(firstUid * DROP_COUNT_STREAM);
   const span = DROPS_PER_CLEAR.max - DROPS_PER_CLEAR.min + 1;
   return DROPS_PER_CLEAR.min + rng.int(span);
+}
+
+/**
+ * How many items the trash wave drops.
+ *
+ * Closed-form in the sense that matters: one call, no simulation. It walks the kills
+ * because `enemyCount` is bounded at 220 and "each kill has a chance" is the model the
+ * animation shows - approximating the binomial with a closed expression would make the
+ * code less honest about what it represents to save microseconds nobody would notice.
+ *
+ * Its own stream, so the wave count cannot shift which items or fragments fell: those
+ * are keyed on the same firstUid and would move if this shared their draws.
+ */
+export function rollWaveDropCount(accountSeed: number, firstUid: number, stage: number): number {
+  const rng = createRng(accountSeed).fork(firstUid * WAVE_DROP_STREAM);
+  const kills = enemyCount(stage);
+
+  let drops = 0;
+  for (let i = 0; i < kills; i++) {
+    if (rng.next() < WAVE_DROP_CHANCE) drops++;
+    // Stops drawing once the cap is reached rather than counting past it and
+    // clamping, so the stream position does not depend on how lucky the roll was.
+    if (drops >= WAVE_DROP_MAX) break;
+  }
+  return drops;
 }
 
 /**

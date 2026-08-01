@@ -78,6 +78,9 @@ import {
   rollDungeonCurrency,
   rollDungeonItem,
   rollStageBossDrops,
+  rollWaveDropCount,
+  WAVE_DROP_MAX,
+  WAVE_RARITY_WEIGHTS,
   STAT_KEYS,
   statsDps,
   trackLayer,
@@ -1240,7 +1243,10 @@ describe('inventory', () => {
     expect(result.value.state.nextItemId).toBeGreaterThan(full.nextItemId);
   });
 
-  it('drops between one and three items on a clear', () => {
+  it('pays a clear from both the wave and the clear itself', () => {
+    // Was "between one and three", which was the whole story before trash kills
+    // dropped anything. A clear now pays two sources and the bound is their sum -
+    // the clear's own 1-3, plus whatever the wave rolled up to its cap.
     const counts = new Set<number>();
     for (let seed = 1; seed <= 40; seed++) {
       const result = applyCommand(newSave(seed, T0), { type: 'attemptStage' }, T0);
@@ -1248,11 +1254,14 @@ describe('inventory', () => {
       if (!result.ok) continue;
       const dropped = result.value.events.filter((e) => e.type === 'itemDropped').length;
       expect(dropped).toBeGreaterThanOrEqual(DROPS_PER_CLEAR.min);
-      expect(dropped).toBeLessThanOrEqual(DROPS_PER_CLEAR.max);
+      expect(dropped).toBeLessThanOrEqual(DROPS_PER_CLEAR.max + WAVE_DROP_MAX);
       counts.add(dropped);
     }
     // A range that only ever produces one value is not a range.
     expect(counts.size).toBeGreaterThan(1);
+    // And the wave really is contributing at stage 1, not just at depth - the
+    // clear alone could never exceed three.
+    expect(Math.max(...counts)).toBeGreaterThan(DROPS_PER_CLEAR.max);
   });
 
   it('refuses to discard an equipped item', () => {
@@ -1690,6 +1699,83 @@ describe('currency', () => {
     expect(thenGold.ok).toBe(true);
     if (!thenGold.ok) return;
     expect(thenGold.value.state.items[0].affixes).not.toEqual(viaGold.value.state.items[0].affixes);
+  });
+});
+
+describe('wave loot', () => {
+  it('is deterministic, so the client and the server agree about what fell', () => {
+    // The renderer rolls these for the animation before the command is sent. If the
+    // two sides disagreed, the player would watch an item drop and not receive it.
+    for (const stage of [1, 20, 140, 300]) {
+      expect(rollWaveDropCount(9, 100, stage)).toBe(rollWaveDropCount(9, 100, stage));
+    }
+    expect(rollWaveDropCount(9, 100, 50)).not.toBe(rollWaveDropCount(10, 100, 50));
+  });
+
+  it('pays from the first stage and never past its cap', () => {
+    // Present where a new player meets it, bounded where the inventory is already
+    // under pressure - the two halves the constants exist to balance.
+    let earlyTotal = 0;
+    for (let uid = 1; uid <= 200; uid++) {
+      const early = rollWaveDropCount(3, uid, 1);
+      const deep = rollWaveDropCount(3, uid, 300);
+      earlyTotal += early;
+      expect(deep).toBeLessThanOrEqual(WAVE_DROP_MAX);
+      expect(early).toBeLessThanOrEqual(WAVE_DROP_MAX);
+    }
+    expect(earlyTotal).toBeGreaterThan(0);
+  });
+
+  it('reaches the cap at depth but not at stage 1', () => {
+    // enemyCount is 41 at stage 1 and 220 from stage 113, so the cap should be
+    // routine at depth and unreachable-in-practice early. If both ends looked the
+    // same the cap would either be doing nothing or doing everything.
+    const atCap = (stage: number) =>
+      Array.from({ length: 300 }, (_, i) => rollWaveDropCount(11, i + 1, stage)).filter(
+        (n) => n >= WAVE_DROP_MAX,
+      ).length;
+    expect(atCap(300)).toBeGreaterThan(atCap(1));
+  });
+
+  it('never drops a unique', () => {
+    // The structural reason WAVE_RARITY_WEIGHTS exists. Wave loot multiplies drop
+    // volume several times over; if it drew from the normal table it would multiply
+    // the unique rate with it and silently undo the Phase 2 tier weights.
+    for (let uid = 1; uid <= 4000; uid++) {
+      expect(rollItem(5, uid, 200, WAVE_RARITY_WEIGHTS).rarity).not.toBe('unique');
+    }
+  });
+
+  it('still rolls a real item, not an empty one', () => {
+    // A rarity table with a zero in it is exactly where an off-by-one in the
+    // weighted pick would produce something malformed rather than something rare.
+    for (let uid = 1; uid <= 200; uid++) {
+      const item = rollItem(5, uid, 80, WAVE_RARITY_WEIGHTS);
+      expect(['common', 'magic', 'rare']).toContain(item.rarity);
+      expect(item.baseId).toBeTruthy();
+      expect(itemEffects(item).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('a full inventory loses wave drops and still burns the uid', () => {
+    // Reusing a uid after a discard would make the replacement item roll
+    // identically to the one that was lost - the rule the clear drops already keep.
+    const full: SaveState = {
+      ...newSave(4, T0),
+      bestStage: 40,
+      currentStage: 40,
+      upgrades: { ...newSave(4, T0).upgrades, damage: 400, health: 200, toughness: 200 },
+      items: Array.from({ length: INVENTORY_CAP }, (_, i) => rollItem(4, 9000 + i, 10)),
+      nextItemId: 9000 + INVENTORY_CAP,
+    };
+
+    const result = applyCommand(full, { type: 'attemptStage' }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.state.items).toHaveLength(INVENTORY_CAP);
+    expect(result.value.state.nextItemId).toBeGreaterThan(full.nextItemId);
+    expect(result.value.events.some((e) => e.type === 'inventoryFull')).toBe(true);
   });
 });
 

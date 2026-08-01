@@ -573,6 +573,28 @@ export function maxAffordableUpgrades(key: UpgradeKey, level: number, gold: Big)
 export const DROPS_PER_CLEAR = { min: 1, max: 3 } as const;
 
 /**
+ * Loot from the trash wave, on top of what a clear pays.
+ *
+ * Rolled once per clear over `enemyCount(stage)` kills rather than per tick, because
+ * resolveStage has no tick loop and is not getting one. The chance is per KILL because
+ * that is the mental model the animation shows; the maths is a seeded draw at the end.
+ *
+ * ## The cap is the load-bearing half
+ *
+ * enemyCount climbs from 41 to a ceiling of 220, so an uncapped 5% would pay about two
+ * items at stage 1 and eleven at depth - invisible exactly where a new player first
+ * meets the feature, and a flood where the inventory is already under pressure. Capped
+ * it is ~2 early and 6 from around stage 120: present immediately, bounded forever.
+ *
+ * Both numbers are dials for pacing, not for power. Wave loot cannot raise the power
+ * ceiling - that is set by affix tiers - it raises THROUGHPUT, which reaches power
+ * indirectly through dissembling into crafting currency. That is the loop to watch when
+ * these move, and the balance harness models it.
+ */
+export const WAVE_DROP_CHANCE = 0.05;
+export const WAVE_DROP_MAX = 6;
+
+/**
  * Fragments a stage boss drops, inclusive of zero.
  *
  * Ten fragments make one currency, so this averages 1.5 per clear - roughly a

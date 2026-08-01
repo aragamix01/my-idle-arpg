@@ -219,6 +219,27 @@ export const RARITY_WEIGHTS: Record<Rarity, number> = {
   unique: 2,
 };
 
+/**
+ * What a trash kill drops, as opposed to what a CLEAR drops.
+ *
+ * Wave loot is material and clear loot is the chase. A wave drop is something to
+ * dissemble on the way past; the item you are hunting still comes from finishing the
+ * stage or killing the boss.
+ *
+ * **Unique is zero, and that is structural rather than flavour.** Uniques are 2% of
+ * drops and an ancient is roughly one item in a thousand. Wave loot multiplies drop
+ * volume several times over, so leaving this table equal to RARITY_WEIGHTS would
+ * multiply the unique rate with it and quietly undo the tier weights - the rarity of a
+ * given unique would become a function of how many trash enemies a stage happens to
+ * have. Volume changes what you have to dissemble, never what you are hunting.
+ */
+export const WAVE_RARITY_WEIGHTS: Record<Rarity, number> = {
+  common: 80,
+  magic: 17,
+  rare: 3,
+  unique: 0,
+};
+
 // --- Affixes --------------------------------------------------------------
 
 export type AffixKind = 'prefix' | 'suffix';
