@@ -200,18 +200,36 @@ export function rollTabletMods(tier: number, rng: Rng): string[] {
   return rolled;
 }
 
-/** What a tablet's modifiers add up to. Danger and reward are always both present. */
-export function tabletTotals(tablet: TabletInstance): { danger: number; reward: number } {
-  return tablet.mods.reduce(
-    (totals, id) => {
-      const mod = getTabletMod(id);
-      // A mod id that no longer exists resolves to nothing rather than breaking the
-      // tablet, the same tolerance itemEffects gives a retired affix.
-      if (!mod) return totals;
-      return { danger: totals.danger + mod.danger, reward: totals.reward + mod.reward };
-    },
-    { danger: 0, reward: 0 },
-  );
+export type TabletPays = TabletModDefinition['pays'];
+
+/**
+ * What a tablet's modifiers add up to.
+ *
+ * Danger is ONE number because it lands on one thing - the fight. Reward is split by
+ * axis because it does not: a Gilded tablet pays gold and a Hoarding one pays items,
+ * and summing them would make every mod interchangeable, which is the exact property
+ * the `pays` field exists to prevent.
+ */
+export interface TabletTotals {
+  danger: number;
+  reward: Record<TabletPays, number>;
+}
+
+export function tabletTotals(tablet: TabletInstance): TabletTotals {
+  const totals: TabletTotals = {
+    danger: 0,
+    reward: { currency: 0, items: 0, rarity: 0, gold: 0 },
+  };
+
+  for (const id of tablet.mods) {
+    const mod = getTabletMod(id);
+    // A mod id that no longer exists resolves to nothing rather than breaking the
+    // tablet, the same tolerance itemEffects gives a retired affix.
+    if (!mod) continue;
+    totals.danger += mod.danger;
+    totals.reward[mod.pays] += mod.reward;
+  }
+  return totals;
 }
 
 /** Display name: "Teeming Gilded Tablet". */

@@ -13,9 +13,9 @@ import {
   bossGold,
   bossHp,
   contactCount,
-  DUNGEON_BOSS_DPS_MULT,
-  DUNGEON_BOSS_HP_MULT,
-  DUNGEON_GOLD_MULT,
+  abyssalDepth,
+  ABYSSAL_PROFILE,
+  DUNGEON_PROFILE,
   enemyCount,
   dungeonResistances,
   enemyDps,
@@ -24,8 +24,10 @@ import {
   stageOverride,
   stageResistances,
   STAGE_TIME_LIMIT_SECONDS,
+  type DepthProfile,
   type Resistances,
 } from './curves';
+import { tabletTotals, type TabletInstance } from './content';
 import {
   damageShares,
   deriveStats,
@@ -220,15 +222,55 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
  * at zero, which is what lets the replay renderer handle both unchanged.
  */
 export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
+  return resolveDelve(save, stage, DUNGEON_PROFILE, 0);
+}
+
+/**
+ * An Abyssal run.
+ *
+ * Indexed on the TABLET, never on bestStage: the tier decides the depth, so two players
+ * running a T7 fight the same thing. The tablet's modifiers raise the danger, and the
+ * same modifiers raise what it pays - which is applied where the rewards are granted,
+ * not here.
+ */
+export function resolveAbyssal(save: SaveState, tablet: TabletInstance): StageOutcome {
+  const { danger } = tabletTotals(tablet);
+  return resolveDelve(save, abyssalDepth(tablet.tier), ABYSSAL_PROFILE, danger);
+}
+
+/**
+ * One boss, no wave, no escape - at whatever depth and difficulty the caller names.
+ *
+ * Was resolveDungeon's whole body. A dungeon and an Abyssal are the same fight with
+ * different numbers, and two near-identical resolvers would be two places for the
+ * closed-form property to break.
+ *
+ * Returns the same StageOutcome shape as resolveStage with `trashPhaseSeconds` at zero,
+ * which is what lets the replay renderer handle every kind of run unchanged.
+ */
+function resolveDelve(
+  save: SaveState,
+  stage: number,
+  profile: DepthProfile,
+  /** Extra difficulty from a tablet's modifiers, as a fraction. Zero for a dungeon. */
+  danger: number,
+): StageOutcome {
   const bossCtx = ctxFor(stage, true, 1);
   const bossStats = deriveStats(save, bossCtx);
 
-  const hp = bossHp(stage).mul(DUNGEON_BOSS_HP_MULT);
+  const hp = bossHp(stage).mul(profile.hpMult).mul(1 + danger);
   // Where elements actually bite. The affinity is derived from the account seed and the
   // stage, so it is the same every time and can be shown before the key is spent.
-  const seconds = timeToKill(save, hp, stage, true, 1, dungeonResistances(save.seed, stage));
+  const seconds = timeToKill(
+    save,
+    hp,
+    stage,
+    true,
+    1,
+    dungeonResistances(save.seed, stage, profile.affinity),
+  );
   const ehp = effectiveHp(bossStats);
-  const incoming = bossDps(stage).mul(DUNGEON_BOSS_DPS_MULT);
+  const incoming = bossDps(stage).mul(profile.dpsMult).mul(1 + danger);
 
   const damage = incoming.mul(seconds);
   const died = damage.gte(ehp);
@@ -264,7 +306,7 @@ export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
     failure: 'none',
     seconds,
     goldEarned: bossGold(stage)
-      .mul(DUNGEON_GOLD_MULT)
+      .mul(profile.goldMult)
       .mul(bossStats.goldFind)
       .mul(1 + goldOnKillBonus(save, bossCtx)),
   };

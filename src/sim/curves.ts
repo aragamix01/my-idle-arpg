@@ -9,7 +9,7 @@
 import { big, BIG_ZERO, type Big } from './big';
 import { ELEMENTS, type Element, type ModLayer, type Rarity } from './content/schema';
 import { createRng } from './rng';
-import type { UpgradeKey } from './types';
+import { ABYSS_UNLOCK_STAGE, type UpgradeKey } from './types';
 
 /** The tuned constants. Keep this list short — if it grows past ~12, the model is too loose. */
 export const TUNING = {
@@ -307,13 +307,89 @@ export function dungeonAffinity(seed: number, stage: number): { resists: Element
   return { resists: ELEMENTS[i], weakTo: ELEMENTS[j] };
 }
 
-export function dungeonResistances(seed: number, stage: number): Resistances {
+export function dungeonResistances(
+  seed: number,
+  stage: number,
+  /** How far the two named elements sit from the baseline. The Abyss passes its own. */
+  affinity = DUNGEON_AFFINITY,
+): Resistances {
   const base = stageResistance(stage);
   const { resists, weakTo } = dungeonAffinity(seed, stage);
   const out = uniformResistances(base);
-  out[resists] = base + DUNGEON_AFFINITY;
-  out[weakTo] = base - DUNGEON_AFFINITY;
+  out[resists] = base + affinity;
+  out[weakTo] = base - affinity;
   return out;
+}
+
+/**
+ * What separates one kind of boss-only run from another.
+ *
+ * A profile rather than a second resolve function, because a dungeon and an Abyssal are
+ * the same fight with different numbers: one boss, no wave, no partial credit. Two
+ * near-identical resolvers would be two places for the closed-form property to break.
+ *
+ * Declared here beside the affinity it carries; the concrete profiles live further down
+ * with the dungeon constants they are built from.
+ */
+export interface DepthProfile {
+  hpMult: number;
+  dpsMult: number;
+  goldMult: number;
+  affinity: number;
+}
+
+/**
+ * The Abyss.
+ *
+ * ## Why the affinity is 0.55 and not 0.70
+ *
+ * Resistance multiplies effective HP, and the two sides are NOT symmetric because the
+ * clamps are not. At an Abyssal depth with a ladder base near 0.18:
+ *
+ *   resisted     0.73                 your damage x0.27
+ *   vulnerable   clamped at -0.50     your damage x1.50
+ *
+ * So the penalty for bringing the wrong element far exceeds the reward for bringing the
+ * right one - that is MAX_VULNERABILITY doing its job. 0.70 was rejected because it puts
+ * the resisted case at x0.12, which against a tier-scaled boss is a timeout, which is
+ * "impossible" wearing a different word.
+ *
+ * The answer to a bad match-up is a different weapon, since the skill carries the
+ * element. Conversion is NOT an answer at current magnitudes - extra-element rolls are
+ * 1.2-3.3%, nothing against x0.27 - and making it one means growing those values, which
+ * is a separate decision.
+ */
+export const ABYSSAL_PROFILE: DepthProfile = {
+  /**
+   * Just above a dungeon's 2.5, and MEASURED rather than chosen.
+   *
+   * The first cut paired 6 with a depth curve that started a tier too high, which put a
+   * T1 at 23x a stage-80 boss - nine times a dungeon, for the first tablet a player can
+   * possibly hold. It timed out against a character who cleared floor 80 in 34s and the
+   * dungeon there in 15s. A mode whose entry fight is unwinnable is not a hard mode.
+   */
+  hpMult: 3,
+  dpsMult: 1.8,
+  goldMult: 5,
+  affinity: 0.55,
+};
+
+/**
+ * The ladder depth a tablet tier fights at.
+ *
+ * The Abyss indexes on TIER and never on bestStage, which is the point: a tier is a
+ * difficulty you hold in your hand rather than one your progress hands you. Two players
+ * running a T7 fight the same thing.
+ *
+ * It reuses the ladder's own curves rather than inventing a second exponential - one
+ * curve family, one set of growth constants to keep honest. T1 lands just past the
+ * unlock floor and T15 well beyond where most players are when they first hold one.
+ */
+export function abyssalDepth(tier: number): number {
+  // T1 sits AT the unlock floor, not a tier past it. The `tier * 12` version put the
+  // cheapest tablet twelve stages deep, and twelve stages is 1.12^12 - very nearly four
+  // times the boss HP - before the profile multiplier had even been applied.
+  return ABYSS_UNLOCK_STAGE + (Math.max(1, tier) - 1) * 12;
 }
 
 /**
@@ -631,6 +707,13 @@ export const DUNGEON_BOSS_DPS_MULT = 1.5;
 
 /** Gold from a dungeon clear, as a multiple of the stage boss's lump sum. */
 export const DUNGEON_GOLD_MULT = 3;
+
+export const DUNGEON_PROFILE: DepthProfile = {
+  hpMult: DUNGEON_BOSS_HP_MULT,
+  dpsMult: DUNGEON_BOSS_DPS_MULT,
+  goldMult: DUNGEON_GOLD_MULT,
+  affinity: DUNGEON_AFFINITY,
+};
 
 /** Currency a dungeon clear awards, inclusive. */
 export const DUNGEON_CURRENCY_PER_CLEAR = { min: 1, max: 2 } as const;

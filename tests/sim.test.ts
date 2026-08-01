@@ -71,6 +71,11 @@ import {
   ITEM_SLOTS,
   MAX_ITEM_SLOTS,
   MAX_TABLET_TIER,
+  ABYSS_UNLOCK_STAGE,
+  ABYSSAL_PROFILE,
+  abyssalDepth,
+  resolveAbyssal,
+  type TabletInstance,
   rollTabletMods,
   tabletModSlots,
   tabletTotals,
@@ -1751,7 +1756,113 @@ describe('tablets', () => {
     const teeming = getTabletMod('teeming')!;
 
     expect(totals.danger).toBeCloseTo(teeming.danger, 9);
-    expect(totals.reward).toBeCloseTo(teeming.reward, 9);
+    // Reward is split by axis, not summed. Teeming pays currency, so nothing else moves -
+    // which is the property that stops every mod being interchangeable.
+    expect(totals.reward.currency).toBeCloseTo(teeming.reward, 9);
+    expect(totals.reward.gold).toBe(0);
+    expect(totals.reward.items).toBe(0);
+  });
+
+  /** A character who has just reached the unlock floor, geared roughly for it. */
+  const atUnlock = (seed = 31): SaveState => {
+    const base = newSave(seed, T0);
+    return {
+      ...base,
+      bestStage: ABYSS_UNLOCK_STAGE,
+      currentStage: ABYSS_UNLOCK_STAGE + 1,
+      upgrades: {
+        ...base.upgrades,
+        damage: 120,
+        attackSpeed: 60,
+        resource: 60,
+        health: 150,
+        toughness: 150,
+      },
+    };
+  };
+
+  const plainTablet = (tier: number): TabletInstance => ({
+    uid: 't1',
+    tier,
+    mods: [],
+    crafts: 0,
+  });
+
+  it('a T1 is a fair fight at the unlock floor and a T15 is not', () => {
+    // THE assertion that decides whether the tier curve is right. The Abyss indexes on
+    // tier alone, so if T1 is unwinnable the mode is unreachable, and if T15 is easy
+    // the whole range is decoration.
+    //
+    // It caught exactly that: the first cut put a T1 at 23x a stage-80 boss - nine
+    // times a dungeon - and it timed out for a character who clears the floor it
+    // unlocks on.
+    const save = atUnlock();
+
+    // The premise. If this character cannot clear floor 80 then "at the unlock floor"
+    // is a fiction and the rest of the assertion means nothing.
+    expect(resolveStage(save, ABYSS_UNLOCK_STAGE).cleared).toBe(true);
+
+    expect(resolveAbyssal(save, plainTablet(1)).cleared).toBe(true);
+    expect(resolveAbyssal(save, plainTablet(MAX_TABLET_TIER)).cleared).toBe(false);
+  });
+
+  it('a T1 costs more than the dungeon at the same floor', () => {
+    // The Abyss has to be worth a scarcer consumable. Measured against the dungeon
+    // rather than an absolute number, so retuning either one keeps this honest.
+    const save = atUnlock();
+    const dungeon = resolveDungeon(save, ABYSS_UNLOCK_STAGE);
+    const abyssal = resolveAbyssal(save, plainTablet(1));
+
+    expect(dungeon.cleared && abyssal.cleared).toBe(true);
+    expect(abyssal.seconds).toBeGreaterThan(dungeon.seconds);
+  });
+
+  it('does not read bestStage - two characters run the same T7', () => {
+    // The point of indexing on tier. A player deep in the ladder and one who just
+    // unlocked the Abyss meet the same boss; only their own power differs.
+    const shallow = atUnlock();
+    const deep: SaveState = { ...shallow, bestStage: 260, currentStage: 261 };
+
+    const a = resolveAbyssal(shallow, plainTablet(7));
+    const b = resolveAbyssal(deep, plainTablet(7));
+    expect(a.seconds).toBeCloseTo(b.seconds, 9);
+  });
+
+  it('modifiers make it harder, and every one of them is a trade', () => {
+    // T1, because it is the only tier this character clears - comparing two runs that
+    // both time out would compare the 75-second cap against itself and pass on nothing.
+    const save = atUnlock();
+    const plain = resolveAbyssal(save, plainTablet(1));
+    const modded = resolveAbyssal(save, { ...plainTablet(1), mods: ['teeming', 'gilded'] });
+
+    expect(plain.cleared).toBe(true);
+    expect(modded.seconds).toBeGreaterThan(plain.seconds);
+  });
+
+  it('the element you bring decides an Abyssal run', () => {
+    // THE assertion that decides whether 0.55 is right. At that affinity the resisted
+    // element is x0.27 and the vulnerable one x1.50, so the same character on the same
+    // tablet should clear one and struggle on the other. If both clear, the affinity is
+    // decoration; if neither does, it is an immunity wearing a different word.
+    const save = atUnlock();
+    const tablet = plainTablet(2);
+    const depth = abyssalDepth(tablet.tier);
+    const { resists, weakTo } = dungeonAffinity(save.seed, depth);
+
+    const shares = (element: typeof resists) => ({
+      physical: 0,
+      fire: 0,
+      cold: 0,
+      lightning: 0,
+      darkness: 0,
+      [element]: 1,
+    });
+    const resist = dungeonResistances(save.seed, depth, ABYSSAL_PROFILE.affinity);
+
+    const intoResisted = elementalScale(shares(resists), 0, resist);
+    const intoWeakness = elementalScale(shares(weakTo), 0, resist);
+
+    expect(intoWeakness / intoResisted).toBeGreaterThan(3);
   });
 
   it('a fresh save has none, and an old save gains the array without losing anything', () => {
