@@ -12,6 +12,7 @@ import {
   displayTier,
   formatBig,
   getAffix,
+  resourceLabel,
   SKILL_LEVEL_GAIN,
   type CurrencyTier,
   type Effect,
@@ -19,6 +20,7 @@ import {
   type Rarity,
   type RolledAffix,
   type Skill,
+  type StatBreakdown,
   type StatKey,
   type Stats,
 } from '@/sim';
@@ -217,9 +219,15 @@ export function describeEffect(effect: Effect): string {
   return `${sign}${shown} ${label}${suffix}`;
 }
 
-/** Stamina or Mana. Which word is right depends on the weapon in your hand. */
+/**
+ * Stamina or Mana. Which word is right depends on the weapon in your hand.
+ *
+ * Delegates to the sim, which needs the same word for the resource-cap reason it
+ * reports on the character sheet. Kept as a re-export rather than an import at every
+ * call site so the UI's vocabulary stays in the UI's own module.
+ */
 export function resourceName(skill: Skill): string {
-  return skill.kind === 'magical' ? 'Mana' : 'Stamina';
+  return resourceLabel(skill);
 }
 
 /**
@@ -306,6 +314,52 @@ export const CURRENCY_TIER_STYLE: Record<CurrencyTier, { border: string; text: s
   fragment: { border: 'border-neutral-800', text: 'text-neutral-400' },
   key: { border: 'border-amber-500/70', text: 'text-amber-300' },
 };
+
+/**
+ * One stat's components, as lines the panel can print.
+ *
+ * Only what is actually there: a stat with no flat roll returns no flat line, because
+ * three zeroes under every stat would bury the one number that moved.
+ *
+ * Formatted per LAYER, not per stat. `increased` is always a percentage and `more` is
+ * always a multiplier whatever stat they land on, which is the distinction the whole
+ * layer system exists to make visible - see ModLayer in src/sim/content/schema.ts.
+ */
+export function breakdownLines(
+  key: StatKey,
+  parts: StatBreakdown,
+): { label: string; value: string; note?: string }[] {
+  const format = STAT_LABELS[key].format;
+  const lines: { label: string; value: string; note?: string }[] = [];
+
+  // The base first: it is what the other three act on, and for damage it is also the
+  // one that carries the weapon, which is most of a character's power.
+  lines.push({ label: 'base', value: formatBig(parts.base) });
+
+  if (parts.flat !== 0) {
+    lines.push({ label: 'flat', value: `+${format(parts.flat).replace(/^\+/, '')}` });
+  }
+  if (parts.increased !== 0) {
+    const pct = parts.increased * 100;
+    lines.push({
+      label: parts.increased > 0 ? 'increased' : 'reduced',
+      value: `${Math.abs(pct) < 10 ? Math.abs(pct).toFixed(1) : Math.abs(pct).toFixed(0)}%`,
+    });
+  }
+  if (parts.more.toNumber() !== 1) {
+    lines.push({ label: 'more', value: `x${formatBig(parts.more)}` });
+  }
+  if (parts.cappedBy) {
+    // The only line that explains rather than counts, and the only one that can
+    // contradict the number above it - which is exactly why it has to be here.
+    lines.push({
+      label: 'capped',
+      value: formatBig(parts.resolved),
+      note: parts.cappedBy,
+    });
+  }
+  return lines;
+}
 
 /** Ordered stat list for the character sheet. */
 export function statEntries(stats: Stats): { key: StatKey; label: string; value: string }[] {

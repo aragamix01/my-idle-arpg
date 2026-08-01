@@ -12,9 +12,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  damageShares,
+  deriveStats,
   DISSEMBLE_YIELD,
   effectiveHp,
+  elementalScale,
+  ELEMENTS,
   enemyCount,
+  equippedSkill,
+  explainStats,
   formatBig,
   fromSave,
   getCurrency,
@@ -25,6 +31,10 @@ import {
   isResourceBound,
   baseSkillId,
   getSkill,
+  previewEquip,
+  skillLevel,
+  stageResistance,
+  stageResistances,
   UNARMED,
   killsPerSecond,
   statsDps,
@@ -34,13 +44,16 @@ import {
   type HudSnapshot,
   type ItemInstance,
   type Rarity,
+  type Big,
   type SaveState,
   type Skill,
+  type StatBreakdown,
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
 import { CraftModal } from './CraftModal';
 import { CurrencyStash } from './CurrencyStash';
 import {
+  breakdownLines,
   compact,
   ELEMENT_STYLE,
   elementName,
@@ -60,6 +73,38 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: 'itemLevel', label: 'Item level' },
   { key: 'power', label: 'Power' },
 ];
+
+/**
+ * The crossed-swords mark that says "this is a weapon".
+ *
+ * An inline SVG rather than a glyph character. `⚔` renders as a colour emoji on most
+ * platforms, which ignores the text colour and sits at a size the font decides - and it
+ * is a different shape on every OS. This is the same eleven pixels everywhere.
+ *
+ * SHAPE, not colour. The element tint was the alternative and it says nothing in
+ * greyscale or to a colourblind player; a mark you can see is worth more than one that
+ * also tells you the element.
+ */
+function WeaponMark({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 12 12" aria-hidden className={`h-3 w-3 ${className}`} fill="none">
+      <path
+        d="M2.5 2.5 L8 8 M9.5 2.5 L4 8"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      {/* The hilts. Without them two crossed lines are an X, which already means
+          "unavailable" everywhere else in this panel. */}
+      <path
+        d="M7.4 9.2 L9.6 10.2 M4.6 9.2 L2.4 10.2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 
 /** Descending, so "sort by rarity" puts the interesting end first. */
 const RARITY_ORDER: Record<Rarity, number> = { unique: 3, rare: 2, magic: 1, common: 0 };
@@ -145,6 +190,7 @@ export function CharacterPanel({
           {tab === 'character' && <CharacterTab state={state} hud={hud} />}
           {tab === 'inventory' && (
             <InventoryTab
+              state={state}
               hud={hud}
               busy={busy}
               armed={armed}
@@ -206,6 +252,20 @@ function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
   const stats = statsFromWire(hud.stats);
   const stage = Math.max(1, hud.bestStage || 1);
 
+  // Everything below is computed CLIENT-SIDE from the save the panel already holds.
+  // None of it crosses the wire: a breakdown is only wanted while the sheet is open,
+  // and shipping twelve extra objects in every snapshot to serve that would be waste.
+  const ctx = { stage, isBoss: false, enemyHpFraction: 1 };
+  const parts = explainStats(state, ctx);
+  const shares = damageShares(state, ctx);
+  const skill = equippedSkill(state);
+  const resistance = stageResistance(stage);
+  const elemental = elementalScale(shares, stats.penetration, stageResistances(stage));
+
+  // Damage's base is the one number a player cannot trace to an item, because it comes
+  // from the weapon's skill and its level rather than from a modifier line.
+  const skillNote = `${skill.name}, skill level ${skillLevel(state, ctx)}`;
+
   // Derived figures, not stats. These are what actually decide a run: effective
   // HP is what damage is measured against, and wave DPS is why Area matters.
   const derived = [
@@ -223,10 +283,49 @@ function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
   return (
     <div className="flex flex-col gap-5">
       <Section title="Stats">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-2">
+        {/* One column, not two. Each row can expand, and a two-column grid would
+            push the expanded half sideways into its neighbour's column. A plain div
+            rather than a dl: the rows are buttons now, and a dl whose children are
+            not dt/dd pairs is a list that lies about its own structure. */}
+        <div className="flex flex-col">
           {statEntries(stats).map((entry) => (
-            <Row key={entry.key} label={entry.label} value={entry.value} />
+            <StatRow
+              key={entry.key}
+              label={entry.label}
+              value={entry.value}
+              parts={parts[entry.key]}
+              lines={breakdownLines(entry.key, parts[entry.key])}
+              detail={entry.key === 'damage' ? skillNote : undefined}
+            />
           ))}
+        </div>
+        <p className="mt-2 text-[11px] text-neutral-500">
+          Tap a stat to see what produced it.
+        </p>
+      </Section>
+
+      <Section title="Elemental">
+        <dl className="flex flex-col">
+          {ELEMENTS.filter((element) => shares[element] !== 0).map((element) => (
+            <Row
+              key={element}
+              label={elementName(element)}
+              value={
+                element === skill.element
+                  ? shares[element].toFixed(2)
+                  : `+${(shares[element] * 100).toFixed(1)}%`
+              }
+              valueClass={ELEMENT_STYLE[element]}
+            />
+          ))}
+          {stats.penetration > 0 && (
+            <Row label="Penetration" value={`${(stats.penetration * 100).toFixed(1)}%`} />
+          )}
+          <Row
+            label={`vs stage ${stage}`}
+            value={`x${elemental.toFixed(3)}`}
+            note={`${(resistance * 100).toFixed(1)}% resistance`}
+          />
         </dl>
       </Section>
 
@@ -246,6 +345,7 @@ function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
 }
 
 function InventoryTab({
+  state,
   hud,
   busy,
   armed,
@@ -255,6 +355,8 @@ function InventoryTab({
   onDissemble,
   onApplyCurrency,
 }: {
+  /** The save itself, so the detail pane can price an item by simulating the swap. */
+  state: SaveState;
   hud: HudSnapshot;
   busy: boolean;
   armed: CurrencyId | null;
@@ -675,6 +777,10 @@ function InventoryTab({
           equipped={selectedItem ? isEquipped(selectedItem.uid) : false}
           slotsFull={!hud.loadout.includes(null)}
           busy={busy}
+          state={state}
+          // Priced at the deepest stage cleared, which is where the loadout is
+          // actually used - pricing at stage 1 would flatten every elemental term.
+          stage={Math.max(1, hud.bestStage || 1)}
           onEquip={() => selectedItem && equip(selectedItem.uid)}
           onCraft={() => selectedItem && setCrafting(selectedItem.uid)}
           onDissemble={() => selectedItem && requestDissemble(selectedItem)}
@@ -902,6 +1008,7 @@ function ItemGrid({
         // candidates at all rather than candidates that would be refused.
         const selectable = selecting && !isEquipped;
         const isChosen = selecting && chosen.has(item.uid);
+        const isWeapon = isWeaponBase(item.baseId);
 
         return (
           <li key={item.uid}>
@@ -912,7 +1019,9 @@ function ItemGrid({
               title={
                 selecting && isEquipped
                   ? `${itemName(item)} — equipped, cannot be dissembled`
-                  : `${itemName(item)} — iLvl ${item.itemLevel}`
+                  : // The mark is unlabelled, so the word lives here. A player who
+                    // has not learned the glyph yet still gets an answer on hover.
+                    `${itemName(item)} — ${isWeapon ? 'Weapon, ' : ''}iLvl ${item.itemLevel}`
               }
               aria-pressed={selecting ? isChosen : selected === item.uid}
               className={[
@@ -931,6 +1040,12 @@ function ItemGrid({
                 .join(' ')}
             >
               <AtlasSprite id={itemSprite(item)} scale={2} />
+              {/* Bottom-LEFT, because the top-right corner is already spoken for
+                  twice - the equipped dot and the select tick - and a third mark
+                  there would collide exactly when both of the others matter. */}
+              {isWeapon && (
+                <WeaponMark className="absolute bottom-0.5 left-0.5 text-neutral-400" />
+              )}
               {/* A dot rather than a word: at this tile size there is no room
                   for a label, and the equipped row above is the full answer. */}
               {isEquipped && !selecting && (
@@ -955,6 +1070,8 @@ function ItemDetail({
   equipped,
   slotsFull,
   busy,
+  state,
+  stage,
   onEquip,
   onCraft,
   onDissemble,
@@ -964,6 +1081,9 @@ function ItemDetail({
   equipped: boolean;
   slotsFull: boolean;
   busy: boolean;
+  /** The live save, so the pane can price this item by simulating the swap. */
+  state: SaveState;
+  stage: number;
   onEquip: () => void;
   onCraft: () => void;
   onDissemble: () => void;
@@ -986,14 +1106,21 @@ function ItemDetail({
         <AtlasSprite id={itemSprite(item)} scale={2} className="mt-0.5" />
         <div className="min-w-0">
           <p className={`text-sm font-medium ${style.text}`}>{itemName(item)}</p>
-          <p className="text-[10px] uppercase tracking-wide text-neutral-500">
-            {style.label} · iLvl {item.itemLevel}
-            {item.rerolls > 0 ? ` · ${item.rerolls} rerolls` : ''}
+          <p className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-neutral-500">
+            {/* The same mark the tile carries, so the two agree about what this is. */}
+            {skill && <WeaponMark className="text-neutral-400" />}
+            <span>
+              {skill ? 'Weapon · ' : ''}
+              {style.label} · iLvl {item.itemLevel}
+              {item.rerolls > 0 ? ` · ${item.rerolls} rerolls` : ''}
+            </span>
           </p>
         </div>
       </div>
 
       {skill && <WeaponSkill skill={skill} itemLevel={item.itemLevel} regen={resourceRegen} />}
+
+      <ItemWorth item={item} state={state} stage={stage} equipped={equipped} />
 
       <ItemMods item={item} />
 
@@ -1081,6 +1208,100 @@ function WeaponSkill({
   );
 }
 
+/**
+ * What this item is worth, as the two numbers that decide a run.
+ *
+ * Not a score. `itemPower` exists and would be one line, but its own doc says it is a
+ * heuristic that is not shown to players - and it is the function that once rated a
+ * `crit chance more 0` penalty as the biggest bonus in the game. This re-derives
+ * through the real formula instead, so it cannot disagree with the fight.
+ *
+ * The question changes with what you are looking at. An unequipped item is asked what
+ * it WOULD do; a worn one is asked what you would lose by taking it off - which is the
+ * same computation with the two sides swapped, and the only way to price something
+ * that is already contributing.
+ */
+function ItemWorth({
+  item,
+  state,
+  stage,
+  equipped,
+}: {
+  item: ItemInstance;
+  state: SaveState;
+  stage: number;
+  equipped: boolean;
+}) {
+  const worth = useMemo(() => {
+    const ctx = { stage, isBoss: false, enemyHpFraction: 1 };
+
+    // Worn items are priced by REMOVAL, so "with" is the save as it stands.
+    const without: SaveState = equipped
+      ? {
+          ...state,
+          loadout: state.loadout.map((uid) => (uid === item.uid ? null : uid)),
+          weapon: state.weapon === item.uid ? null : state.weapon,
+        }
+      : state;
+    const with_ = equipped ? state : previewEquip(state, item, ctx);
+
+    const before = deriveStats(without, ctx);
+    const after = deriveStats(with_, ctx);
+
+    // WAVE dps as well as single, and it is not padding. statsDps excludes area on
+    // purpose - a boss is fought one at a time - so a wide skill scores below Unarmed
+    // on it. A Maul really did read as -13% while being the better weapon, because the
+    // three targets it hits are the entire reason to carry one.
+    const wave = (s: ReturnType<typeof deriveStats>) =>
+      statsDps(s).mul(Math.min(s.area, enemyCount(stage)));
+
+    return {
+      dps: { before: statsDps(before), after: statsDps(after) },
+      wave: { before: wave(before), after: wave(after) },
+      ehp: { before: effectiveHp(before), after: effectiveHp(after) },
+    };
+  }, [item, state, stage, equipped]);
+
+  return (
+    <dl className="flex flex-col gap-0.5 rounded border border-neutral-800 bg-neutral-950/60 p-2 text-[11px]">
+      <p className="mb-0.5 text-[10px] uppercase tracking-wide text-neutral-500">
+        {equipped ? 'Worth to you now' : 'If you equipped it'}
+      </p>
+      <WorthRow label="DPS (single)" before={worth.dps.before} after={worth.dps.after} />
+      <WorthRow label="DPS (wave)" before={worth.wave.before} after={worth.wave.after} />
+      <WorthRow label="Effective HP" before={worth.ehp.before} after={worth.ehp.after} />
+    </dl>
+  );
+}
+
+function WorthRow({ label, before, after }: { label: string; before: Big; after: Big }) {
+  // As a RATIO, not a difference. These numbers reach 1e30, where a subtraction is
+  // unreadable and "+2.4e28" says nothing about whether the swap is worth making.
+  const ratio = before.toNumber() > 0 ? after.div(before).toNumber() : after.gt(0) ? Infinity : 1;
+  const pct = (ratio - 1) * 100;
+  const flat = Math.abs(pct) < 0.05;
+
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-neutral-500">{label}</dt>
+      <dd className="flex items-baseline gap-2 font-mono">
+        <span className="text-neutral-300">{formatBig(after)}</span>
+        <span
+          className={`w-14 text-right ${
+            flat ? 'text-neutral-600' : pct > 0 ? 'text-emerald-400' : 'text-red-400'
+          }`}
+        >
+          {flat
+            ? '—'
+            : !Number.isFinite(pct)
+              ? '+∞'
+              : `${pct > 0 ? '+' : ''}${Math.abs(pct) < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`}
+        </span>
+      </dd>
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
@@ -1092,11 +1313,100 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({
+  label,
+  value,
+  note,
+  valueClass = 'text-neutral-100',
+}: {
+  label: string;
+  value: string;
+  note?: string;
+  valueClass?: string;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-neutral-900 py-0.5">
-      <dt className="text-xs text-neutral-400">{label}</dt>
-      <dd className="font-mono text-sm text-neutral-100">{value}</dd>
+      <dt className="text-xs text-neutral-400">
+        {label}
+        {note && <span className="ml-1.5 text-[10px] text-neutral-600">{note}</span>}
+      </dt>
+      <dd className={`font-mono text-sm ${valueClass}`}>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * A stat, and on demand what produced it.
+ *
+ * Collapsed by default. The sheet's job is still to answer "how much damage do I have"
+ * in one glance, and twelve stats each showing four components would bury that under
+ * fifty rows - most of them on a phone screen.
+ *
+ * A `<button>` rather than a clickable div: this is keyboard-reachable and announces
+ * its expanded state without any of that being written by hand.
+ */
+function StatRow({
+  label,
+  value,
+  parts,
+  lines,
+  detail,
+}: {
+  label: string;
+  value: string;
+  parts: StatBreakdown;
+  lines: { label: string; value: string; note?: string }[];
+  detail?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="border-b border-neutral-900">
+      {/* Plain spans, not dt/dd. A <button> may not contain them - a definition list
+          takes dt and dd as its own children - and the invalid nesting cost the row its
+          accessible name, which is how the e2e suite found it. */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-baseline gap-1.5 py-0.5 text-left hover:bg-neutral-900/60"
+      >
+        <span className="w-2 shrink-0 font-mono text-[9px] text-neutral-600">
+          {open ? '−' : '+'}
+        </span>
+        <span className="text-xs text-neutral-400">{label}</span>
+        {/* The cap is flagged on the COLLAPSED row too. A number quietly lower than
+            the gear implies is the one case where a player has to be told without
+            having to go looking for it. */}
+        {parts.cappedBy && <span className="text-[10px] text-amber-400">capped</span>}
+        <span className="ml-auto font-mono text-sm text-neutral-100">{value}</span>
+      </button>
+
+      {open && (
+        <dl className="mb-1 ml-3.5 flex flex-col gap-0.5 border-l border-neutral-800 pl-2.5 text-[11px]">
+          {lines.map((line) => (
+            <div key={line.label} className="flex items-baseline justify-between gap-3">
+              <dt className={line.label === 'capped' ? 'text-amber-400' : 'text-neutral-500'}>
+                {/* Own span, for the same reason the stat label above has one: a bare
+                    text node beside a note makes the dt read "baseUnarmed, skill level
+                    0", and nothing on the page has the layer's name as its own text. */}
+                <span>{line.label}</span>
+                {line.note && <span className="ml-1.5 text-neutral-600">{line.note}</span>}
+                {line.label === 'base' && detail && (
+                  <span className="ml-1.5 text-neutral-600">{detail}</span>
+                )}
+              </dt>
+              <dd
+                className={`font-mono ${
+                  line.label === 'capped' ? 'text-amber-400/80' : 'text-neutral-300'
+                }`}
+              >
+                {line.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }

@@ -158,3 +158,14 @@ const byId = new Map<string, Skill>([...SKILLS, UNARMED].map((s) => [s.id, s]));
 export function getSkill(id: string): Skill | undefined {
   return byId.get(id);
 }
+
+/**
+ * Stamina or Mana - which word this skill's resource wears.
+ *
+ * Lives in the sim rather than in the UI because the sim now needs it too: when the
+ * resource caps your attack speed, the character sheet is told WHICH resource did it,
+ * and a second copy of this one-line rule is a second place for it to go stale.
+ */
+export function resourceLabel(skill: Skill): string {
+  return skill.kind === 'magical' ? 'Mana' : 'Stamina';
+}

@@ -331,6 +331,12 @@ test('the character panel shows every stat and the empty inventory', async ({ pa
     await expect(panel.getByText(label, { exact: true })).toBeVisible();
   }
 
+  // Expanding a stat has to show what produced it. The components come from the sim
+  // and the row from the panel, so this is the one assertion that proves the two are
+  // wired together at all - a breakdown that renders empty is invisible in a unit test.
+  await panel.getByRole('button', { name: /Damage/ }).first().click();
+  await expect(panel.getByText('base', { exact: true })).toBeVisible();
+
   await panel.getByRole('button', { name: /^Inventory/ }).click();
   await expect(panel.getByText(/No items yet/)).toBeVisible();
   // Four slots, all empty on a fresh account.

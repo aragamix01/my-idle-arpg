@@ -33,6 +33,8 @@ import {
   dungeonResistances,
   ELEMENTS,
   elementalScale,
+  explainStats,
+  previewEquip,
   DISSEMBLE_YIELD,
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
@@ -2297,6 +2299,136 @@ describe('migration', () => {
     const { state, migrated } = migrateSave(current);
     expect(migrated).toBe(false);
     expect(state).toEqual(current);
+  });
+});
+
+describe('stat breakdown', () => {
+  const CTX = { stage: 40, isBoss: false, enemyHpFraction: 1 };
+
+  /** A save carrying all three layers on damage: a weapon, gear, and gold upgrades. */
+  const geared = (): SaveState => {
+    const weapon = {
+      ...rollItem(7, 1, 40),
+      baseId: 'axe',
+      rarity: 'rare' as const,
+      uniqueId: undefined,
+      uniqueRolls: undefined,
+      baseAffix: undefined,
+      affixes: [
+        { affixId: 'honed', tier: 2, value: 2.8 },
+        { affixId: 'brutal', tier: 2, value: 0.041 },
+      ],
+    };
+    const gear = {
+      ...rollItem(7, 2, 40),
+      baseId: 'whetstone',
+      rarity: 'magic' as const,
+      uniqueId: undefined,
+      uniqueRolls: undefined,
+      baseAffix: undefined,
+      affixes: [{ affixId: 'brutal', tier: 1, value: 0.031 }],
+    };
+    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    loadout[0] = gear.uid;
+    return {
+      ...newSave(7, T0),
+      items: [weapon, gear],
+      loadout,
+      weapon: weapon.uid,
+      upgrades: { ...newSave(7, T0).upgrades, damage: 25, crit: 10 },
+    };
+  };
+
+  it('the parts make the whole', () => {
+    // The panel shows the components and never the walk between them, but if
+    // (base + flat) x (1 + increased) x more does not reproduce what the fight
+    // uses then the components are fiction and the panel is lying politely.
+    const save = geared();
+    const parts = explainStats(save, CTX);
+    const stats = deriveStats(save, CTX);
+
+    for (const key of STAT_KEYS) {
+      const p = parts[key];
+      const rebuilt = p.base.add(p.flat).mul(1 + p.increased).mul(p.more);
+      // By RATIO, because these span 1e0 to 1e30 and an absolute tolerance would be
+      // either meaningless at the top or unmeetable at the bottom. The skill-level
+      // stats resolve to exactly zero for a build carrying none, where a ratio is 0/0.
+      if (p.resolved.toNumber() === 0) {
+        expect(rebuilt.toNumber(), `${key} should be zero`).toBe(0);
+      } else {
+        expect(rebuilt.div(p.resolved).toNumber(), `${key} does not recombine`).toBeCloseTo(1, 9);
+      }
+
+      const actual = typeof stats[key] === 'number' ? stats[key] : stats[key].toNumber();
+      expect(p.final.toNumber(), `${key} final disagrees with deriveStats`).toBeCloseTo(
+        actual,
+        6,
+      );
+    }
+  });
+
+  it('reports which layer a modifier landed in', () => {
+    // Honed is flat and Brutal is increased, and the whole point of the panel is
+    // that those are different purchases rather than two numbers on a tooltip.
+    const damage = explainStats(geared(), CTX).damage;
+    expect(damage.flat).toBeCloseTo(2.8, 9);
+    // Two Brutals, on the weapon and on the gear, and they SUM.
+    expect(damage.increased).toBeCloseTo(0.041 + 0.031, 9);
+    // The damage upgrade track is `more`, so 25 levels compound rather than add.
+    expect(damage.more.toNumber()).toBeCloseTo(Math.pow(1.07, 25), 6);
+  });
+
+  it('names the resource when it is what capped attack speed', () => {
+    // The one limit a player meets in normal play, and the reason cappedBy exists:
+    // without it the layers would add up to a speed the character sheet does not show.
+    const save = geared();
+    const fast: SaveState = {
+      ...save,
+      // Far more speed than a base regen of 3 against Sunder's cost of 1 can pay for.
+      upgrades: { ...save.upgrades, attackSpeed: 400 },
+    };
+
+    const parts = explainStats(fast, CTX).attackSpeed;
+    expect(parts.cappedBy).toContain('Stamina');
+    expect(parts.final.lt(parts.resolved)).toBe(true);
+    expect(parts.final.toNumber()).toBeCloseTo(deriveStats(fast, CTX).attackSpeed, 9);
+  });
+
+  it('previewing an equip never touches the save it was given', () => {
+    // The panel calls this on every render while an item is selected. Mutating the
+    // store's own save from a display path would be a bug that only shows up as
+    // "my loadout changed when I looked at something".
+    const save = geared();
+    const before = JSON.stringify(save);
+    previewEquip(save, save.items[1], CTX);
+    expect(JSON.stringify(save)).toBe(before);
+  });
+
+  it('a weapon preview beats fighting unarmed', () => {
+    // The largest single upgrade in the game, and the one the panel most needs to
+    // price: an empty weapon slot is Unarmed, which does not scale at all.
+    const bare = newSave(7, T0);
+    const weapon = geared().items[0];
+    const armed = previewEquip({ ...bare, items: [weapon] }, weapon, CTX);
+
+    expect(statsDps(deriveStats(armed, CTX)).gt(statsDps(deriveStats(bare, CTX)))).toBe(true);
+    expect(armed.weapon).toBe(weapon.uid);
+  });
+
+  it('fills an empty slot before displacing anything', () => {
+    const save = geared();
+    const spare = save.items[1];
+    const preview = previewEquip(save, spare, CTX);
+    // Already worn at index 0, so the preview is the loadout unchanged rather than a
+    // second copy of it wedged into the next slot.
+    expect(preview.loadout.filter((uid) => uid === spare.uid)).toHaveLength(1);
+  });
+
+  it('says nothing about a stat no limit touched', () => {
+    // A reason on every stat would make the real one invisible.
+    const parts = explainStats(geared(), CTX);
+    expect(parts.damage.cappedBy).toBeNull();
+    expect(parts.maxHp.cappedBy).toBeNull();
   });
 });
 

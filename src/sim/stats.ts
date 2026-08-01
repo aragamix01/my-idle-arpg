@@ -10,6 +10,7 @@ import {
   baseSkillId,
   ELEMENTS,
   getSkill,
+  resourceLabel,
   UNARMED,
   type Effect,
   type Element,
@@ -23,7 +24,7 @@ import {
   UPGRADE_TRACKS,
   type Resistances,
 } from './curves';
-import { itemEffects } from './items';
+import { itemEffects, itemPower } from './items';
 import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
   BASE_STATS,
@@ -398,29 +399,86 @@ export function deriveStats(
   });
 
   const base = baseStats(save, ctx, groups.flat());
+  const stats = resolveAll(base, buckets);
+  applyLimits(stats, save);
+  return stats;
+}
+
+/**
+ * Collapse every stat's layers. Extracted so deriveStats and explainStats resolve
+ * through the same arithmetic rather than through two copies of it.
+ *
+ * @param out Optionally receives the pre-clamp value per stat. Omitted by deriveStats,
+ * which is the hot path and has no use for them.
+ */
+function resolveAll(base: Stats, buckets: Buckets, out?: Record<StatKey, Big>): Stats {
   const stats = { ...base };
   for (const key of STAT_KEYS) {
     // Resolved as a Big in every case, then collapsed back to a double for the stats
     // that are rates, probabilities or counts. Doing the arithmetic uniformly is what
     // keeps the three layers one code path; only the storage type differs.
     const resolved = resolve(big(base[key]), buckets[key]);
+    if (out) out[key] = resolved;
     if (isMagnitude(key)) stats[key] = resolved;
     else (stats as unknown as Record<string, number>)[key] = resolved.toNumber();
   }
+  return stats;
+}
 
-  stats.area = Math.max(1, stats.area);
-  stats.critChance = Math.min(1, Math.max(0, stats.critChance));
-  stats.maxHp = bigMax(1, stats.maxHp);
-  stats.toughness = Math.max(0.1, stats.toughness);
-  stats.resourceRegen = Math.max(0, stats.resourceRegen);
+/**
+ * Floors, ceilings and the resource cap, applied in place.
+ *
+ * ONE copy, called by deriveStats and by explainStats. That is the whole reason this is
+ * a function: a character sheet that listed a stat's layers and stopped would disagree
+ * with the number printed above them exactly when a limit was biting - and the resource
+ * cap bites for every caster who ever buys attack speed, which is the moment the panel
+ * most needs to be believed.
+ *
+ * @param capped Optionally receives a reason per stat a limit actually moved. Omitted
+ * by deriveStats, so the hot path allocates nothing and compares nothing.
+ */
+function applyLimits(
+  stats: Stats,
+  save: SaveState,
+  capped?: Partial<Record<StatKey, string>>,
+): void {
+  if (stats.area < 1) {
+    stats.area = 1;
+    if (capped) capped.area = 'a skill always hits at least one target';
+  }
+  if (stats.critChance > 1) {
+    stats.critChance = 1;
+    if (capped) capped.critChance = 'crit chance cannot exceed certainty';
+  } else if (stats.critChance < 0) {
+    stats.critChance = 0;
+    if (capped) capped.critChance = 'crit chance cannot go below zero';
+  }
+  if (stats.maxHp.lt(1)) {
+    stats.maxHp = bigMax(1, stats.maxHp);
+    if (capped) capped.maxHp = 'max HP cannot fall below one';
+  }
+  if (stats.toughness < 0.1) {
+    stats.toughness = 0.1;
+    if (capped) capped.toughness = 'toughness cannot fall below x0.10';
+  }
+  if (stats.resourceRegen < 0) {
+    stats.resourceRegen = 0;
+    if (capped) capped.resourceRegen = 'regen cannot be negative';
+  }
   // Gold find had no floor until an item existed that reduces it. Two Warden's
   // Coffers take it negative, and a negative multiplier does not mean "earns less" -
   // it means the clear pays out negative gold.
-  stats.goldFind = Math.max(0, stats.goldFind);
+  if (stats.goldFind < 0) {
+    stats.goldFind = 0;
+    if (capped) capped.goldFind = 'gold find cannot be negative';
+  }
   // Negative penetration would mean granting the target resistance, which nothing in
   // the game is supposed to do. No ceiling here - mitigatedResistance bounds what it
   // can accomplish, so a huge value is wasted rather than unbounded.
-  stats.penetration = Math.max(0, stats.penetration);
+  if (stats.penetration < 0) {
+    stats.penetration = 0;
+    if (capped) capped.penetration = 'penetration cannot be negative';
+  }
 
   // Attack speed is capped by what the resource can sustain, and the CAP IS WRITTEN
   // INTO THE STAT rather than applied later in the damage formula.
@@ -434,8 +492,143 @@ export function deriveStats(
   // Closed-form, which is non-negotiable: resolveStage has no per-tick loop, and
   // that is what lets the server resolve offline progress and the harness sweep 300
   // stages in milliseconds.
-  stats.attackSpeed = Math.min(stats.attackSpeed, sustainedRate(stats, equippedSkill(save)));
-  return stats;
+  const skill = equippedSkill(save);
+  const sustained = sustainedRate(stats, skill);
+  if (sustained < stats.attackSpeed) {
+    stats.attackSpeed = sustained;
+    if (capped) capped.attackSpeed = `${resourceLabel(skill)} sustains only this many uses`;
+  }
+}
+
+/**
+ * What produced one stat's final number.
+ *
+ * The character sheet quotes finals; this is the answer to "from what?". Every field is
+ * the value the sim actually used, not a re-derivation - see explainStats.
+ */
+export interface StatBreakdown {
+  /** What the skill or BASE_STATS supplied, before any modifier. */
+  base: Big;
+  /** Σ of the flat layer, in the stat's own units. */
+  flat: number;
+  /** Σ of the increased layer, as a fraction: 0.38 is +38%. */
+  increased: number;
+  /** Π of the more layer. 1 means nothing compounds this stat. */
+  more: Big;
+  /** After the layers, before any floor, ceiling or cap. */
+  resolved: Big;
+  /** What the fight actually uses. */
+  final: Big;
+  /** Why `final` differs from `resolved`, or null when nothing intervened. */
+  cappedBy: string | null;
+}
+
+/**
+ * Every stat's components, for the character sheet.
+ *
+ * Deliberately NOT folded into deriveStats. Building twelve objects per call would land
+ * on the hottest path in the sim - the balance harness calls deriveStats thousands of
+ * times per stage - to serve a panel that is open a fraction of the time. This runs the
+ * same helpers in the same order instead, so there is no second copy of the formula:
+ * the only thing the two could disagree about is the limits, and those are one function
+ * both of them call.
+ *
+ * Client-side by design. The panel already holds the whole SaveState, so no part of
+ * this crosses the wire.
+ */
+export function explainStats(save: SaveState, ctx: EffectContext): Record<StatKey, StatBreakdown> {
+  const groups = equippedGroups(save, ctx);
+  const buckets = emptyBuckets();
+  collectUpgrades(buckets, save.upgrades);
+
+  const scale = amplifiers(groups, ctx);
+  groups.forEach((effects, i) => {
+    collectEffects(
+      buckets,
+      effects.filter((e) => conditionHolds(e, ctx)),
+      scale[i],
+    );
+  });
+
+  const base = baseStats(save, ctx, groups.flat());
+  const resolved = {} as Record<StatKey, Big>;
+  const stats = resolveAll(base, buckets, resolved);
+
+  const capped: Partial<Record<StatKey, string>> = {};
+  applyLimits(stats, save, capped);
+
+  return Object.fromEntries(
+    STAT_KEYS.map((key) => [
+      key,
+      {
+        base: big(base[key]),
+        flat: buckets[key].flat,
+        increased: buckets[key].increased,
+        more: buckets[key].more,
+        resolved: resolved[key],
+        final: big(stats[key]),
+        cappedBy: capped[key] ?? null,
+      },
+    ]),
+  ) as Record<StatKey, StatBreakdown>;
+}
+
+/**
+ * The save you would have if you equipped this item, without equipping it.
+ *
+ * Exists so the inventory can answer "what is this worth?" with the number the FIGHT
+ * uses rather than with a score. itemPower is the obvious shortcut and the wrong one:
+ * its own doc says it is a heuristic not shown to players, and it once rated a `crit
+ * chance more 0` penalty as the largest bonus any modifier could carry. Re-deriving
+ * through the real formula cannot invert an item, because it is the same code that
+ * decides the fight.
+ *
+ * Mirrors the placement rules the equip command applies, so the preview is what would
+ * actually happen: a weapon swaps into the weapon slot; gear takes its own slot if it
+ * is already worn, then the first empty one; with every slot full it replaces the
+ * WEAKEST live slot, because that is the swap a player would make.
+ *
+ * Pure - the save handed in is never touched.
+ */
+export function previewEquip(
+  save: SaveState,
+  item: ItemInstance,
+  ctx: EffectContext,
+): SaveState {
+  const owned = save.items.some((i) => i.uid === item.uid) ? save.items : [...save.items, item];
+
+  if (baseSkillId(item.baseId) !== undefined) {
+    return { ...save, items: owned, weapon: item.uid };
+  }
+
+  const loadout = [...save.loadout];
+  const slots = equipSlots(save, ctx);
+
+  const worn = loadout.indexOf(item.uid);
+  if (worn !== -1) return { ...save, items: owned, loadout };
+
+  const free = loadout.slice(0, slots).indexOf(null);
+  if (free !== -1) {
+    loadout[free] = item.uid;
+    return { ...save, items: owned, loadout };
+  }
+
+  // Full. Replacing the weakest live slot is the honest comparison - against the best
+  // one, every drop would look like a downgrade and the number would be useless.
+  let weakest = 0;
+  let weakestPower = Infinity;
+  for (let i = 0; i < slots; i++) {
+    const uid = loadout[i];
+    const current = uid ? findItem(save, uid) : undefined;
+    // An empty live slot is weaker than anything, so it wins the swap outright.
+    const power = current ? itemPower(current) : -Infinity;
+    if (power < weakestPower) {
+      weakestPower = power;
+      weakest = i;
+    }
+  }
+  loadout[weakest] = item.uid;
+  return { ...save, items: owned, loadout };
 }
 
 /**
