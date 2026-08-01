@@ -11,25 +11,18 @@
 
 import { useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Sprite, Text } from 'pixi.js';
-import { StageVisual, type AttemptOutcome } from './cosmetic';
+import { StageVisual, type AttemptKind, type AttemptSpec } from './cosmetic';
 import { loadAtlas, type Atlas } from './atlas';
 import type { SpriteId } from './sprites';
 
-/** A replay request. A new `id` starts one; the same id is ignored. */
-export interface AttemptRequest {
+/**
+ * A replay request. A new `id` starts one; the same id is ignored.
+ *
+ * Everything except the id is what the cosmetic layer already takes, so this is that
+ * spec plus identity rather than a parallel shape that has to be kept in step with it.
+ */
+export interface AttemptRequest extends AttemptSpec {
   id: number;
-  stage: number;
-  outcome: AttemptOutcome;
-  /** Dungeon runs get their own boss and banner; the playback is identical. */
-  dungeon?: boolean;
-  /**
-   * Sprites the trash wave will drop, in order.
-   *
-   * Rolled by the caller from the same pure, seeded functions the server will use, so
-   * what falls on screen is what lands in the inventory - the same discipline that
-   * makes the replay a preview rather than a guess.
-   */
-  waveDrops?: SpriteId[];
 }
 
 interface Props {
@@ -54,14 +47,42 @@ const BOSS_SCALE = 6;
 const BOSS_BAR_WIDTH = 150;
 
 /**
+ * How a delve boss differs from one standing at the end of a wave.
+ *
+ * Scale and tint rather than art: the atlas has two boss sprites and the Abyss is a
+ * third kind of fight, so inventing a distinction it does not have would mean shipping
+ * a dungeon warlock and calling it something else. An Abyssal is the warlock, larger
+ * and lit violet, and the banner says which it is.
+ */
+const DELVE_STYLE: Record<AttemptKind, { scale: number; tint: number }> = {
+  stage: { scale: 1, tint: 0xffffff },
+  dungeon: { scale: 1.35, tint: 0xffffff },
+  abyssal: { scale: 1.6, tint: 0xb18cf0 },
+};
+
+/**
  * Which boss to draw.
  *
- * Dungeons always show the warlock so they read as a different fight at a
+ * Delves always show the warlock so they read as a different fight at a
  * glance; stages alternate so consecutive ones do not repeat.
  */
-function bossSpriteFor(stage: number, dungeon: boolean): SpriteId {
-  if (dungeon) return 'boss.warlock';
+function bossSpriteFor(stage: number, kind: AttemptKind): SpriteId {
+  if (kind !== 'stage') return 'boss.warlock';
   return stage % 2 === 0 ? 'boss.warlock' : 'boss.brute';
+}
+
+/** The banner's headline. The remaining time is appended by the caller. */
+function bannerHead(playback: { kind: AttemptKind; stage: number; tier: number }): string {
+  switch (playback.kind) {
+    case 'abyssal':
+      // The tier, not the depth. It is what the player picked off the shelf, and it is
+      // the number the tablet is named for.
+      return `ABYSS T${playback.tier}  ·  BOSS`;
+    case 'dungeon':
+      return `DUNGEON ${playback.stage}  ·  BOSS`;
+    default:
+      return `STAGE ${playback.stage}`;
+  }
 }
 
 /** Health bar: dark backing, coloured fill, drawn straight into a Graphics. */
@@ -246,12 +267,7 @@ export function GameCanvas({
         const request = attemptRef.current;
         if (request && request.id !== startedAttemptId) {
           startedAttemptId = request.id;
-          visual.startAttempt(
-            request.outcome,
-            request.stage,
-            request.dungeon ?? false,
-            request.waveDrops ?? [],
-          );
+          visual.startAttempt(request);
         }
         visual.setOptions({
           ...optionsRef.current,
@@ -350,16 +366,17 @@ export function GameCanvas({
         }
 
         if (playback.active) {
-          const bossTexture =
-            atlas?.get(bossSpriteFor(playback.stage, playback.dungeon)) ?? null;
+          const bossTexture = atlas?.get(bossSpriteFor(playback.stage, playback.kind)) ?? null;
           if (visual.boss.alive && bossTexture) {
+            const style = DELVE_STYLE[playback.kind];
             bossSprite.visible = true;
             bossSprite.texture = bossTexture;
             bossSprite.x = Math.round(visual.boss.x);
             bossSprite.y = Math.round(visual.boss.y);
-            // A dungeon boss is the only thing on screen, so it can afford to
+            // A delve boss is the only thing on screen, so it can afford to
             // be bigger than one standing at the end of a wave.
-            bossSprite.scale.set(playback.dungeon ? BOSS_SCALE * 1.35 : BOSS_SCALE);
+            bossSprite.scale.set(BOSS_SCALE * style.scale);
+            bossSprite.tint = style.tint;
             drawBar(
               bars,
               visual.boss.x - BOSS_BAR_WIDTH / 2,
@@ -381,10 +398,11 @@ export function GameCanvas({
           // Below the HUD stat chips, which are drawn in the DOM above this
           // canvas and clipped the banner at y=14.
           banner.y = 72;
-          banner.text = playback.dungeon
-            ? `DUNGEON ${playback.stage}  ·  BOSS  ·  ${remaining.toFixed(1)}s`
-            : `STAGE ${playback.stage}  ·  ${playback.phase === 'boss' ? 'BOSS' : 'WAVE'}  ·  ` +
-              `${remaining.toFixed(1)}s`;
+          banner.text =
+            playback.kind === 'stage'
+              ? `STAGE ${playback.stage}  ·  ${playback.phase === 'boss' ? 'BOSS' : 'WAVE'}  ·  ` +
+                `${remaining.toFixed(1)}s`
+              : `${bannerHead(playback)}  ·  ${remaining.toFixed(1)}s`;
           // The timer is the second failure mode, and it deserves to look like
           // one before it fires rather than only in the result line.
           banner.style.fill = remaining < 10 ? 0xf87171 : 0xf4f4f5;

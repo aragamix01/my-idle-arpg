@@ -84,6 +84,7 @@ import {
   tabletTotals,
   getTabletMod,
   TABLET_MODS,
+  getHudSnapshot,
   migrateSave,
   rerollCost,
   resolveDungeon,
@@ -1958,6 +1959,40 @@ describe('tablets', () => {
 
     const deep = atUnlock();
     expect(applyCommand(deep, { type: 'attemptAbyssal', uid: 'nope' }, T0).ok).toBe(false);
+  });
+
+  it('the shelf says what a run will resist before the tablet is spent', () => {
+    // The reason the tablets cross the wire as a view rather than raw instances. A
+    // tablet is consumed on entry AND on a loss, and at the Abyssal affinity the
+    // resisted element is the largest number in the fight - so a run whose element you
+    // discover by entering it is a coin flip, not a decision.
+    const save = atUnlock();
+    const held = [rollTablet(save.seed, 500, 3), rollTablet(save.seed, 501, 9)];
+    const hud = getHudSnapshot({ ...save, tablets: held }, T0);
+
+    // Deepest first, so the hardest thing a player might still beat is at the top.
+    expect(hud.tablets.map((t) => t.tier)).toEqual([9, 3]);
+
+    for (const view of hud.tablets) {
+      const depth = abyssalDepth(view.tier);
+      expect(view.depth).toBe(depth);
+      // The same affinity the fight will actually roll, not a second derivation of it.
+      expect({ resists: view.resists, weakTo: view.weakTo }).toEqual(
+        dungeonAffinity(save.seed, depth),
+      );
+      expect(view.danger).toBeCloseTo(tabletTotals(held.find((t) => t.uid === view.uid)!).danger, 9);
+    }
+  });
+
+  it('states the gate rather than hiding the control', () => {
+    const shallow = { ...newSave(3, T0), bestStage: ABYSS_UNLOCK_STAGE - 1 };
+    expect(getHudSnapshot(shallow, T0).abyss).toMatchObject({
+      unlocked: false,
+      unlockStage: ABYSS_UNLOCK_STAGE,
+    });
+    expect(getHudSnapshot({ ...shallow, bestStage: ABYSS_UNLOCK_STAGE }, T0).abyss.unlocked).toBe(
+      true,
+    );
   });
 
   it('a fresh save has none, and an old save gains the array without losing anything', () => {

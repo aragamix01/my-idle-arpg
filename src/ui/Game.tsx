@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
+  abyssalDepth,
   bulkUpgradeCost,
   formatBig,
   fromSave,
@@ -19,6 +20,7 @@ import {
   killsPerSecond,
   maxAffordableUpgrades,
   remainingLevels,
+  resolveAbyssal,
   resolveDungeon,
   resolveStage,
   rollItem,
@@ -40,6 +42,16 @@ import { AtlasSprite } from './atlasSprite';
 import { CharacterPanel } from './CharacterPanel';
 import { compact, ELEMENT_STYLE, elementName } from './format';
 import { HUD_TICK_MS, useGameStore } from './store';
+import { TabletStash } from './TabletStash';
+
+/**
+ * A replay in flight, plus which tablet paid for it.
+ *
+ * The uid rides on the request for the same reason the kind does: which command to send
+ * when the replay ends is decided by what was being replayed, and tracking it separately
+ * means two pieces of state that can disagree about what the player just watched.
+ */
+type Attempt = AttemptRequest & { tabletUid?: string };
 
 /** Bulk purchase sizes. 'max' spends everything the track can absorb. */
 const BUY_AMOUNTS = [1, 5, 10, 20, 'max'] as const;
@@ -54,9 +66,10 @@ export function Game() {
   const { state, hud, events, pending, error, desynced, bootstrap, send, refreshHud } =
     useGameStore();
   const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
-  const [attempt, setAttempt] = useState<AttemptRequest | null>(null);
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [abyssOpen, setAbyssOpen] = useState(false);
   const attemptSeq = useRef(0);
   const [receipt, setReceipt] = useState<OfflineReceipt | null>(null);
   /**
@@ -105,17 +118,50 @@ export function Game() {
       id: attemptSeq.current,
       stage: current.bestStage,
       outcome: resolveDungeon(current, current.bestStage),
-      dungeon: true,
+      kind: 'dungeon',
     });
   }, [attempt]);
+
+  /**
+   * Descend, on the tablet the player picked.
+   *
+   * Same shape again, with one difference worth naming: the stage passed to the replay
+   * is the tier's DEPTH, not the tier. The Abyss indexes on the tablet, so a T7 is a
+   * fight at floor 152 no matter where the player's own ladder has reached - which is
+   * the whole reason the mode does not scale off `bestStage`.
+   */
+  const startAbyssal = useCallback(
+    (uid: string) => {
+      const current = useGameStore.getState().state;
+      if (!current || attempt) return;
+      const tablet = current.tablets.find((t) => t.uid === uid);
+      if (!tablet) return;
+
+      setAbyssOpen(false);
+      attemptSeq.current += 1;
+      setAttempt({
+        id: attemptSeq.current,
+        stage: abyssalDepth(tablet.tier),
+        outcome: resolveAbyssal(current, tablet),
+        kind: 'abyssal',
+        tier: tablet.tier,
+        tabletUid: uid,
+      });
+    },
+    [attempt],
+  );
 
   const finishAttempt = useCallback(() => {
     // Which command to send is decided by what was being replayed. Reading it
     // off the request rather than tracking a second piece of state means the
     // two can never disagree about what the player just watched.
-    const wasDungeon = attempt?.dungeon ?? false;
+    const finished = attempt;
     setAttempt(null);
-    void send({ type: wasDungeon ? 'attemptDungeon' : 'attemptStage' });
+    if (finished?.kind === 'abyssal' && finished.tabletUid) {
+      void send({ type: 'attemptAbyssal', uid: finished.tabletUid });
+      return;
+    }
+    void send({ type: finished?.kind === 'dungeon' ? 'attemptDungeon' : 'attemptStage' });
   }, [attempt, send]);
 
   useEffect(() => {
@@ -321,11 +367,7 @@ export function Game() {
           >
             {/* A dungeon replay disables this button too, so it must not
                 claim a stage fight is under way while a duel is on screen. */}
-            {attempt
-              ? attempt.dungeon
-                ? 'In a dungeon…'
-                : `Fighting stage ${attempt.stage}…`
-              : `Attempt stage ${hud.currentStage}`}
+            {attempt ? replayLabel(attempt) : `Attempt stage ${hud.currentStage}`}
           </button>
 
           <button
@@ -354,6 +396,26 @@ export function Game() {
             )}
           </button>
 
+          {/*
+            The Abyss opens the shelf rather than starting a run, because which tablet
+            to spend IS the decision - tier, modifiers and affinity all differ per
+            tablet, and there is no sensible default to pick on the player's behalf.
+
+            Enabled even when locked and even at zero tablets: the surface behind it is
+            where both of those are explained, and a disabled button explains nothing.
+          */}
+          <button
+            type="button"
+            disabled={pending || attempt !== null}
+            onClick={() => setAbyssOpen(true)}
+            aria-label={abyssLabel(hud)}
+            title={abyssLabel(hud)}
+            className="flex min-h-12 items-center gap-1.5 rounded-lg border border-violet-500/60 bg-violet-500/10 px-3 text-sm text-violet-100 disabled:opacity-40"
+          >
+            <span aria-hidden>▼</span>
+            <span className="font-mono text-xs">{hud.tablets.length}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setSheetOpen(true)}
@@ -372,6 +434,19 @@ export function Game() {
       {sheetOpen && (
         <BottomSheet title="Upgrades" trailing={buyPicker('buy-amount-sheet')} onClose={() => setSheetOpen(false)}>
           {upgradeGrid}
+        </BottomSheet>
+      )}
+
+      {abyssOpen && (
+        <BottomSheet title="The Abyss" onClose={() => setAbyssOpen(false)}>
+          <TabletStash
+            tablets={hud.tablets}
+            unlocked={hud.abyss.unlocked}
+            unlockStage={hud.abyss.unlockStage}
+            cap={hud.abyss.cap}
+            busy={pending || attempt !== null}
+            onDescend={startAbyssal}
+          />
         </BottomSheet>
       )}
 
@@ -608,6 +683,35 @@ function Stat({ label, value }: { label: string; value: string }) {
  * is where they find out. Shared between `title` and `aria-label` so a screen reader
  * gets the same sentence rather than a truncated one.
  */
+/** What the primary button says while a replay is on screen. */
+function replayLabel(attempt: Attempt): string {
+  switch (attempt.kind) {
+    case 'abyssal':
+      return `In the Abyss, T${attempt.tier}…`;
+    case 'dungeon':
+      return 'In a dungeon…';
+    default:
+      return `Fighting stage ${attempt.stage}…`;
+  }
+}
+
+/**
+ * What the Abyss button says it will do.
+ *
+ * Three states and all three are worth distinguishing: locked, unlocked but empty, and
+ * ready. "0 tablets" alone would leave a player at floor 40 hunting for a drop that
+ * cannot happen yet.
+ */
+function abyssLabel(hud: HudSnapshot): string {
+  const held = `${hud.tablets.length} tablet${hud.tablets.length === 1 ? '' : 's'}`;
+  if (!hud.abyss.unlocked) return `The Abyss, ${held} — opens at floor ${hud.abyss.unlockStage}`;
+  if (hud.tablets.length === 0) {
+    return `The Abyss, no tablets — they drop from stage bosses past floor ${hud.abyss.unlockStage}`;
+  }
+  const deepest = hud.tablets[0];
+  return `The Abyss, ${held} — deepest is tier ${deepest.tier}, resists ${elementName(deepest.resists)}`;
+}
+
 function dungeonLabel(keys: number, dungeon: HudSnapshot['dungeon']): string {
   // Every branch starts with "Dungeon" and states the key count. It is the button's
   // accessible name as well as its tooltip, so it has to identify the control before
@@ -751,6 +855,12 @@ function describe(event: { type: string } & Record<string, unknown>): string {
       return `cleared dungeon ${event.stage} in ${Number(event.seconds).toFixed(1)}s`;
     case 'dungeonFailed':
       return `dungeon failed (${event.reason}) — key spent`;
+    case 'abyssalCleared':
+      return `cleared the Abyss T${event.tier} in ${Number(event.seconds).toFixed(1)}s`;
+    case 'abyssalFailed':
+      return `Abyss T${event.tier} failed (${event.reason}) — tablet spent`;
+    case 'tabletFound':
+      return `found ${event.name} (T${event.tier})`;
     case 'itemDropped':
       return `found ${event.name} (${event.rarity})`;
     case 'inventoryFull':

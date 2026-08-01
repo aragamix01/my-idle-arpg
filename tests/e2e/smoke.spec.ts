@@ -774,8 +774,8 @@ test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) =>
       return visual ? visual.attempt : null;
     });
   await expect
-    .poll(async () => (await banner())?.dungeon, { timeout: REPLAY_TIMEOUT })
-    .toBe(true);
+    .poll(async () => (await banner())?.kind, { timeout: REPLAY_TIMEOUT })
+    .toBe('dungeon');
   await expect.poll(async () => (await banner())?.trashSeconds).toBe(0);
 
   // Resolved: the key is spent whichever way it went.
@@ -787,6 +787,36 @@ test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) =>
       Number(((await dungeon.getAttribute('aria-label')) ?? '').match(/(\d+)\s+keys?/)?.[1] ?? -1),
     )
     .toBe(keysBefore - 1);
+});
+
+/**
+ * The Abyss surface, at the only state a browser test can honestly reach.
+ *
+ * It cannot run one. Reaching floor 80 needs gear, not just upgrades - measured: a
+ * character buying max upgrades on every track and clearing three thousand stages
+ * stalls at stage 23, because the ladder outgrows what gold alone buys. Climbing there
+ * through the API would mean reimplementing the balance harness's equip logic inside a
+ * page.evaluate and several hundred round trips for it.
+ *
+ * So the split is the same one the drop animation ended up with: node covers the replay
+ * and the command, where the sim can be driven directly, and this covers the thing node
+ * cannot see - that the control exists, opens, and explains itself.
+ */
+test('the Abyss says why it is shut', async ({ page }) => {
+  await page.goto('/');
+
+  const abyss = page.getByRole('button', { name: /^The Abyss/ });
+  // The gate is in the accessible name, so a player who cannot see the sheet still
+  // learns the floor. A disabled button with no label would explain nothing.
+  await expect(abyss).toHaveAccessibleName(/opens at floor 80/);
+
+  await abyss.click();
+  const sheet = page.getByRole('dialog', { name: 'The Abyss' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText(/The Abyss opens at floor 80/);
+  // And where the first one comes from, which is the other half of a shut door.
+  await expect(sheet).toContainText(/No tablets/);
+  await expect(sheet.getByRole('button', { name: 'Descend' })).toHaveCount(0);
 });
 
 test('multi-select dissembles exactly what was picked', async ({ page }) => {

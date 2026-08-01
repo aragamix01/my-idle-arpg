@@ -10,6 +10,7 @@
 import { fromSave, toSave } from './big';
 import { farmRate } from './combat';
 import {
+  abyssalDepth,
   dungeonAffinity,
   OFFLINE_CAP_SECONDS,
   upgradeCost,
@@ -19,7 +20,9 @@ import {
 import { computeOffline } from './offline';
 import { deriveStats, equipSlots } from './stats';
 import {
+  ABYSS_UNLOCK_STAGE,
   INVENTORY_CAP,
+  TABLET_CAP,
   UPGRADE_KEYS,
   type MagnitudeStatKey,
   type SaveState,
@@ -27,6 +30,7 @@ import {
   type Stats,
   type UpgradeKey,
 } from './types';
+import { tabletName, tabletTotals, type TabletPays } from './content/tablets';
 import type { CurrencyPurse, Element, ItemInstance } from './content';
 
 export interface UpgradeView {
@@ -55,6 +59,37 @@ export function statsToWire(stats: Stats): WireStats {
 
 export function statsFromWire(stats: WireStats): Stats {
   return { ...stats, damage: fromSave(stats.damage), maxHp: fromSave(stats.maxHp) };
+}
+
+/**
+ * One tablet, as the stash needs to read it.
+ *
+ * A view rather than the `TabletInstance` itself, because three of these fields are
+ * derived from things the UI cannot see: `depth` and the affinity come from the account
+ * seed and the tier curve, and both have to be readable BEFORE the tablet is spent. A
+ * tablet is consumed on entry and consumed on a loss, so a run whose element you only
+ * learn by entering it is a coin flip rather than a decision - the same reason the
+ * dungeon's affinity is on the button.
+ *
+ * `mods` stays as ids. The registry is pure content and the UI already imports it the
+ * same way it imports the affix registry, so resolving them here would only mean two
+ * places that decide how a modifier reads.
+ */
+export interface TabletView {
+  uid: string;
+  tier: number;
+  /** "Teeming Gilded Tablet". */
+  name: string;
+  /** Ids into TABLET_MODS, in roll order. */
+  mods: string[];
+  /** Ladder floor this tier actually fights at - the tier alone does not say. */
+  depth: number;
+  /** Summed danger, as a fraction. 0.65 is "+65% harder than a bare tier". */
+  danger: number;
+  /** Summed reward per axis. A Gilded tablet pays gold and a Hoarding one items. */
+  reward: Record<TabletPays, number>;
+  resists: Element;
+  weakTo: Element;
 }
 
 export interface HudSnapshot {
@@ -102,6 +137,21 @@ export interface HudSnapshot {
   currency: CurrencyPurse;
   /** Cap included so the panel can show capacity without importing curves. */
   inventoryCap: number;
+  /**
+   * The tablets on the shelf, deepest first.
+   *
+   * Sorted here rather than in the stash, so the order does not depend on which surface
+   * is rendering them. Deepest first because the decision a player is making is "what is
+   * the hardest thing I can still beat", and that is at the top of the list.
+   */
+  tablets: TabletView[];
+  /**
+   * The Abyss gate, stated rather than implied by an absent button.
+   *
+   * `unlocked` is false until floor 80 and the command refuses regardless - this is the
+   * copy for a control that has to explain why it is disabled.
+   */
+  abyss: { unlocked: boolean; unlockStage: number; cap: number };
 }
 
 export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
@@ -143,5 +193,26 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     items: save.items,
     currency: save.currency,
     inventoryCap: INVENTORY_CAP,
+    tablets: [...save.tablets]
+      .sort((a, b) => b.tier - a.tier)
+      .map((tablet) => {
+        const depth = abyssalDepth(tablet.tier);
+        const { danger, reward } = tabletTotals(tablet);
+        return {
+          uid: tablet.uid,
+          tier: tablet.tier,
+          name: tabletName(tablet),
+          mods: tablet.mods,
+          depth,
+          danger,
+          reward,
+          ...dungeonAffinity(save.seed, depth),
+        };
+      }),
+    abyss: {
+      unlocked: save.bestStage >= ABYSS_UNLOCK_STAGE,
+      unlockStage: ABYSS_UNLOCK_STAGE,
+      cap: TABLET_CAP,
+    },
   };
 }

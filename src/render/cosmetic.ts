@@ -91,13 +91,43 @@ export interface AttemptPlayback {
   cleared: boolean;
   failure: 'none' | 'died' | 'timeout';
   /**
-   * A dungeon rather than a stage.
+   * Which of the three fights this is.
    *
-   * Only the presentation differs - a different boss sprite and a different
-   * banner. The playback machinery is identical, because resolveDungeon returns
-   * the same outcome shape with no trash phase.
+   * Only the presentation differs - a boss sprite, a banner, and whether the idle
+   * swarm is cleared. The playback machinery is identical, because `resolveDelve`
+   * returns the same outcome shape with no trash phase whichever depth it ran.
+   *
+   * A boolean here would have had to mean "not a stage", which was true of a dungeon
+   * only for as long as a dungeon was the only other thing.
    */
-  dungeon: boolean;
+  kind: AttemptKind;
+  /**
+   * Tablet tier, for an Abyssal run. Zero otherwise.
+   *
+   * Carried rather than folded into `stage` because they are different numbers: a T7
+   * fights at depth 152, and the banner has to say the tier - that is what the player
+   * chose and what the tablet is called.
+   */
+  tier: number;
+}
+
+/**
+ * Stage, dungeon, or Abyss.
+ *
+ * The cosmetic layer knows these apart only to draw them apart. Nothing here decides
+ * anything - the sim resolved all three before the first frame.
+ */
+export type AttemptKind = 'stage' | 'dungeon' | 'abyssal';
+
+/** Everything a replay needs. An object, because the last positional argument was the third. */
+export interface AttemptSpec {
+  outcome: AttemptOutcome;
+  /** Ladder floor. For an Abyssal that is the tier's DEPTH, not the tier. */
+  stage: number;
+  kind?: AttemptKind;
+  /** What the trash wave will drop, already rolled. Stages only. */
+  waveDrops?: SpriteId[];
+  tier?: number;
 }
 
 /** What the replay needs from resolveStage. Structural, so the sim stays unimported here. */
@@ -196,7 +226,8 @@ export class StageVisual {
     stage: 1,
     cleared: false,
     failure: 'none',
-    dungeon: false,
+    kind: 'stage',
+    tier: 0,
   };
 
   /** The boss, alive only during the boss phase. */
@@ -226,13 +257,7 @@ export class StageVisual {
   }
 
   /** Begin replaying a resolved attempt. Ignored while one is already running. */
-  startAttempt(
-    outcome: AttemptOutcome,
-    stage: number,
-    dungeon = false,
-    /** What the trash wave will drop, already rolled. Empty is fine. */
-    waveDrops: SpriteId[] = [],
-  ) {
+  startAttempt({ outcome, stage, kind = 'stage', waveDrops = [], tier = 0 }: AttemptSpec) {
     if (this.attempt.active) return;
 
     // Truncated rather than queued. A stage deep enough to drop more than the layer
@@ -261,14 +286,15 @@ export class StageVisual {
       stage,
       cleared: outcome.cleared,
       failure: outcome.failure,
-      dungeon,
+      kind,
+      tier,
     });
     this.boss.alive = false;
 
-    // A dungeon is a duel. The idle swarm is still on screen from farming, and
+    // A delve is a duel. The idle swarm is still on screen from farming, and
     // leaving it there would show a crowd standing around watching - they stop
     // dying the moment the boss phase starts, so they would simply pile up.
-    if (dungeon) {
+    if (kind !== 'stage') {
       for (const enemy of this.enemies) enemy.alive = false;
     }
   }

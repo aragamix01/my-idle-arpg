@@ -58,7 +58,7 @@ describe('wave loot on screen', () => {
 
   it('drops what it was given, and no more', () => {
     const visual = idling();
-    visual.startAttempt(OUTCOME, 40, false, drops);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40, waveDrops: drops });
 
     let seen = 0;
     run(visual, 9, () => {
@@ -74,7 +74,7 @@ describe('wave loot on screen', () => {
     // The whole point is that loot falls WHILE you fight. All four arriving on the
     // same frame would be the old behaviour with extra steps.
     const visual = idling();
-    visual.startAttempt(OUTCOME, 40, false, drops);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40, waveDrops: drops });
 
     // Detected by AGE, not by the array getting longer. Drops are collected within
     // about a second, so counting length changes misses every arrival that lands on
@@ -95,7 +95,7 @@ describe('wave loot on screen', () => {
 
   it('collects them - nothing is left lying on the floor', () => {
     const visual = idling();
-    visual.startAttempt(OUTCOME, 40, false, drops);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40, waveDrops: drops });
 
     run(visual, 20);
     expect(visual.drops).toHaveLength(0);
@@ -103,7 +103,7 @@ describe('wave loot on screen', () => {
 
   it('moves them toward the player rather than away', () => {
     const visual = idling();
-    visual.startAttempt(OUTCOME, 40, false, drops);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40, waveDrops: drops });
 
     // Tracks one drop by IDENTITY across frames. The array is compacted in place, so
     // drops[0] is a different item from one frame to the next once collection starts.
@@ -141,7 +141,7 @@ describe('wave loot on screen', () => {
 
   it('drops nothing when the wave dropped nothing', () => {
     const visual = idling();
-    visual.startAttempt(OUTCOME, 40, false, []);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
     run(visual, 9);
     expect(visual.drops).toHaveLength(0);
   });
@@ -150,11 +150,48 @@ describe('wave loot on screen', () => {
     // startAttempt replaces the queue. A leftover would show items falling from a
     // fight that has already been paid out.
     const visual = idling();
-    visual.startAttempt(OUTCOME, 40, false, drops);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40, waveDrops: drops });
     run(visual, 20);
 
-    visual.startAttempt(OUTCOME, 40, false, []);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
     run(visual, 9);
     expect(visual.drops).toHaveLength(0);
+  });
+});
+
+describe('what kind of fight this is', () => {
+  /** A delve: one boss, no trash phase, which is what resolveDelve returns. */
+  const DUEL = { ...OUTCOME, seconds: 6, trashPhaseSeconds: 0, bossPhaseSeconds: 6 };
+
+  it('carries the tier, because the depth is a different number', () => {
+    // The banner says the tier - it is what the player picked off the shelf and what
+    // the tablet is named for - while `stage` is the floor the fight actually happens
+    // at. Folding them into one field would make T7 read as "ABYSS 152".
+    const visual = idling();
+    visual.startAttempt({ outcome: DUEL, stage: 152, kind: 'abyssal', tier: 7 });
+
+    expect(visual.attempt.kind).toBe('abyssal');
+    expect(visual.attempt.tier).toBe(7);
+    expect(visual.attempt.stage).toBe(152);
+  });
+
+  it('clears the idle swarm for every duel, not just for dungeons', () => {
+    // The swarm stops dying the moment the boss phase starts, so leaving it up shows a
+    // crowd standing around watching. This was a `dungeon` boolean, and the Abyss was
+    // the case that proved a boolean could not say which of three fights it was.
+    for (const kind of ['dungeon', 'abyssal'] as const) {
+      const visual = idling();
+      expect(visual.enemies.some((enemy) => enemy.alive)).toBe(true);
+      visual.startAttempt({ outcome: DUEL, stage: 152, kind, tier: 7 });
+      expect(visual.enemies.some((enemy) => enemy.alive)).toBe(false);
+    }
+  });
+
+  it('leaves a stage as a stage', () => {
+    const visual = idling();
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+    expect(visual.attempt.kind).toBe('stage');
+    expect(visual.attempt.tier).toBe(0);
+    expect(visual.enemies.some((enemy) => enemy.alive)).toBe(true);
   });
 });
