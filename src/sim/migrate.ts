@@ -35,6 +35,12 @@ export const BIG_GOLD_VERSION = 7;
 /** First version whose loadout array is MAX_ITEM_SLOTS long and slots are derived. */
 export const DERIVED_SLOTS_VERSION = 8;
 
+/** First version with elements, resistance and penetration. */
+export const ELEMENTS_VERSION = 9;
+
+/** First version carrying Abyssal tablets. */
+export const TABLETS_VERSION = 10;
+
 export interface MigrationResult {
   state: SaveState;
   /** True when anything was reset, so the caller can tell the player. */
@@ -188,6 +194,15 @@ export function migrateSave(state: SaveState): MigrationResult {
       padded[i] = next.loadout[i] ?? null;
     }
     next.loadout = padded;
+    migrated = true;
+  }
+
+  if (!Array.isArray(next.tablets)) {
+    // v9 -> v10 adds the tablet array. Purely additive, exactly like `weapon` in v6:
+    // an existing save loads with no tablets, derives identical stats, and starts
+    // collecting them the next time it clears a boss past the unlock floor. Nothing
+    // is rerolled and no gear is touched.
+    next.tablets = [];
     migrated = true;
   }
 

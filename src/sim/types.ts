@@ -9,6 +9,7 @@
 import { big, type Big } from './big';
 import type { CurrencyPurse } from './content/currency';
 import type { ItemInstance } from './content/schema';
+import type { TabletInstance } from './content/tablets';
 
 export const STAT_KEYS = [
   'damage',
@@ -172,6 +173,35 @@ export const ITEM_SLOTS = 4;
 export const MAX_ITEM_SLOTS = 7;
 
 /**
+ * Floor from which the Abyss exists at all.
+ *
+ * Not arbitrary, and not a difficulty judgement. The last affix gate is stage 80, so
+ * from here a gear drop rolls from exactly the same table forever - item level stops
+ * meaning anything for gear, and only weapons keep scaling through skill level. The
+ * ladder stops paying in gear at the floor where it starts paying in tablets.
+ */
+export const ABYSS_UNLOCK_STAGE = 80;
+
+/**
+ * Highest tablet tier.
+ *
+ * The Abyss indexes on this and NOT on bestStage, which is the whole point: a tier is a
+ * difficulty you hold in your hand rather than one your progress hands you. Fifteen
+ * because it has to span from "just reached floor 80" to "past where the ladder has
+ * taken you", and a range you can count is a range a player can reason about.
+ */
+export const MAX_TABLET_TIER = 15;
+
+/**
+ * How many tablets a save may hold.
+ *
+ * Its own cap rather than a share of INVENTORY_CAP. Gear is already under real pressure
+ * since trash kills started dropping - roughly eight items a clear at depth - and making
+ * tablets compete for that space would mean a good tablet losing to a common.
+ */
+export const TABLET_CAP = 60;
+
+/**
  * Inventory size.
  *
  * Every clear drops one to three items, so without a cap the save blob grows
@@ -228,6 +258,17 @@ export interface SaveState {
   upgrades: UpgradeLevels;
   /** Rolled item instances. Bounded by INVENTORY_CAP. */
   items: ItemInstance[];
+  /**
+   * Abyssal tablets. Bounded by TABLET_CAP.
+   *
+   * A second array rather than a flag on `items`, because a tablet is not equipment: it
+   * cannot be worn, must not compete for INVENTORY_CAP, and would otherwise have to be
+   * filtered out of every grid, sort and dissemble path in the panel.
+   *
+   * Its OWN shape rather than an ItemInstance - see TabletInstance for why the
+   * similarity is a trap rather than a saving.
+   */
+  tablets: TabletInstance[];
   /**
    * Crafting currency counts.
    *

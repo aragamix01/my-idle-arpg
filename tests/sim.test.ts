@@ -70,6 +70,12 @@ import {
   itemEffects,
   ITEM_SLOTS,
   MAX_ITEM_SLOTS,
+  MAX_TABLET_TIER,
+  rollTabletMods,
+  tabletModSlots,
+  tabletTotals,
+  getTabletMod,
+  TABLET_MODS,
   migrateSave,
   rerollCost,
   resolveDungeon,
@@ -1699,6 +1705,67 @@ describe('currency', () => {
     expect(thenGold.ok).toBe(true);
     if (!thenGold.ok) return;
     expect(thenGold.value.state.items[0].affixes).not.toEqual(viaGold.value.state.items[0].affixes);
+  });
+});
+
+describe('tablets', () => {
+  it('rolls a tier-appropriate tablet, with distinct mods', () => {
+    // Distinct for the same reason an item never rolls one affix twice: the danger
+    // sum multiplies against a curve that is already exponential, so two Teemings
+    // would turn a trade into a stacking problem.
+    for (let tier = 1; tier <= MAX_TABLET_TIER; tier++) {
+      const mods = rollTabletMods(tier, createRng(4).fork(tier));
+      expect(mods).toHaveLength(tabletModSlots(tier));
+      expect(new Set(mods).size).toBe(mods.length);
+      for (const id of mods) {
+        expect(getTabletMod(id)?.minTier ?? 99).toBeLessThanOrEqual(tier);
+      }
+    }
+  });
+
+  it('never rolls a mod gated above its tier', () => {
+    // The gate is the only thing making a deep tablet different in kind rather than
+    // only in degree, and it is invisible if it leaks.
+    const deepOnly = TABLET_MODS.filter((mod) => mod.minTier > 1).map((mod) => mod.id);
+    expect(deepOnly.length).toBeGreaterThan(0);
+
+    for (let uid = 1; uid <= 400; uid++) {
+      for (const id of rollTabletMods(1, createRng(9).fork(uid))) {
+        expect(deepOnly).not.toContain(id);
+      }
+    }
+  });
+
+  it('every mod is a trade, never a gift or a punishment', () => {
+    // Asserted on the DATA rather than through validateRegistry, so the failure names
+    // the mod rather than a list of strings.
+    for (const mod of TABLET_MODS) {
+      expect(mod.danger, `${mod.id} adds no danger`).toBeGreaterThan(0);
+      expect(mod.reward, `${mod.id} pays nothing`).toBeGreaterThan(0);
+    }
+  });
+
+  it('totals what its mods add up to, and tolerates one that no longer exists', () => {
+    const tablet = { uid: '1', tier: 12, mods: ['teeming', 'retired-mod'], crafts: 0 };
+    const totals = tabletTotals(tablet);
+    const teeming = getTabletMod('teeming')!;
+
+    expect(totals.danger).toBeCloseTo(teeming.danger, 9);
+    expect(totals.reward).toBeCloseTo(teeming.reward, 9);
+  });
+
+  it('a fresh save has none, and an old save gains the array without losing anything', () => {
+    expect(newSave(1, T0).tablets).toEqual([]);
+
+    // v9 -> v10 is additive, exactly like `weapon` in v6: nothing is rerolled and no
+    // gear moves, so a returning player's character is bit-identical on load.
+    const v9 = { ...newSave(2, T0), contentVersion: 9, items: [rollItem(2, 1, 40)] };
+    delete (v9 as Partial<SaveState>).tablets;
+
+    const { state, migrated } = migrateSave(v9 as SaveState);
+    expect(migrated).toBe(true);
+    expect(state.tablets).toEqual([]);
+    expect(state.items).toEqual(v9.items);
   });
 });
 

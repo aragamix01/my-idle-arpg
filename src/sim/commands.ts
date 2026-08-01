@@ -204,6 +204,7 @@ export function newSave(seed: number, nowMs: number): SaveState {
     currentStage: 1,
     upgrades: emptyUpgrades(),
     items: [],
+    tablets: [],
     currency: {},
     loadout: Array<string | null>(MAX_ITEM_SLOTS).fill(null),
     // A new character starts unarmed, and Unarmed's bases are the old global

@@ -14,8 +14,9 @@ import { AFFIXES, IMPLICIT_AFFIXES } from './affixes';
 import { BASE_AFFIXES, BASES } from './bases';
 import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
 import { UNIQUES } from './uniques';
+import { availableTabletMods, TABLET_MODS, tabletModSlots } from './tablets';
 import { EffectSchema, UNIQUE_TIER_WEIGHTS, UniqueSchema, type UniqueEffect } from './schema';
-import { BASE_STATS } from '../types';
+import { BASE_STATS, MAX_TABLET_TIER } from '../types';
 
 /** 2: artifacts became rolled item instances with prefixes and suffixes. */
 /** 3: bases carry implicits, drops come in threes, and "artifact" became "item". */
@@ -25,7 +26,8 @@ import { BASE_STATS } from '../types';
 /** 7: gold is a decimal string, so magnitudes are no longer capped at 1.8e308. */
 /** 8: equip slots are derived, so the loadout array is MAX_ITEM_SLOTS long. */
 /** 9: skills carry an element, targets carry resistance, and penetration is a stat. */
-export const CONTENT_VERSION = 9;
+/** 10: Abyssal tablets - a tier you hold, with modifiers, in its own save array. */
+export const CONTENT_VERSION = 10;
 
 export * from './schema';
 export * from './affixes';
@@ -33,6 +35,7 @@ export * from './bases';
 export * from './currency';
 export * from './skills';
 export * from './uniques';
+export * from './tablets';
 
 /**
  * Validates the whole registry.
@@ -213,6 +216,32 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     // Angel Flame refuse it - fine for one authored downside, wrong for a whole item.
     if (unique.effects.every((e) => e.roll.max === e.roll.min)) {
       errors.push(`${unique.id}: every effect is a constant, so nothing can be rolled`);
+    }
+  }
+
+  const seenTabletMod = new Set<string>();
+  for (const mod of TABLET_MODS) {
+    if (seenTabletMod.has(mod.id)) errors.push(`duplicate tablet mod id: ${mod.id}`);
+    seenTabletMod.add(mod.id);
+
+    // The trade IS the mechanic. A mod with danger and no reward is a punishment
+    // nobody would ever apply; one with reward and no danger makes crafting mandatory
+    // rather than interesting, and both collapse the decision the tablet exists to pose.
+    if (mod.danger <= 0) errors.push(`${mod.id}: a tablet mod must add danger`);
+    if (mod.reward <= 0) errors.push(`${mod.id}: a tablet mod must pay for its danger`);
+
+    if (mod.minTier < 1 || mod.minTier > MAX_TABLET_TIER) {
+      errors.push(`${mod.id}: minTier ${mod.minTier} is outside 1..${MAX_TABLET_TIER}`);
+    }
+  }
+
+  // A tier whose pool is smaller than its slot count would roll fewer modifiers than
+  // it claims - silently, because the roll loop simply runs out of candidates.
+  for (let tier = 1; tier <= MAX_TABLET_TIER; tier++) {
+    const available = availableTabletMods(tier).length;
+    const slots = tabletModSlots(tier);
+    if (available < slots) {
+      errors.push(`tablet tier ${tier}: ${slots} slots but only ${available} eligible mods`);
     }
   }
 
