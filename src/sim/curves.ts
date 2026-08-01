@@ -718,6 +718,51 @@ export const DUNGEON_PROFILE: DepthProfile = {
 /** Currency a dungeon clear awards, inclusive. */
 export const DUNGEON_CURRENCY_PER_CLEAR = { min: 1, max: 2 } as const;
 
+// --- The Abyss ------------------------------------------------------------
+
+/**
+ * Chance a stage boss past the unlock floor drops a T1 tablet.
+ *
+ * The ladder is the faucet and the Abyss is the sink. At roughly one in eight the first
+ * tablet arrives within a few floors of unlocking, and a player who only ever climbs
+ * still accumulates them - which matters, because a mode you can only enter by already
+ * being in it is a mode most players never see.
+ */
+export const TABLET_DROP_CHANCE = 0.12;
+
+/**
+ * What an Abyssal clear pays before the tablet's own modifiers.
+ *
+ * Above a dungeon on every axis, because a tablet is scarcer than a key and the fight
+ * is longer. The tablet's `reward` totals multiply these.
+ */
+export const ABYSSAL_ITEMS_PER_CLEAR = 2;
+export const ABYSSAL_CURRENCY_PER_CLEAR = 3;
+
+/**
+ * Chance a clear hands back a tablet of the tier just cleared, and of the next one up.
+ *
+ * The tier-up is the entire progression: no crafting step, no cost, just play. At
+ * roughly one in three a player climbs while they can still win, and stalls at the tier
+ * that starts beating them - the correct place to stall, because it is a statement
+ * about their character rather than their luck.
+ *
+ * ## They must sum to LESS THAN ONE
+ *
+ * The first cut guaranteed a same-tier tablet back. That makes a tablet not a
+ * consumable: clearing a T1 always pays for the next T1, so a player who can beat one
+ * tier can run it forever at no cost, and the scarcity the whole mode is built on
+ * evaporates. The balance harness found it immediately - the agent ran fifty Abyssals
+ * between every stage clear and the ladder went from 10.1 to 18.2 days, all of it time
+ * spent in a mode that never charged for entry.
+ *
+ * At 0.5 + 0.3 a run returns 0.8 tablets on average, so a stock depletes while it
+ * climbs. Running out is not a dead end: the ladder keeps dropping T1s past the unlock
+ * floor, which is what TABLET_DROP_CHANCE is for.
+ */
+export const ABYSSAL_TABLET_RETURN_CHANCE = 0.5;
+export const ABYSSAL_TIER_UP_CHANCE = 0.3;
+
 /**
  * Gold to reroll an item's modifiers.
  *

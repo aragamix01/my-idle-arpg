@@ -38,12 +38,16 @@ import {
   newSave,
   rerollAffixes,
   rerollCost,
+  resolveAbyssal,
   resolveDungeon,
   resolveStage,
   rollDropCount,
   rollItem,
   rollStageBossDrops,
   rollWaveDropCount,
+  rollTablet,
+  rollTabletDrop,
+  TABLET_CAP,
   WAVE_RARITY_WEIGHTS,
   STAGE_TIME_LIMIT_SECONDS,
   toSave,
@@ -196,7 +200,16 @@ function takeDrop(save: SaveState, stage: number): SaveState {
     uid++;
   }
 
-  return { ...save, items: owned, currency, nextItemId: uid };
+  // The ladder's tablet faucet, mirrored like everything else here. Without it the
+  // agent never holds a tablet, runAbyssals never fires, and the golden would model a
+  // player who cannot reach a mode the ladder hands out.
+  const tablets = [...save.tablets];
+  if (rollTabletDrop(save.seed, firstUid, stage) && tablets.length < TABLET_CAP) {
+    tablets.push(rollTablet(save.seed, uid, 1));
+    uid++;
+  }
+
+  return { ...save, items: owned, tablets, currency, nextItemId: uid };
 }
 
 /**
@@ -228,6 +241,43 @@ function runDungeons(save: SaveState): { save: SaveState; seconds: number } {
     seconds += cleared && cleared.type === 'dungeonCleared' ? cleared.seconds : 0;
     // Defensive: a command that consumed nothing would loop forever.
     if (current.currency['dungeon-key'] === before.currency['dungeon-key']) break;
+  }
+
+  return { save: current, seconds };
+}
+
+/**
+ * Spend tablets on the Abyss.
+ *
+ * The harness already runs dungeons, and modelling a player who ignores a whole mode
+ * would understate the gear and currency a real one accumulates - so the golden would
+ * report a ladder slower than the one anybody walks.
+ *
+ * Highest winnable tier first, and only when it is winnable. A tablet is consumed on a
+ * loss, so throwing them at a tier that beats you burns the progression itself.
+ */
+function runAbyssals(save: SaveState): { save: SaveState; seconds: number } {
+  let current = save;
+  let seconds = 0;
+
+  for (let i = 0; i < 50; i++) {
+    // Deepest first: a tier that still clears pays more than a shallower one, and
+    // clearing it is also the only way the tier ladder climbs.
+    const best = [...current.tablets]
+      .sort((a, b) => b.tier - a.tier)
+      .find((tablet) => resolveAbyssal(current, tablet).cleared);
+    if (!best) break;
+
+    const before = current.tablets.length;
+    const result = applyCommand(current, { type: 'attemptAbyssal', uid: best.uid }, 0);
+    if (!result.ok) break;
+    current = result.value.state;
+
+    const cleared = result.value.events.find((e) => e.type === 'abyssalCleared');
+    seconds += cleared && cleared.type === 'abyssalCleared' ? cleared.seconds : 0;
+    // A clear always pays at least one tablet back, so the count is not a progress
+    // signal. Guard on the uid instead: the tablet just spent must be gone.
+    if (current.tablets.some((t) => t.uid === best.uid) && current.tablets.length === before) break;
   }
 
   return { save: current, seconds };
@@ -572,6 +622,11 @@ export function runLadder(seed = SEED): {
         const dungeons = runDungeons(save);
         save = dungeons.save;
         elapsed += dungeons.seconds;
+        // The Abyss after dungeons and before crafting, for the same reason: it pays
+        // items and currency, and the crafting pass should get to spend them.
+        const abyssals = runAbyssals(save);
+        save = abyssals.save;
+        elapsed += abyssals.seconds;
         save = spendCurrency(save, stage);
         break;
       }

@@ -75,6 +75,9 @@ import {
   ABYSSAL_PROFILE,
   abyssalDepth,
   resolveAbyssal,
+  rollTablet,
+  rollTabletDrop,
+  rollAbyssalTablets,
   type TabletInstance,
   rollTabletMods,
   tabletModSlots,
@@ -1863,6 +1866,98 @@ describe('tablets', () => {
     const intoWeakness = elementalScale(shares(weakTo), 0, resist);
 
     expect(intoWeakness / intoResisted).toBeGreaterThan(3);
+  });
+
+  it('the ladder is the faucet, and only past the unlock floor', () => {
+    // A mode you can only enter by already being in it is a mode most players never
+    // see, so the ladder has to hand out the first one.
+    expect(rollTabletDrop(5, 1, ABYSS_UNLOCK_STAGE - 1)).toBe(false);
+
+    let dropped = 0;
+    for (let uid = 1; uid <= 600; uid++) {
+      if (rollTabletDrop(5, uid, ABYSS_UNLOCK_STAGE)) dropped++;
+    }
+    expect(dropped).toBeGreaterThan(0);
+    // Sanity on the rate rather than an exact count: a faucet that opened on every
+    // boss would make the tablet meaningless, one that never opened would be a wall.
+    expect(dropped / 600).toBeLessThan(0.3);
+  });
+
+  it('a tablet is a consumable - a run returns less than it costs', () => {
+    // THE property the mode rests on, and the one the first cut got wrong. Guaranteeing
+    // a same-tier tablet back means clearing a tier pays for the next attempt at it, so
+    // a player who can beat one tier runs it forever free. The harness caught it: fifty
+    // Abyssals between every stage clear, and the ladder went 10.1 -> 18.2 days.
+    for (const tier of [1, 5, 10]) {
+      const runs = 600;
+      let returned = 0;
+      for (let uid = 1; uid <= runs; uid++) {
+        const found = rollAbyssalTablets(6, uid, tier);
+        returned += found.length;
+        for (const tablet of found) {
+          expect(tablet.tier).toBeGreaterThanOrEqual(tier);
+          expect(tablet.tier).toBeLessThanOrEqual(MAX_TABLET_TIER);
+        }
+      }
+      expect(returned / runs, `tier ${tier} sustains itself`).toBeLessThan(1);
+    }
+  });
+
+  it('running dry is recoverable, not a dead end', () => {
+    // The counterweight to depletion. A player who spends their last tablet is a few
+    // stage clears from another, because the ladder never stops being the faucet.
+    let dropped = 0;
+    for (let uid = 1; uid <= 300; uid++) {
+      if (rollTabletDrop(12, uid, ABYSS_UNLOCK_STAGE + 40)) dropped++;
+    }
+    expect(dropped).toBeGreaterThan(0);
+  });
+
+  it('sometimes pays the next tier, and never past the last', () => {
+    const climbed = Array.from({ length: 200 }, (_, i) => rollAbyssalTablets(7, i + 1, 3)).filter(
+      (found) => found.some((t) => t.tier === 4),
+    ).length;
+    expect(climbed).toBeGreaterThan(0);
+    expect(climbed).toBeLessThan(200);
+
+    // At the ceiling there is nowhere to climb, so every run pays its own tier only.
+    for (let uid = 1; uid <= 60; uid++) {
+      for (const tablet of rollAbyssalTablets(7, uid, MAX_TABLET_TIER)) {
+        expect(tablet.tier).toBe(MAX_TABLET_TIER);
+      }
+    }
+  });
+
+  it('spends the tablet on a win and on a loss alike', () => {
+    // The pressure that makes running one at the edge of your power a decision. A
+    // refunded tablet would make failure free.
+    const save = atUnlock();
+    const winnable = rollTablet(save.seed, 900, 1);
+    const hopeless = rollTablet(save.seed, 901, MAX_TABLET_TIER);
+    const withTablets: SaveState = { ...save, tablets: [winnable, hopeless] };
+
+    const won = applyCommand(withTablets, { type: 'attemptAbyssal', uid: winnable.uid }, T0);
+    expect(won.ok).toBe(true);
+    if (!won.ok) return;
+    expect(won.value.events.map((e) => e.type)).toContain('abyssalCleared');
+    expect(won.value.state.tablets.some((t) => t.uid === winnable.uid)).toBe(false);
+
+    const lost = applyCommand(withTablets, { type: 'attemptAbyssal', uid: hopeless.uid }, T0);
+    expect(lost.ok).toBe(true);
+    if (!lost.ok) return;
+    expect(lost.value.events.map((e) => e.type)).toContain('abyssalFailed');
+    expect(lost.value.state.tablets.some((t) => t.uid === hopeless.uid)).toBe(false);
+    // A loss pays nothing at all - not even the tablet that would let you retry.
+    expect(lost.value.state.items).toHaveLength(save.items.length);
+  });
+
+  it('refuses below the unlock floor, and refuses a tablet you do not hold', () => {
+    const tablet = rollTablet(1, 1, 1);
+    const shallow: SaveState = { ...newSave(1, T0), bestStage: 10, tablets: [tablet] };
+    expect(applyCommand(shallow, { type: 'attemptAbyssal', uid: tablet.uid }, T0).ok).toBe(false);
+
+    const deep = atUnlock();
+    expect(applyCommand(deep, { type: 'attemptAbyssal', uid: 'nope' }, T0).ok).toBe(false);
   });
 
   it('a fresh save has none, and an old save gains the array without losing anything', () => {

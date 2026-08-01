@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import { big, formatBig, fromSave, toSave, type Big, type BigInput } from './big';
-import { resolveDungeon, resolveStage } from './combat';
+import { resolveAbyssal, resolveDungeon, resolveStage } from './combat';
 import {
   BULK_PURCHASE_LIMIT,
   bulkUpgradeCost,
@@ -20,6 +20,9 @@ import {
   maxAffordableUpgrades,
   remainingLevels,
   rerollCost,
+  abyssalDepth,
+  ABYSSAL_ITEMS_PER_CLEAR,
+  ABYSSAL_CURRENCY_PER_CLEAR,
 } from './curves';
 import {
   CONTENT_VERSION,
@@ -27,6 +30,8 @@ import {
   DISSEMBLE_YIELD,
   getCurrency,
   isWeaponBase,
+  tabletName,
+  tabletTotals,
   WAVE_RARITY_WEIGHTS,
   type CurrencyId,
   type CurrencyPurse,
@@ -43,10 +48,15 @@ import {
   rollItem,
   rollStageBossDrops,
   rollWaveDropCount,
+  rollTablet,
+  rollTabletDrop,
+  rollAbyssalTablets,
 } from './items';
 import { equipSlots, findItem, keyDropMultiplier } from './stats';
 import {
   MAX_ITEM_SLOTS,
+  ABYSS_UNLOCK_STAGE,
+  TABLET_CAP,
   INVENTORY_CAP,
   UPGRADE_KEYS,
   err,
@@ -129,6 +139,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   /** Takes no stage: a dungeon always runs at bestStage, never at a chosen one. */
   z.object({ type: z.literal('attemptDungeon') }).strict(),
   z.object({ type: z.literal('claimOffline') }).strict(),
+  /** Which tablet to spend. A tier is a thing you hold, so the run names one. */
+  z.object({ type: z.literal('attemptAbyssal'), uid: z.string().min(1) }).strict(),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
@@ -144,6 +156,9 @@ export type SimEvent =
   | { type: 'stageFailed'; stage: number; reason: 'died' | 'timeout'; gold: string }
   | { type: 'dungeonCleared'; stage: number; seconds: number; gold: string }
   | { type: 'dungeonFailed'; stage: number; reason: 'died' | 'timeout' }
+  | { type: 'abyssalCleared'; tier: number; seconds: number; gold: string }
+  | { type: 'abyssalFailed'; tier: number; reason: 'died' | 'timeout' }
+  | { type: 'tabletFound'; tier: number; name: string }
   | { type: 'itemDropped'; itemId: string; name: string; rarity: string }
   /** Carries how many drops were lost, so the message can say what it cost. */
   | { type: 'inventoryFull'; lost: number }
@@ -307,6 +322,17 @@ export function applyCommand(
         }
 
         if (lost > 0) events.push({ type: 'inventoryFull', lost });
+
+        // The ladder is the Abyss's faucet. Rolled off its own stream and granted last,
+        // so adding tablets could not shift a single item or fragment that was already
+        // going to fall.
+        if (rollTabletDrop(next.seed, firstUid, stage) && next.tablets.length < TABLET_CAP) {
+          const tabletUid = next.nextItemId;
+          next.nextItemId = tabletUid + 1;
+          const tablet = rollTablet(next.seed, tabletUid, 1);
+          next.tablets = [...next.tablets, tablet];
+          events.push({ type: 'tabletFound', tier: tablet.tier, name: tabletName(tablet) });
+        }
       } else {
         events.push({
           type: 'stageFailed',
@@ -579,6 +605,89 @@ export function applyCommand(
           name: getCurrency(id)?.name ?? id,
           count,
         });
+      }
+      break;
+    }
+
+    case 'attemptAbyssal': {
+      if (next.bestStage < ABYSS_UNLOCK_STAGE) {
+        return err(`reach floor ${ABYSS_UNLOCK_STAGE} first`);
+      }
+
+      const tablet = next.tablets.find((t) => t.uid === command.uid);
+      if (!tablet) return err('you do not have that tablet');
+
+      // Consumed up front, and consumed on a loss. Same pressure a dungeon key
+      // carries: running one at the edge of your power is a decision, not a formality.
+      next.tablets = next.tablets.filter((t) => t.uid !== command.uid);
+
+      const outcome = resolveAbyssal(next, tablet);
+      if (!outcome.cleared) {
+        events.push({
+          type: 'abyssalFailed',
+          tier: tablet.tier,
+          reason: outcome.failure === 'timeout' ? 'timeout' : 'died',
+        });
+        break;
+      }
+
+      const { reward } = tabletTotals(tablet);
+      const depth = abyssalDepth(tablet.tier);
+
+      events.push({
+        type: 'abyssalCleared',
+        tier: tablet.tier,
+        seconds: outcome.seconds,
+        gold: toSave(earn(next, outcome.goldEarned)),
+      });
+
+      // Items, at the DEPTH the tier fights at rather than at the player's own stage -
+      // the whole point of indexing on the tablet is that a T7 pays a T7's item level.
+      const items = Math.max(1, Math.round(ABYSSAL_ITEMS_PER_CLEAR * (1 + reward.items)));
+      let lost = 0;
+      for (let i = 0; i < items; i++) {
+        const uid = next.nextItemId;
+        next.nextItemId = uid + 1;
+        if (next.items.length >= INVENTORY_CAP) {
+          lost++;
+          continue;
+        }
+        const item = rollDungeonItem(next.seed, uid, depth);
+        next.items.push(item);
+        events.push({
+          type: 'itemDropped',
+          itemId: item.uid,
+          name: itemName(item),
+          rarity: item.rarity,
+        });
+      }
+      if (lost > 0) events.push({ type: 'inventoryFull', lost });
+
+      const currencyUid = next.nextItemId;
+      next.nextItemId = currencyUid + 1;
+      const units = Math.max(1, Math.round(ABYSSAL_CURRENCY_PER_CLEAR * (1 + reward.currency)));
+      for (let i = 0; i < units; i++) {
+        const purse = rollDungeonCurrency(next.seed, currencyUid + i);
+        next.currency = credit(next.currency, purse);
+        for (const [id, count] of Object.entries(purse) as [CurrencyId, number][]) {
+          events.push({
+            type: 'currencyDropped',
+            currencyId: id,
+            name: getCurrency(id)?.name ?? id,
+            count,
+          });
+        }
+      }
+
+      // Tablets last, and ALWAYS at least one of the tier just cleared. A run that paid
+      // none would strand the player with no way back into the mode, and the only
+      // recovery would be climbing the ladder for another T1.
+      const tabletUid = next.nextItemId;
+      for (const found of rollAbyssalTablets(next.seed, tabletUid, tablet.tier)) {
+        next.nextItemId += 1;
+        if (next.tablets.length >= TABLET_CAP) continue;
+        next.tablets = [...next.tablets, found];
+        events.push({ type: 'tabletFound', tier: found.tier, name: tabletName(found) });
       }
       break;
     }

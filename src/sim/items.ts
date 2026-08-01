@@ -31,6 +31,7 @@ import {
   type SpiritDelta,
 } from './content/currency';
 import { getUnique, pickUnique, rollUniqueValues, uniqueEffects } from './content/uniques';
+import { rollTabletMods, type TabletInstance } from './content/tablets';
 import {
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
@@ -39,10 +40,13 @@ import {
   KEY_DROP_CHANCE,
   WAVE_DROP_CHANCE,
   WAVE_DROP_MAX,
+  TABLET_DROP_CHANCE,
+  ABYSSAL_TABLET_RETURN_CHANCE,
+  ABYSSAL_TIER_UP_CHANCE,
   WEAPON_DROP_SHARE,
 } from './curves';
 import { createRng, type Rng } from './rng';
-import { BASE_STATS } from './types';
+import { ABYSS_UNLOCK_STAGE, BASE_STATS, MAX_TABLET_TIER } from './types';
 
 /** Arbitrary large odd multiplier, so reroll streams never collide with drops. */
 const REROLL_STREAM = 0x9e3779b1;
@@ -58,6 +62,12 @@ const DUNGEON_STREAM = 0x27d4_eb2f;
 
 /** And for how much the trash wave dropped, which must not move the drops themselves. */
 const WAVE_DROP_STREAM = 0x1656_67b1;
+
+/** And for whether a stage boss handed over a tablet. */
+const TABLET_STREAM = 0x3b9a_ca07;
+
+/** And for what an Abyssal clear paid, which must not collide with a dungeon's. */
+const ABYSSAL_STREAM = 0x5bd1_e995;
 
 /**
  * The RNG stream for an item's current roll.
@@ -290,6 +300,63 @@ export function rollWaveDropCount(accountSeed: number, firstUid: number, stage: 
     if (drops >= WAVE_DROP_MAX) break;
   }
   return drops;
+}
+
+/**
+ * Roll one tablet.
+ *
+ * Seeded on the uid like every other roll, so the client's optimistic prediction and the
+ * server's authoritative re-run produce the same modifiers - the same property that
+ * lets a stage replay be a preview rather than a guess.
+ */
+export function rollTablet(accountSeed: number, uid: number, tier: number): TabletInstance {
+  const clamped = Math.max(1, Math.min(MAX_TABLET_TIER, Math.round(tier)));
+  return {
+    uid: String(uid),
+    tier: clamped,
+    mods: rollTabletMods(clamped, rollStream(accountSeed, uid, 0)),
+    crafts: 0,
+  };
+}
+
+/**
+ * Whether a stage boss hands over a T1 tablet.
+ *
+ * Its own stream, so introducing tablets could not shift which fragments or keys a boss
+ * was already going to drop - the same discipline the key roll follows by going last.
+ */
+export function rollTabletDrop(accountSeed: number, firstUid: number, stage: number): boolean {
+  if (stage < ABYSS_UNLOCK_STAGE) return false;
+  return createRng(accountSeed).fork(firstUid * TABLET_STREAM).next() < TABLET_DROP_CHANCE;
+}
+
+/**
+ * What an Abyssal clear hands back, in tablets.
+ *
+ * Expected return is deliberately BELOW ONE - see ABYSSAL_TABLET_RETURN_CHANCE. A
+ * guaranteed tablet back makes the tablet not a consumable at all, and the whole mode
+ * rests on it being one.
+ *
+ * Running dry is not a dead end: the ladder keeps dropping T1s past the unlock floor.
+ * Recovery costs a few stage clears, which is a cost rather than a wall.
+ */
+export function rollAbyssalTablets(
+  accountSeed: number,
+  firstUid: number,
+  tier: number,
+): TabletInstance[] {
+  const rng = createRng(accountSeed).fork(firstUid * ABYSSAL_STREAM);
+  const out: TabletInstance[] = [];
+
+  if (rng.next() < ABYSSAL_TABLET_RETURN_CHANCE) {
+    out.push(rollTablet(accountSeed, firstUid, tier));
+  }
+  // Drawn unconditionally so the tier-up does not depend on whether the first roll
+  // landed - two draws, two independent questions.
+  if (tier < MAX_TABLET_TIER && rng.next() < ABYSSAL_TIER_UP_CHANCE) {
+    out.push(rollTablet(accountSeed, firstUid + 1, tier + 1));
+  }
+  return out;
 }
 
 /**
