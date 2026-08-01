@@ -195,3 +195,165 @@ describe('what kind of fight this is', () => {
     expect(visual.enemies.some((enemy) => enemy.alive)).toBe(true);
   });
 });
+
+/**
+ * The boss entrance.
+ *
+ * Every one of these was driven from node rather than watched, for the reason at the top
+ * of this file: the replay advances on requestAnimationFrame, and the pane the browser
+ * tools drive does not composite. Watching cannot see any of it.
+ */
+describe('the boss arrives', () => {
+  const DUEL = { ...OUTCOME, seconds: 6, trashPhaseSeconds: 0, bossPhaseSeconds: 6 };
+
+  /** Step until the predicate holds, or give up. Returns the frames it took. */
+  function runUntil(visual: StageVisual, done: () => boolean, limitSeconds = 20): number {
+    const dt = 1 / 60;
+    for (let i = 0; i < Math.round(limitSeconds / dt); i++) {
+      if (done()) return i;
+      visual.update(dt);
+    }
+    return -1;
+  }
+
+  it('stops the simulated clock while the boss falls', () => {
+    // THE assertion that decides whether this is cosmetic. The sim owns
+    // trashPhaseSeconds and bossPhaseSeconds and the countdown is reported against them,
+    // so an entrance that spent simulated seconds would be the renderer editing the
+    // fight rather than depicting it.
+    const visual = idling();
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+
+    expect(runUntil(visual, () => visual.attempt.phase === 'entrance')).toBeGreaterThan(0);
+    const frozen = visual.attempt.elapsed;
+    // Pinned exactly at the boundary, not wherever the crossing frame landed.
+    expect(frozen).toBeCloseTo(visual.attempt.trashSeconds, 9);
+
+    const seen = new Set<number>();
+    runUntil(visual, () => visual.attempt.phase !== 'entrance');
+    // Re-run the same window sampling every frame, since runUntil steps past it.
+    const second = idling();
+    second.startAttempt({ outcome: OUTCOME, stage: 40 });
+    runUntil(second, () => second.attempt.phase === 'entrance');
+    while (second.attempt.phase === 'entrance') {
+      seen.add(second.attempt.elapsed);
+      second.update(1 / 60);
+    }
+    expect([...seen]).toEqual([frozen]);
+  });
+
+  it('spends no simulated time at all, so the fight still runs its full length', () => {
+    // The counterweight to the assertion above. Freezing the clock would be just as
+    // wrong if the replay then ended early.
+    const visual = idling();
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+    run(visual, 20);
+
+    expect(visual.attempt.phase).toBe('finished');
+    expect(visual.attempt.elapsed).toBeCloseTo(visual.attempt.duration, 9);
+  });
+
+  it('holds the boss at full health until it has landed', () => {
+    // "The boss is slow to appear but its HP is already going down" was the report. The
+    // bar does not exist during the entrance and the value behind it does not move.
+    const visual = idling();
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+    runUntil(visual, () => visual.attempt.phase === 'entrance');
+
+    while (visual.attempt.phase === 'entrance') {
+      expect(visual.attempt.bossHp).toBe(1);
+      expect(visual.boss.alive).toBe(true);
+      visual.update(1 / 60);
+    }
+
+    run(visual, 0.3);
+    expect(visual.attempt.phase).toBe('boss');
+    expect(visual.attempt.bossHp).toBeLessThan(1);
+  });
+
+  it('scatters the survivors of a wave that ended early', () => {
+    /*
+      Survivors are the exception, and measuring said so: the drain rate is
+      `living / remaining`, so a 50-second trash phase - what a real stage actually
+      produces - reliably ends at zero enemies. They only pile up when the wave barely
+      runs, which is a character massively overpowering a stage:
+
+          trashPhaseSeconds  0.05  0.5   2    5    9+
+          alive at entrance   122   15    3    1    0
+
+      So this is insurance rather than the common path, and it is worth having: without
+      it those survivors are immortal (effectiveKillRate returns 0 outside the trash
+      phase) and keep walking into the player right through the duel.
+    */
+    const rushed = { ...OUTCOME, trashPhaseSeconds: 0.05, seconds: 3.05, bossPhaseSeconds: 3 };
+    const visual = idling();
+    visual.startAttempt({ outcome: rushed, stage: 40 });
+
+    runUntil(visual, () => visual.attempt.phase === 'entrance');
+    expect(visual.enemies.some((enemy) => enemy.fleeing)).toBe(true);
+
+    runUntil(visual, () => visual.attempt.phase === 'boss');
+    expect(visual.enemies.filter((enemy) => enemy.alive)).toHaveLength(0);
+  });
+
+  it('leaves an ordinary wave already empty', () => {
+    const visual = idling();
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+    runUntil(visual, () => visual.attempt.phase === 'boss');
+
+    expect(visual.attempt.phase).toBe('boss');
+    expect(visual.enemies.filter((enemy) => enemy.alive)).toHaveLength(0);
+  });
+
+  it('runs the phases once each, in order', () => {
+    const visual = idling();
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+
+    const order: string[] = [];
+    run(visual, 20, () => {
+      const phase = visual.attempt.phase;
+      if (order[order.length - 1] !== phase) order.push(phase);
+    });
+
+    expect(order).toEqual(['trash', 'entrance', 'boss', 'finished']);
+  });
+
+  it('starts a delve already arriving, and takes longer in the Abyss', () => {
+    // A delve has no wave to transition out of, so the entrance IS its opening - which
+    // is the point, because the Abyssal boss used to simply exist on the first frame.
+    const entranceFrames = (kind: 'dungeon' | 'abyssal') => {
+      const visual = idling();
+      visual.startAttempt({ outcome: DUEL, stage: 152, kind, tier: 7 });
+      visual.update(1 / 60);
+      expect(visual.attempt.phase).toBe('entrance');
+      return runUntil(visual, () => visual.attempt.phase !== 'entrance');
+    };
+
+    const dungeon = entranceFrames('dungeon');
+    const abyssal = entranceFrames('abyssal');
+    expect(dungeon).toBeGreaterThan(0);
+    expect(abyssal).toBeGreaterThan(dungeon);
+  });
+
+  it('points the blade at the boss once the duel is on', () => {
+    // It aimed at nearestLiving(), which searches the enemies array - and the boss is
+    // not in it. So the player swung at trash for the whole duel while the boss's bar
+    // fell on its own, which is exactly "nothing is happening to it".
+    const visual = new StageVisual({ ...OPTIONS, attacksPerSecond: 8 });
+    for (let i = 0; i < 120; i++) visual.update(1 / 60);
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+    runUntil(visual, () => visual.attempt.phase === 'boss');
+    // Far enough in for the swing clock to have fired at least once on the boss.
+    run(visual, 0.3);
+
+    const toBoss = Math.atan2(
+      visual.boss.y - visual.player.y,
+      visual.boss.x - visual.player.x,
+    );
+    let delta = visual.swing.aim - toBoss;
+    delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+    // Not exact: the aim is set when the swing fires and the player keeps orbiting
+    // after it. A few degrees of drift is the animation working, not a miss.
+    expect(Math.abs(delta)).toBeLessThan(0.35);
+  });
+});

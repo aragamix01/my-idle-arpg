@@ -147,7 +147,7 @@ test('the sword swings', async ({ page }) => {
   expect(observed.distinctAngles, 'swing angle never changed').toBeGreaterThan(3);
 });
 
-test('an attempt plays through wave, boss, then commits', async ({ page }) => {
+test('an attempt plays through wave, entrance, boss, then commits', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => '__stageVisual' in globalThis, undefined, { timeout: 15_000 });
 
@@ -159,30 +159,53 @@ test('an attempt plays through wave, boss, then commits', async ({ page }) => {
 
   const trace = await page.evaluate(async () => {
     type Visual = {
-      attempt: { active: boolean; phase: string; elapsed: number; playerHp: number };
+      attempt: {
+        active: boolean;
+        phase: string;
+        elapsed: number;
+        playerHp: number;
+        bossHp: number;
+      };
       boss: { alive: boolean };
     };
     const visual = (globalThis as { __stageVisual?: Visual }).__stageVisual!;
 
-    const phases = new Set<string>();
+    // Order, not just membership. The entrance exists to sit BETWEEN the wave and the
+    // boss, and a set would pass just as happily if it fired after the duel.
+    const order: string[] = [];
     let sawBoss = false;
     let minPlayerHp = 1;
     let maxElapsed = 0;
+    // Sampled during the entrance specifically: the whole point is that no fight time
+    // passes while it plays, and this is the one place it is watched in a real browser.
+    let entranceBossHp = 0;
 
     for (let i = 0; i < 200; i++) {
       if (visual.attempt.active) {
-        phases.add(visual.attempt.phase);
+        const phase = visual.attempt.phase;
+        if (order[order.length - 1] !== phase) order.push(phase);
+        if (phase === 'entrance') entranceBossHp = Math.max(entranceBossHp, visual.attempt.bossHp);
         if (visual.boss.alive) sawBoss = true;
         minPlayerHp = Math.min(minPlayerHp, visual.attempt.playerHp);
         maxElapsed = Math.max(maxElapsed, visual.attempt.elapsed);
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    return { phases: [...phases], sawBoss, minPlayerHp, maxElapsed };
+    return { order, sawBoss, minPlayerHp, maxElapsed, entranceBossHp };
   });
 
-  expect(trace.phases, 'both phases should be reached').toContain('trash');
-  expect(trace.phases).toContain('boss');
+  // A subsequence rather than an exact match: polling at 50ms can miss a phase edge,
+  // and the assertion that matters is that nothing arrives out of order.
+  expect(trace.order, 'wave must come first').toContain('trash');
+  expect(trace.order).toContain('boss');
+  expect(trace.order.indexOf('boss')).toBeGreaterThan(trace.order.indexOf('trash'));
+  if (trace.order.includes('entrance')) {
+    expect(trace.order.indexOf('entrance')).toBeGreaterThan(trace.order.indexOf('trash'));
+    expect(trace.order.indexOf('entrance')).toBeLessThan(trace.order.indexOf('boss'));
+    // Full health for the whole arrival - "the boss is slow to appear but its HP is
+    // already going down" is the report this answers.
+    expect(trace.entranceBossHp).toBe(1);
+  }
   expect(trace.sawBoss, 'boss never spawned').toBe(true);
   // Stage 1 costs real health, so a bar pinned at full would mean the damage
   // split is not being applied.

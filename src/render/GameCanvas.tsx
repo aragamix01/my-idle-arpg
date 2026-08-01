@@ -11,7 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import { Application, Container, Graphics, Sprite, Text } from 'pixi.js';
-import { StageVisual, type AttemptKind, type AttemptSpec } from './cosmetic';
+import { StageVisual, type AttemptKind, type AttemptPlayback, type AttemptSpec } from './cosmetic';
 import { loadAtlas, type Atlas } from './atlas';
 import type { SpriteId } from './sprites';
 
@@ -71,18 +71,32 @@ function bossSpriteFor(stage: number, kind: AttemptKind): SpriteId {
   return stage % 2 === 0 ? 'boss.warlock' : 'boss.brute';
 }
 
+/** How dark the arena gets at the midpoint of the boss entrance. */
+const DIM_PEAK_ALPHA = 0.55;
+/** Fraction of full size the boss starts its arrival at. */
+const ENTRANCE_SCALE_FROM = 0.5;
+
 /** The banner's headline. The remaining time is appended by the caller. */
-function bannerHead(playback: { kind: AttemptKind; stage: number; tier: number }): string {
-  switch (playback.kind) {
-    case 'abyssal':
-      // The tier, not the depth. It is what the player picked off the shelf, and it is
-      // the number the tablet is named for.
-      return `ABYSS T${playback.tier}  ·  BOSS`;
-    case 'dungeon':
-      return `DUNGEON ${playback.stage}  ·  BOSS`;
-    default:
-      return `STAGE ${playback.stage}`;
-  }
+function bannerHead(playback: {
+  kind: AttemptKind;
+  stage: number;
+  tier: number;
+  phase: AttemptPlayback['phase'];
+}): string {
+  const where =
+    playback.kind === 'abyssal'
+      ? // The tier, not the depth. It is what the player picked off the shelf, and it is
+        // the number the tablet is named for.
+        `ABYSS T${playback.tier}`
+      : playback.kind === 'dungeon'
+        ? `DUNGEON ${playback.stage}`
+        : `STAGE ${playback.stage}`;
+
+  // The entrance says so in as many words. A player who cannot tell whether the boss has
+  // arrived is the entire complaint this beat exists to answer.
+  const what =
+    playback.phase === 'entrance' ? 'BOSS INCOMING' : playback.phase === 'boss' ? 'BOSS' : 'WAVE';
+  return `${where}  ·  ${what}`;
 }
 
 /** Health bar: dark backing, coloured fill, drawn straight into a Graphics. */
@@ -224,7 +238,6 @@ export function GameCanvas({
       const bossSprite = new Sprite();
       bossSprite.anchor.set(0.5);
       bossSprite.visible = false;
-      spriteLayer.addChild(bossSprite);
 
       // Loot draws above every combatant. It is the thing the player is watching for,
       // and a drop sliding under a corpse would read as having been missed.
@@ -237,6 +250,15 @@ export function GameCanvas({
         dropPool.push(sprite);
       }
 
+      // The entrance dim, and the boss above it.
+      //
+      // The boss gets its own container purely for stacking: it has to arrive ON TOP of
+      // the darkened arena, or the one thing the beat exists to point at is the thing
+      // the beat is hiding.
+      const dim = new Graphics();
+      const bossLayer = new Container();
+      bossLayer.addChild(bossSprite);
+
       const bars = new Graphics();
       const banner = new Text({
         text: '',
@@ -244,7 +266,7 @@ export function GameCanvas({
       });
       banner.anchor.set(0.5, 0);
       banner.visible = false;
-      instance.stage.addChild(bars, banner);
+      instance.stage.addChild(dim, bossLayer, bars, banner);
 
       const floaterPool: Text[] = [];
       for (let i = 0; i < FLOATER_POOL; i++) {
@@ -280,6 +302,13 @@ export function GameCanvas({
         let slot = 0;
         let placeholderCount = 0;
 
+        // Survivors of the wave fade as they run, so the ones that do not reach the edge
+        // before the boss lands are already invisible when the layer drops them.
+        const fleeAlpha =
+          visual.attempt.active && visual.attempt.phase === 'entrance'
+            ? Math.max(0, 1 - visual.attempt.entrance)
+            : 1;
+
         for (const enemy of visual.enemies) {
           if (!enemy.alive) continue;
           const texture = atlas?.get(enemy.sprite) ?? null;
@@ -291,6 +320,7 @@ export function GameCanvas({
             sprite.x = Math.round(enemy.x);
             sprite.y = Math.round(enemy.y);
             sprite.scale.set(enemy.facing * SPRITE_SCALE, SPRITE_SCALE);
+            sprite.alpha = enemy.fleeing ? fleeAlpha : 1;
           } else {
             // The fallback that makes partial art migrations survivable.
             placeholders.circle(enemy.x, enemy.y, enemy.r).fill(0x1b1b22);
@@ -354,7 +384,17 @@ export function GameCanvas({
         }
 
         bars.clear();
+        dim.clear();
         const playback = visual.attempt;
+        const entering = playback.active && playback.phase === 'entrance';
+
+        // Up over the first half of the entrance and back down over the second, so the
+        // arena darkens as the boss falls and is clear again the moment it lands.
+        if (entering) {
+          dim
+            .rect(0, 0, instance.screen.width, instance.screen.height)
+            .fill({ color: 0x05050a, alpha: DIM_PEAK_ALPHA * Math.sin(playback.entrance * Math.PI) });
+        }
 
         // The replay ending is the signal to commit: the command is sent only
         // now, so the numbers change when the fight visibly resolves rather
@@ -375,17 +415,26 @@ export function GameCanvas({
             bossSprite.y = Math.round(visual.boss.y);
             // A delve boss is the only thing on screen, so it can afford to
             // be bigger than one standing at the end of a wave.
-            bossSprite.scale.set(BOSS_SCALE * style.scale);
+            //
+            // Growing into its full size across the entrance, so it lands rather than
+            // pops. The cosmetic layer owns where it is; this owns how big it reads.
+            const arriving = entering ? ENTRANCE_SCALE_FROM + (1 - ENTRANCE_SCALE_FROM) * playback.entrance : 1;
+            bossSprite.scale.set(BOSS_SCALE * style.scale * arriving);
             bossSprite.tint = style.tint;
-            drawBar(
-              bars,
-              visual.boss.x - BOSS_BAR_WIDTH / 2,
-              visual.boss.y - 16 * BOSS_SCALE * 0.5 - 18,
-              BOSS_BAR_WIDTH,
-              9,
-              playback.bossHp,
-              0xc0392b,
-            );
+            // No bar until the fight starts. It is full for the whole entrance anyway,
+            // and a bar that appears with the first tick of damage is the clearest
+            // possible statement of when the boss actually became fightable.
+            if (playback.phase === 'boss') {
+              drawBar(
+                bars,
+                visual.boss.x - BOSS_BAR_WIDTH / 2,
+                visual.boss.y - 16 * BOSS_SCALE * 0.5 - 18,
+                BOSS_BAR_WIDTH,
+                9,
+                playback.bossHp,
+                0xc0392b,
+              );
+            }
           } else {
             bossSprite.visible = false;
           }
@@ -398,14 +447,14 @@ export function GameCanvas({
           // Below the HUD stat chips, which are drawn in the DOM above this
           // canvas and clipped the banner at y=14.
           banner.y = 72;
-          banner.text =
-            playback.kind === 'stage'
-              ? `STAGE ${playback.stage}  ·  ${playback.phase === 'boss' ? 'BOSS' : 'WAVE'}  ·  ` +
-                `${remaining.toFixed(1)}s`
-              : `${bannerHead(playback)}  ·  ${remaining.toFixed(1)}s`;
+          // The countdown is frozen along with `elapsed` during the entrance, which is
+          // correct: no fight time is passing, so the timer must not tick.
+          banner.text = `${bannerHead(playback)}  ·  ${remaining.toFixed(1)}s`;
           // The timer is the second failure mode, and it deserves to look like
-          // one before it fires rather than only in the result line.
-          banner.style.fill = remaining < 10 ? 0xf87171 : 0xf4f4f5;
+          // one before it fires rather than only in the result line. The entrance
+          // overrides it - the arrival is what the player should be reading, and an
+          // amber line is what says so.
+          banner.style.fill = entering ? 0xfbbf24 : remaining < 10 ? 0xf87171 : 0xf4f4f5;
         } else {
           bossSprite.visible = false;
           banner.visible = false;

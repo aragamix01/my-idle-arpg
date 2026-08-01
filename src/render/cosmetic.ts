@@ -20,6 +20,14 @@ export interface CosmeticEnemy {
   sprite: SpriteId;
   /** Sprites face the player; -1 flips horizontally. */
   facing: 1 | -1;
+  /**
+   * Running from the boss rather than toward the player.
+   *
+   * Set on every survivor when the boss lands. They are not killed: kills come out of
+   * the sim's budget and these were never in it, so killing them here would invent
+   * deaths - and floating damage numbers - the fight never paid for. They leave instead.
+   */
+  fleeing: boolean;
 }
 
 /**
@@ -76,7 +84,25 @@ export interface VisualOptions {
  */
 export interface AttemptPlayback {
   active: boolean;
-  phase: 'trash' | 'boss' | 'finished';
+  /**
+   * Where in the fight this is.
+   *
+   * `entrance` is the one phase that costs no simulated time - see `entrance` below.
+   * It sits between the wave and the boss so the two are visibly different fights
+   * rather than the same screen with a new sprite on it.
+   */
+  phase: 'trash' | 'entrance' | 'boss' | 'finished';
+  /**
+   * How far through the boss entrance, 0 to 1.
+   *
+   * REAL time, not simulated - the only value here that is. The sim decided
+   * trashPhaseSeconds and bossPhaseSeconds and the countdown is reported against them,
+   * so an entrance that consumed simulated seconds would be the cosmetic layer editing
+   * the fight. It stops the clock instead: `elapsed` does not move while this does.
+   *
+   * Meaningless outside the entrance phase, where it holds whatever it last reached.
+   */
+  entrance: number;
   /** Seconds into the attempt. */
   elapsed: number;
   /** Total the replay will run for - the truncated survival time on a failure. */
@@ -158,6 +184,39 @@ const MAX_DROPS = 24;
 const DROP_TOSS_SECONDS = 0.35;
 
 /**
+ * How long the boss takes to arrive, in REAL seconds.
+ *
+ * Long enough to register as an event, short enough not to be a toll on someone who runs
+ * hundreds of attempts - the whole replay is only a few real seconds at PLAYBACK_SPEED,
+ * so this is a noticeable share of it and cannot be generous.
+ *
+ * The Abyss gets longer because it is the rarest fight in the game and, until this, its
+ * boss simply existed on the first frame with nothing to mark the descent at all.
+ */
+const ENTRANCE_SECONDS: Record<AttemptKind, number> = {
+  stage: 0.8,
+  dungeon: 0.8,
+  abyssal: 1.3,
+};
+
+/** Where the boss starts its fall, as a fraction of screen height above the top edge. */
+const BOSS_ENTRY_HEIGHT = 0.45;
+/** Where it lands. Matches where the boss used to simply appear. */
+const BOSS_STAND_HEIGHT = 0.32;
+/** Survivors leave faster than they arrived, or the wave lingers into the duel. */
+const FLEE_SPEED_MULT = 2.4;
+/** Past this far outside the screen a fleeing enemy is gone for good. */
+const FLEE_DESPAWN_MARGIN = 40;
+
+/** Where the player's orbit centres once the duel is on, as a fraction of height. */
+const DUEL_CENTRE_HEIGHT = 0.6;
+
+/** Fast at first, settling at the end. What makes the boss land rather than slide. */
+function easeOutCubic(t: number): number {
+  return 1 - (1 - t) ** 3;
+}
+
+/**
  * Enemies must outpace the player's orbit, or they trail behind in a receding
  * cloud and the screen never fills. Measured at 34 against an orbit of ~113
  * px/s: the swarm never arrived.
@@ -217,6 +276,7 @@ export class StageVisual {
   readonly attempt: AttemptPlayback = {
     active: false,
     phase: 'finished',
+    entrance: 0,
     elapsed: 0,
     duration: 0,
     trashSeconds: 0,
@@ -248,7 +308,15 @@ export class StageVisual {
     this.seed = 0x1234_5678;
     this.player = { x: options.width / 2, y: options.height / 2 };
     for (let i = 0; i < MAX_ENEMIES; i++) {
-      this.enemies.push({ x: 0, y: 0, alive: false, r: 6, sprite: 'enemy.slime', facing: 1 });
+      this.enemies.push({
+        x: 0,
+        y: 0,
+        alive: false,
+        r: 6,
+        sprite: 'enemy.slime',
+        facing: 1,
+        fleeing: false,
+      });
     }
   }
 
@@ -277,6 +345,7 @@ export class StageVisual {
     Object.assign(this.attempt, {
       active: true,
       phase: 'trash' as const,
+      entrance: 0,
       elapsed: 0,
       duration,
       trashSeconds: Math.min(outcome.trashPhaseSeconds, duration),
@@ -311,11 +380,61 @@ export class StageVisual {
     const a = this.attempt;
     if (!a.active || !this.outcome) return;
 
+    // The entrance, and the ONE place the simulated clock stands still.
+    //
+    // `elapsed` is not touched here, so no fight time passes: the countdown holds, the
+    // health bars hold, and the outcome the sim reached is the outcome that plays. All
+    // this buys is a moment for the player to see what they are now fighting.
+    if (a.phase === 'entrance') {
+      a.entrance = Math.min(1, a.entrance + dt / ENTRANCE_SECONDS[a.kind]);
+      // Eased, so it falls in and settles rather than sliding at a constant rate.
+      const landed = easeOutCubic(a.entrance);
+      this.boss.x = this.options.width / 2;
+      this.boss.y =
+        -this.options.height * BOSS_ENTRY_HEIGHT +
+        (this.options.height * (BOSS_STAND_HEIGHT + BOSS_ENTRY_HEIGHT)) * landed;
+      if (a.entrance >= 1) {
+        a.phase = 'boss';
+        // Anything that did not make the edge in time is gone anyway.
+        //
+        // Not a cheat covering a hole: a fleeing enemy fades out across the entrance
+        // (the renderer reads `entrance` for its alpha), so by the moment this runs
+        // they are already invisible. Without it a 400px screen full of survivors
+        // would still hold a third of them when the duel starts, at zero opacity,
+        // which is a crowd that exists only in the arrays.
+        for (const enemy of this.enemies) {
+          if (enemy.fleeing) {
+            enemy.alive = false;
+            enemy.fleeing = false;
+          }
+        }
+      }
+      return;
+    }
+
     // elapsed is in simulated seconds; dt is real. This is the only place the
     // two are related.
     a.elapsed = Math.min(a.duration, a.elapsed + dt * PLAYBACK_SPEED);
-    const inBoss = a.elapsed >= a.trashSeconds && a.bossSeconds > 0;
-    a.phase = inBoss ? 'boss' : 'trash';
+    const reachedBoss = a.elapsed >= a.trashSeconds && a.bossSeconds > 0;
+
+    // Crossing into the boss starts the entrance instead of the boss phase. Reaching it
+    // from 'trash' is a sufficient once-only guard: the sequence never runs backwards,
+    // and a delve has trashSeconds of 0 so it enters on its first frame - which is the
+    // point, because until now its boss simply existed before the player looked.
+    if (reachedBoss && a.phase === 'trash') {
+      // Pinned exactly at the boundary rather than wherever the frame landed, so the
+      // wave does not lose the fraction of a simulated second the crossing overshot by.
+      a.elapsed = a.trashSeconds;
+      a.phase = 'entrance';
+      a.entrance = 0;
+      this.boss.alive = true;
+      this.boss.x = this.options.width / 2;
+      this.boss.y = -this.options.height * BOSS_ENTRY_HEIGHT;
+      for (const enemy of this.enemies) {
+        if (enemy.alive) enemy.fleeing = true;
+      }
+      return;
+    }
 
     // Health drains at each phase's own rate rather than an average, which is
     // what makes a boss-phase death look like a boss-phase death.
@@ -327,14 +446,16 @@ export class StageVisual {
       this.outcome.trashDamageFraction * trashProgress +
       this.outcome.bossDamageFraction * bossProgress;
     a.playerHp = Math.max(0, 1 - taken);
-    a.bossHp = inBoss ? Math.max(0, 1 - bossProgress) : 1;
+    a.bossHp = reachedBoss ? Math.max(0, 1 - bossProgress) : 1;
 
-    if (inBoss && !this.boss.alive) {
-      this.boss.alive = true;
+    if (reachedBoss) {
+      // Re-derived every frame rather than pinned once at the entrance, so rotating a
+      // phone mid-duel does not leave the boss standing where the old viewport was.
       this.boss.x = this.options.width / 2;
-      this.boss.y = this.options.height * 0.32;
+      this.boss.y = this.options.height * BOSS_STAND_HEIGHT;
+    } else {
+      this.boss.alive = false;
     }
-    if (!inBoss) this.boss.alive = false;
 
     if (a.elapsed >= a.duration) {
       a.phase = 'finished';
@@ -346,6 +467,20 @@ export class StageVisual {
   /** Seconds remaining before the stage timer expires. */
   timeRemaining(limitSeconds: number): number {
     return Math.max(0, limitSeconds - this.attempt.elapsed);
+  }
+
+  /**
+   * How far the fight has closed into a duel: 0 during the wave, 1 once the boss stands.
+   *
+   * Eased across the entrance so the player drifts up to meet the boss over the same
+   * moment the boss is falling, rather than snapping into position when it lands.
+   */
+  private duelClosing(): number {
+    const a = this.attempt;
+    if (!a.active) return 0;
+    if (a.phase === 'boss') return 1;
+    if (a.phase === 'entrance') return easeOutCubic(a.entrance);
+    return 0;
   }
 
   /**
@@ -411,6 +546,9 @@ export class StageVisual {
 
     enemy.r = 5 + this.random() * 4;
     enemy.alive = true;
+    // Reset, because the array is a pool: a slot that fled the last boss would
+    // otherwise respawn already running for the edge.
+    enemy.fleeing = false;
 
     const roster = enemySpritesForStage(this.options.stage);
     enemy.sprite = roster[Math.floor(this.random() * roster.length)] ?? 'enemy.slime';
@@ -515,13 +653,44 @@ export class StageVisual {
 
     // The player pilots itself. Movement is cosmetic by design: outcomes were
     // already decided, so a kiting orbit is enough to look deliberate.
+    //
+    // The orbit CENTRE closes on the boss as it lands, so the duel reads as a duel
+    // instead of the player circling the middle of an empty floor while the thing it
+    // is supposedly fighting stands at the top of the screen.
     this.orbitAngle += dt * PLAYER_ORBIT_SPEED;
+    const centreY = height * (0.5 + (DUEL_CENTRE_HEIGHT - 0.5) * this.duelClosing());
     this.player.x = width / 2 + Math.cos(this.orbitAngle) * width * PLAYER_ORBIT_RADIUS;
-    this.player.y = height / 2 + Math.sin(this.orbitAngle * 1.3) * height * PLAYER_ORBIT_RADIUS;
+    this.player.y = centreY + Math.sin(this.orbitAngle * 1.3) * height * PLAYER_ORBIT_RADIUS;
 
     let living = 0;
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
+
+      // Survivors of the wave run for the edge and are gone.
+      //
+      // They used to keep walking into the player forever: effectiveKillRate returns 0
+      // outside the trash phase, so nothing killed them, and the duel played behind a
+      // pile of immortal enemies with the boss somewhere behind it. That is what made
+      // the boss look slow to arrive - it was there, and you could not find it.
+      if (enemy.fleeing) {
+        const dx = enemy.x - this.player.x;
+        const dy = enemy.y - this.player.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        enemy.x += (dx / distance) * ENEMY_SPEED * FLEE_SPEED_MULT * dt;
+        enemy.y += (dy / distance) * ENEMY_SPEED * FLEE_SPEED_MULT * dt;
+        if (Math.abs(dx) > 4) enemy.facing = dx < 0 ? -1 : 1;
+        if (
+          enemy.x < -FLEE_DESPAWN_MARGIN ||
+          enemy.x > width + FLEE_DESPAWN_MARGIN ||
+          enemy.y < -FLEE_DESPAWN_MARGIN ||
+          enemy.y > height + FLEE_DESPAWN_MARGIN
+        ) {
+          enemy.alive = false;
+          enemy.fleeing = false;
+        }
+        continue;
+      }
+
       living++;
       const dx = this.player.x - enemy.x;
       const dy = this.player.y - enemy.y;
@@ -612,7 +781,12 @@ export class StageVisual {
       this.swingClock -= interval;
       // Aim where the fight is. Holding the previous aim when the field is
       // empty avoids the blade snapping back to angle zero between waves.
-      const target = this.nearestLiving();
+      //
+      // The boss takes priority once it is on the floor, and it has to: this searched
+      // only the `enemies` array, which the boss is not in, so the whole duel played
+      // with the player swinging at trash while the boss's bar fell on its own.
+      const target =
+        this.boss.alive && this.attempt.phase === 'boss' ? this.boss : this.nearestLiving();
       if (target) {
         this.swing.aim = Math.atan2(target.y - this.player.y, target.x - this.player.x);
       }
@@ -654,7 +828,9 @@ export class StageVisual {
     let best: CosmeticEnemy | null = null;
     let bestDistance = Infinity;
     for (const enemy of this.enemies) {
-      if (!enemy.alive) continue;
+      // Fleeing enemies are excluded from both target searches, or the blade tracks a
+      // runner off the edge while the boss it should be pointing at stands untouched.
+      if (!enemy.alive || enemy.fleeing) continue;
       const dx = enemy.x - this.player.x;
       const dy = enemy.y - this.player.y;
       const distance = Math.hypot(dx, dy);
@@ -678,7 +854,7 @@ export class StageVisual {
     let best: CosmeticEnemy | null = null;
     let bestDistance = Infinity;
     for (const enemy of this.enemies) {
-      if (!enemy.alive) continue;
+      if (!enemy.alive || enemy.fleeing) continue;
       const d = (enemy.x - this.player.x) ** 2 + (enemy.y - this.player.y) ** 2;
       if (d < bestDistance) {
         bestDistance = d;
