@@ -22,6 +22,24 @@ export interface CosmeticEnemy {
   facing: 1 | -1;
 }
 
+/**
+ * An item falling out of something that just died.
+ *
+ * Pops away from the corpse, slows, then homes into the player and vanishes -
+ * "collected" without a pickup mechanic, which the abstract layer has nowhere to put.
+ * Nothing here decides anything: the items were rolled before the first frame drew.
+ */
+export interface CosmeticDrop {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  sprite: SpriteId;
+  /** Seconds since it fell. Drives the toss-then-home handover. */
+  age: number;
+  alive: boolean;
+}
+
 export interface Floater {
   x: number;
   y: number;
@@ -104,6 +122,10 @@ export interface Swing {
 
 const MAX_ENEMIES = 240;
 const MAX_FLOATERS = 40;
+/** Same reasoning as MAX_FLOATERS: a huge clear must not flood the layer. */
+const MAX_DROPS = 24;
+/** Seconds a drop tumbles before it starts homing into the player. */
+const DROP_TOSS_SECONDS = 0.35;
 
 /**
  * Enemies must outpace the player's orbit, or they trail behind in a receding
@@ -146,6 +168,19 @@ export const PLAYBACK_SPEED = 6;
 export class StageVisual {
   readonly enemies: CosmeticEnemy[] = [];
   readonly floaters: Floater[] = [];
+  readonly drops: CosmeticDrop[] = [];
+
+  /**
+   * Sprites the wave is going to drop, in the order they will fall.
+   *
+   * Handed in by the caller, which rolled them with the same pure functions the
+   * server will use. The alternative was a generic coin, which would be theatre - this
+   * layer's rule is that the spectacle matches what the sim concluded, the same reason
+   * killsPerSecond drives the kill rate rather than looking busy.
+   */
+  private pendingDrops: SpriteId[] = [];
+  private dropsToSpawn = 0;
+  private dropsSpawned = 0;
   player = { x: 0, y: 0 };
   readonly swing: Swing = { active: false, aim: 0, progress: 0 };
 
@@ -191,8 +226,21 @@ export class StageVisual {
   }
 
   /** Begin replaying a resolved attempt. Ignored while one is already running. */
-  startAttempt(outcome: AttemptOutcome, stage: number, dungeon = false) {
+  startAttempt(
+    outcome: AttemptOutcome,
+    stage: number,
+    dungeon = false,
+    /** What the trash wave will drop, already rolled. Empty is fine. */
+    waveDrops: SpriteId[] = [],
+  ) {
     if (this.attempt.active) return;
+
+    // Truncated rather than queued. A stage deep enough to drop more than the layer
+    // can hold would otherwise leave items trailing into the boss phase, long after
+    // the enemies that were supposed to have dropped them.
+    this.pendingDrops = waveDrops.slice(0, MAX_DROPS);
+    this.dropsToSpawn = this.pendingDrops.length;
+    this.dropsSpawned = 0;
 
     // A failure ends when the player died, not when the fight would have. The
     // boss slice of the replay shrinks to whatever was survived.
@@ -345,6 +393,7 @@ export class StageVisual {
 
   private kill(enemy: CosmeticEnemy) {
     enemy.alive = false;
+    this.maybeDrop(enemy.x, enemy.y);
     if (this.floaters.length < MAX_FLOATERS) {
       const jitter = () => (this.random() - 0.5) * 14;
       this.floaters.push({
@@ -354,6 +403,85 @@ export class StageVisual {
         life: 0.9,
       });
     }
+  }
+
+  /**
+   * Drop an item out of this corpse, if one is due.
+   *
+   * Paced by progress through the TRASH PHASE rather than by a per-kill chance, so the
+   * items that fall are exactly the items the clear will hand over - no more, no fewer,
+   * and spread across the wave instead of arriving in a heap. Attaching it to a kill is
+   * what makes loot come out of something rather than out of the air.
+   */
+  private maybeDrop(x: number, y: number) {
+    if (this.dropsSpawned >= this.dropsToSpawn) return;
+
+    // ACTIVE and in the trash phase, both required. The first cut read
+    // `active && phase !== 'trash'`, which is false when no attempt is running at
+    // all - so every drop fell out of an idle-farming kill after the replay had
+    // finished. The wave played with no loot and then four items appeared, which is
+    // precisely the behaviour this was written to remove.
+    if (!this.attempt.active || this.attempt.phase !== 'trash') return;
+
+    if (this.attempt.trashSeconds > 0) {
+      const progress = Math.min(1, this.attempt.elapsed / this.attempt.trashSeconds);
+      if (this.dropsSpawned >= Math.ceil(progress * this.dropsToSpawn)) return;
+    }
+
+    const sprite = this.pendingDrops[this.dropsSpawned];
+    this.dropsSpawned++;
+    if (!sprite || this.drops.length >= MAX_DROPS) return;
+
+    const angle = this.random() * Math.PI * 2;
+    const speed = 40 + this.random() * 30;
+    this.drops.push({
+      x,
+      y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      sprite,
+      age: 0,
+      alive: true,
+    });
+  }
+
+  private updateDrops(dt: number) {
+    for (const drop of this.drops) {
+      drop.age += dt;
+
+      if (drop.age < DROP_TOSS_SECONDS) {
+        // Tumbling away from the corpse, slowing as it goes.
+        drop.x += drop.vx * dt;
+        drop.y += drop.vy * dt;
+        drop.vx *= 0.88;
+        drop.vy *= 0.88;
+        continue;
+      }
+
+      // Homing, and ACCELERATING - a constant speed reads as drifting, where a pull
+      // that tightens reads as being collected.
+      const dx = this.player.x - drop.x;
+      const dy = this.player.y - drop.y;
+      const distance = Math.hypot(dx, dy) || 1;
+      if (distance < 10) {
+        drop.alive = false;
+        continue;
+      }
+      const pull = 260 + (drop.age - DROP_TOSS_SECONDS) * 900;
+      drop.x += (dx / distance) * pull * dt;
+      drop.y += (dy / distance) * pull * dt;
+    }
+
+    // Compacted in place: the array is read every frame by the renderer, and a
+    // filter would hand it a new one sixty times a second.
+    let write = 0;
+    for (let read = 0; read < this.drops.length; read++) {
+      // Nothing should orbit forever if the player somehow never arrives.
+      if (this.drops[read].alive && this.drops[read].age < 6) {
+        this.drops[write++] = this.drops[read];
+      }
+    }
+    this.drops.length = write;
   }
 
   update(dt: number) {
@@ -419,6 +547,25 @@ export class StageVisual {
       floater.y -= 26 * dt;
       if (floater.life <= 0) this.floaters.splice(i, 1);
     }
+
+    // Loot is paced by the SCHEDULE, not by when a kill happens to land. Hooking it
+    // to kill() alone means a wave whose deaths cluster - and they do, because the
+    // replay compresses a 75-second fight into a few seconds - drops everything in a
+    // burst or, at the tail, not at all. maybeDrop still gates on the schedule, so
+    // this only fires for a drop that is genuinely due, and it still comes out of a
+    // live enemy rather than out of the air.
+    if (this.attempt.active && this.attempt.phase === 'trash') {
+      // Falls back to a point beside the player when nothing is left alive, and that
+      // case is not hypothetical: the wave is finite and drains on purpose, so the
+      // LAST scheduled drop comes due exactly when the field is emptiest. Without the
+      // fallback the tail of every clear would silently drop nothing.
+      const victim = this.enemies.find((enemy) => enemy.alive);
+      const x = victim ? victim.x : this.player.x + (this.random() - 0.5) * 60;
+      const y = victim ? victim.y : this.player.y + (this.random() - 0.5) * 60;
+      this.maybeDrop(x, y);
+    }
+
+    this.updateDrops(dt);
   }
 
   /**

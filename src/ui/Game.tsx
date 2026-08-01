@@ -15,21 +15,27 @@ import {
   bulkUpgradeCost,
   formatBig,
   fromSave,
+  itemSprite,
   killsPerSecond,
   maxAffordableUpgrades,
   remainingLevels,
   resolveDungeon,
   resolveStage,
+  rollItem,
+  rollWaveDropCount,
+  WAVE_RARITY_WEIGHTS,
   STAGE_TIME_LIMIT_SECONDS,
   statsFromWire,
   UPGRADE_TRACKS,
   type Big,
   type HudSnapshot,
+  type SaveState,
   type UpgradeKey,
   type SimEvent,
   type UpgradeView,
 } from '@/sim';
 import type { AttemptRequest } from '@/render/GameCanvas';
+import type { SpriteId } from '@/render/sprites';
 import { AtlasSprite } from './atlasSprite';
 import { CharacterPanel } from './CharacterPanel';
 import { compact, ELEMENT_STYLE, elementName } from './format';
@@ -52,6 +58,15 @@ export function Game() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const attemptSeq = useRef(0);
+  const [receipt, setReceipt] = useState<OfflineReceipt | null>(null);
+  /**
+   * Whether this mount has already settled the offline question.
+   *
+   * A ref rather than state: the HUD ticks ten times a second and every tick would
+   * otherwise re-enter the effect, fire a second claim, and replace the receipt with a
+   * report of the milliseconds since the first one.
+   */
+  const settledOffline = useRef(false);
 
   /**
    * Resolve the stage now, play the replay, and only then send the command.
@@ -69,7 +84,12 @@ export function Game() {
     if (!current || attempt) return;
     const stage = current.currentStage;
     attemptSeq.current += 1;
-    setAttempt({ id: attemptSeq.current, stage, outcome: resolveStage(current, stage) });
+    setAttempt({
+      id: attemptSeq.current,
+      stage,
+      outcome: resolveStage(current, stage),
+      waveDrops: waveDropSprites(current, stage),
+    });
   }, [attempt]);
 
   /**
@@ -102,6 +122,35 @@ export function Game() {
     void bootstrap();
   }, [bootstrap]);
 
+  /**
+   * Credit whatever accrued while you were gone, then say what it was.
+   *
+   * Claimed rather than offered, which is the whole point of a receipt: there is never
+   * a state where gold is owed and uncollected, so closing this can cost nothing. The
+   * command is idempotent - it advances `lastSeenAt`, so a second call finds ~0 seconds
+   * - but the ref stops it being sent twice regardless.
+   */
+  useEffect(() => {
+    if (!hud || settledOffline.current) return;
+    settledOffline.current = true;
+
+    const earned = fromSave(hud.pendingOfflineGold);
+    if (earned.lte(0)) return;
+
+    // Captured BEFORE the claim. Claiming resets the pending figures, so reading them
+    // afterwards would report a player who had been away for no time at all.
+    const captured: OfflineReceipt = {
+      gold: earned,
+      seconds: hud.pendingOfflineSeconds,
+      capped: hud.offlineCapReached,
+      stage: hud.bestStage,
+    };
+    // Shown once the claim lands rather than synchronously, so the balance behind the
+    // modal already includes the number on it - and so this is not a setState in an
+    // effect body, which cascades a render before the request has even left.
+    void send({ type: 'claimOffline' }).then(() => setReceipt(captured));
+  }, [hud, send]);
+
   // The throttled HUD channel. Gold accrues continuously; ten updates a second
   // is plenty for numbers a human reads, and costs nothing next to a 60Hz
   // React re-render over the same data.
@@ -119,7 +168,6 @@ export function Game() {
   // Parsed once per render rather than at each of the five places that read it -
   // the HUD ticks ten times a second and this is a string every time it arrives.
   const gold = fromSave(hud.gold);
-  const offlineGold = fromSave(hud.pendingOfflineGold);
   // The snapshot crosses the wire as JSON, so its magnitudes arrive as strings.
   const stats = statsFromWire(hud.stats);
 
@@ -315,17 +363,11 @@ export function Game() {
           </button>
         </div>
 
-        {offlineGold.gt(0) && (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => void send({ type: 'claimOffline' })}
-            className="mt-2 min-h-11 w-full rounded-lg border border-emerald-600/60 bg-emerald-500/10 px-4 text-sm text-emerald-100 disabled:opacity-40"
-          >
-            Claim {formatBig(offlineGold)} idle gold
-          </button>
-        )}
+        {/* The Claim button used to live here. Offline gold is credited on arrival
+            now, so there is nothing left to claim - see the receipt effect above. */}
       </footer>
+
+      {receipt && <OfflineReceiptModal receipt={receipt} onClose={() => setReceipt(null)} />}
 
       {sheetOpen && (
         <BottomSheet title="Upgrades" trailing={buyPicker('buy-amount-sheet')} onClose={() => setSheetOpen(false)}>
@@ -577,6 +619,107 @@ function dungeonLabel(keys: number, dungeon: HudSnapshot['dungeon']): string {
     `${head} — stage ${dungeon.stage}, weak to ${elementName(dungeon.weakTo)}, ` +
     `resists ${elementName(dungeon.resists)}`
   );
+}
+
+interface OfflineReceipt {
+  gold: Big;
+  seconds: number;
+  capped: boolean;
+  stage: number;
+}
+
+/** "6h 14m", "3m", "48s". Whole units only - nobody reads a decimal here. */
+function describeDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours === 0) return `${minutes}m`;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+/**
+ * What happened while you were away.
+ *
+ * A receipt, not a prompt - the gold is already in the balance behind it. Dismissing
+ * costs nothing, which is why it closes on the backdrop, on Escape and on its one
+ * button rather than trapping you until you accept something.
+ */
+function OfflineReceiptModal({
+  receipt,
+  onClose,
+}: {
+  receipt: OfflineReceipt;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="pointer-events-auto fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="w-full max-w-xs rounded-lg border border-neutral-700 bg-neutral-950 p-5 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Welcome back"
+      >
+        <p className="text-xs uppercase tracking-wide text-neutral-500">Welcome back</p>
+        <p className="mt-1 text-sm text-neutral-300">
+          You were away {describeDuration(receipt.seconds)}
+        </p>
+
+        <p className="mt-4 font-mono text-2xl text-emerald-300">+{formatBig(receipt.gold)}</p>
+        <p className="text-[11px] text-neutral-500">
+          gold, farmed at stage {receipt.stage}
+        </p>
+
+        {receipt.capped && (
+          // Worth saying plainly. Idle income stops accruing at the cap, and a player
+          // who does not know that reads a short day and a long weekend as the same.
+          <p className="mt-3 rounded border border-amber-600/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+            Idle earnings stop after 8 hours — you were away longer than that.
+          </p>
+        )}
+
+        <button
+          type="button"
+          onClick={onClose}
+          autoFocus
+          className="mt-4 min-h-11 w-full rounded-lg bg-neutral-100 text-sm font-semibold text-neutral-900 active:bg-neutral-300"
+        >
+          Continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The sprites the trash wave is about to drop.
+ *
+ * Rolled here, on the client, from the same pure seeded functions applyCommand will
+ * use on the server - `rollWaveDropCount` and `rollItem` take the account seed and the
+ * uid the counter is sitting on, so both sides reach the same items. That is the same
+ * property the replay already relies on for the outcome itself: what you watch is a
+ * preview of what the server will independently conclude, not a guess at it.
+ *
+ * Display only. Nothing here is sent, and the server rolls its own.
+ */
+function waveDropSprites(save: SaveState, stage: number): SpriteId[] {
+  const count = rollWaveDropCount(save.seed, save.nextItemId, stage);
+  return Array.from({ length: count }, (_, i) =>
+    itemSprite(rollItem(save.seed, save.nextItemId + i, stage, WAVE_RARITY_WEIGHTS)),
+  ) as SpriteId[];
 }
 
 function summarise(events: SimEvent[]): string[] {

@@ -22,6 +22,14 @@ export interface AttemptRequest {
   outcome: AttemptOutcome;
   /** Dungeon runs get their own boss and banner; the playback is identical. */
   dungeon?: boolean;
+  /**
+   * Sprites the trash wave will drop, in order.
+   *
+   * Rolled by the caller from the same pure, seeded functions the server will use, so
+   * what falls on screen is what lands in the inventory - the same discipline that
+   * makes the replay a preview rather than a guess.
+   */
+  waveDrops?: SpriteId[];
 }
 
 interface Props {
@@ -37,6 +45,8 @@ interface Props {
 
 const FLOATER_POOL = 40;
 const MAX_SPRITES = 240;
+/** Matches MAX_DROPS in the cosmetic layer - the pool must not be the tighter bound. */
+const MAX_DROP_SPRITES = 24;
 /** 16px source art needs scaling up; this keeps it on whole pixels. */
 const SPRITE_SCALE = 2;
 /** Bosses are the same 16px art at a larger whole-number scale. */
@@ -195,6 +205,17 @@ export function GameCanvas({
       bossSprite.visible = false;
       spriteLayer.addChild(bossSprite);
 
+      // Loot draws above every combatant. It is the thing the player is watching for,
+      // and a drop sliding under a corpse would read as having been missed.
+      const dropPool: Sprite[] = [];
+      for (let i = 0; i < MAX_DROP_SPRITES; i++) {
+        const sprite = new Sprite();
+        sprite.anchor.set(0.5);
+        sprite.visible = false;
+        spriteLayer.addChild(sprite);
+        dropPool.push(sprite);
+      }
+
       const bars = new Graphics();
       const banner = new Text({
         text: '',
@@ -225,7 +246,12 @@ export function GameCanvas({
         const request = attemptRef.current;
         if (request && request.id !== startedAttemptId) {
           startedAttemptId = request.id;
-          visual.startAttempt(request.outcome, request.stage, request.dungeon ?? false);
+          visual.startAttempt(
+            request.outcome,
+            request.stage,
+            request.dungeon ?? false,
+            request.waveDrops ?? [],
+          );
         }
         visual.setOptions({
           ...optionsRef.current,
@@ -273,6 +299,27 @@ export function GameCanvas({
             .circle(visual.player.x, visual.player.y, 13)
             .stroke({ width: 2, color: 0xe8f5e9 });
         }
+
+        // Drops. A little larger than an enemy and bobbing while they tumble, so a
+        // 16px icon still reads as loot against a field of creatures the same size.
+        let dropSlot = 0;
+        for (const drop of visual.drops) {
+          if (dropSlot >= dropPool.length) break;
+          const texture = atlas?.get(drop.sprite) ?? null;
+          if (!texture) {
+            placeholders.circle(drop.x, drop.y, 5).fill(0xffd479);
+            continue;
+          }
+          const sprite = dropPool[dropSlot++];
+          sprite.visible = true;
+          sprite.texture = texture;
+          sprite.x = Math.round(drop.x);
+          sprite.y = Math.round(drop.y);
+          sprite.scale.set(SPRITE_SCALE * 1.1);
+          // Fades as it reaches the player rather than blinking out of existence.
+          sprite.alpha = drop.age > 5 ? Math.max(0, 6 - drop.age) : 1;
+        }
+        for (let i = dropSlot; i < dropPool.length; i++) dropPool[i].visible = false;
 
         const swordTexture = atlas?.get('weapon.sword') ?? null;
         if (swordTexture && visual.swing.active) {

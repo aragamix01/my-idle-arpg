@@ -68,6 +68,14 @@ export interface HudSnapshot {
   upgrades: UpgradeView[];
   /** Decimal string. */
   pendingOfflineGold: string;
+  /**
+   * Seconds that gold represents, after the cap.
+   *
+   * Sent so the welcome-back receipt can say how long you were away without a second
+   * round trip. The gold alone cannot answer it: the same amount is eight minutes at
+   * stage 300 and eight hours at stage 3.
+   */
+  pendingOfflineSeconds: number;
   offlineCapReached: boolean;
   loadout: (string | null)[];
   /**
@@ -123,6 +131,7 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
       };
     }),
     pendingOfflineGold: toSave(offline.goldEarned),
+    pendingOfflineSeconds: offline.creditedSeconds,
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
     equipSlots: equipSlots(save, ctx),

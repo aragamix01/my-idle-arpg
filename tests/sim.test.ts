@@ -1757,6 +1757,32 @@ describe('wave loot', () => {
     }
   });
 
+  it('what the renderer shows falling is what the command hands over', () => {
+    // The animation rolls its sprites on the client before the command is sent, from
+    // the same seed and the same uid counter. If the two ever disagreed the player
+    // would watch an axe drop and find a charm in the bag - and nothing would error.
+    const save: SaveState = {
+      ...newSave(21, T0),
+      bestStage: 30,
+      currentStage: 30,
+      upgrades: { ...newSave(21, T0).upgrades, damage: 300, health: 160, toughness: 160 },
+    };
+
+    const predicted = Array.from(
+      { length: rollWaveDropCount(save.seed, save.nextItemId, save.currentStage) },
+      (_, i) => rollItem(save.seed, save.nextItemId + i, save.currentStage, WAVE_RARITY_WEIGHTS),
+    );
+    expect(predicted.length).toBeGreaterThan(0);
+
+    const result = applyCommand(save, { type: 'attemptStage' }, T0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const granted = result.value.state.items.slice(0, predicted.length);
+    expect(granted.map((i) => i.baseId)).toEqual(predicted.map((i) => i.baseId));
+    expect(granted.map((i) => i.rarity)).toEqual(predicted.map((i) => i.rarity));
+  });
+
   it('a full inventory loses wave drops and still burns the uid', () => {
     // Reusing a uid after a discard would make the replacement item roll
     // identically to the one that was lost - the rule the clear drops already keep.

@@ -1,4 +1,4 @@
-import { expect, test, type ConsoleMessage } from '@playwright/test';
+import { expect, test, type ConsoleMessage, type Page } from '@playwright/test';
 import { WEAPON_BASES } from '../../src/sim';
 
 /**
@@ -26,6 +26,24 @@ const REPLAY_TIMEOUT = 20_000;
  * perfect and the app still a white screen. Everything here is about the app
  * booting and the round trip closing, not about game rules.
  */
+
+/**
+ * Clear the welcome-back receipt, which covers the screen after any reload.
+ *
+ * Idle gold is credited on arrival now and reported in a modal, so every test that
+ * reloads a save with a cleared stage meets one - and its backdrop intercepts pointer
+ * events until dismissed. That is the intended behaviour for a player; for a test it
+ * is a door that has to be opened before anything else can be clicked.
+ *
+ * Tolerates absence: a fresh save has no best stage, so no idle income, so no receipt.
+ */
+async function dismissReceipt(page: Page) {
+  try {
+    await page.getByRole('button', { name: 'Continue' }).click({ timeout: 4000 });
+  } catch {
+    // Nothing to dismiss.
+  }
+}
 
 /** Next's dev overlay and asset 404s are noisy; only real page errors matter. */
 function collectErrors(messages: ConsoleMessage[]): string[] {
@@ -226,9 +244,21 @@ test('idle gold accrues even when the browser clock is wrong', async ({ page }) 
   await page.getByRole('button', { name: /Attempt stage/ }).click();
   await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
 
-  const claim = page.getByRole('button', { name: /idle gold/ });
-  await expect(claim).toBeEnabled({ timeout: 15_000 });
-  await expect(claim).not.toHaveText(/Claim 0 idle gold/);
+  // Idle gold is credited on arrival now and reported on the next visit, so the
+  // assertion moved from a Claim button to the receipt. Same property either way:
+  // the accrual is measured against the SERVER's clock, and a browser running ten
+  // minutes behind used to make elapsed time negative and pin income at zero.
+  await page.reload();
+
+  const receipt = page.getByRole('dialog', { name: 'Welcome back' });
+  await expect(receipt).toBeVisible({ timeout: 15_000 });
+  await expect(receipt).not.toContainText('+0 ');
+  await expect(receipt).toContainText(/You were away/);
+
+  await dismissReceipt(page);
+  // And it is a receipt, not a prompt: the gold is already banked, so dismissing
+  // leaves nothing owed and the modal does not come back.
+  await expect(receipt).toBeHidden();
 });
 
 test('the buy multiplier applies to every track', async ({ page }) => {
@@ -433,6 +463,7 @@ test('a weapon says what its skill costs to use', async ({ page }) => {
   }, WEAPON_BASES.map((b) => b.id));
   expect(baseId, 'no weapon dropped in 40 clears').not.toBeNull();
   await page.reload();
+  await dismissReceipt(page);
 
   const baseName = WEAPON_BASES.find((b) => b.id === baseId)!.name;
 
@@ -474,6 +505,7 @@ test('the craft modal explains what it refuses, and applies what it allows', asy
     }
   });
   await page.reload();
+  await dismissReceipt(page);
 
   await page.getByRole('button', { name: /^Character/ }).click();
   const panel = page.getByRole('dialog', { name: 'Character' });
@@ -526,6 +558,7 @@ test('the craft modal shows the mods and stays open across rolls', async ({ page
     for (let i = 0; i < 10; i++) await post({ type: 'attemptStage' });
   });
   await page.reload();
+  await dismissReceipt(page);
 
   await page.getByRole('button', { name: /^Character/ }).click();
   const panel = page.getByRole('dialog', { name: 'Character' });
@@ -594,6 +627,7 @@ test('dissembling a common yields a fragment without a confirmation', async ({ p
     }
   });
   await page.reload();
+  await dismissReceipt(page);
 
   await page.getByRole('button', { name: /^Character/ }).click();
   const panel = page.getByRole('dialog', { name: 'Character' });
@@ -651,6 +685,7 @@ test('fragments combine into ore, and the ore upgrades a common', async ({ page 
     }
   });
   await page.reload();
+  await dismissReceipt(page);
 
   await page.getByRole('button', { name: /^Character/ }).click();
   const panel = page.getByRole('dialog', { name: 'Character' });
@@ -717,6 +752,7 @@ test('a dungeon spends a key and plays as a boss-only duel', async ({ page }) =>
   });
   expect(keysFound).toBeGreaterThan(0);
   await page.reload();
+  await dismissReceipt(page);
 
   await expect(dungeon).toBeEnabled();
   // Read from the accessible name, not from the rendered text. The button now also
@@ -771,6 +807,7 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
     }
   });
   await page.reload();
+  await dismissReceipt(page);
 
   await page.getByRole('button', { name: /^Character/ }).click();
   const panel = page.getByRole('dialog', { name: 'Character' });
@@ -864,5 +901,6 @@ test('progress survives a reload', async ({ page }) => {
 
   // The real assertion: the server persisted it, not just the local store.
   await page.reload();
+  await dismissReceipt(page);
   await expect(page.getByRole('button', { name: /^Damage/ })).toHaveText(after ?? '');
 });
