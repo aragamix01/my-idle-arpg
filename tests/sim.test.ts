@@ -49,6 +49,7 @@ import {
   getBaseAffix,
   eligibleAffixes,
   GEAR_BASES,
+  ACCESSORY_BASES,
   getCurrency,
   getSkill,
   getUnique,
@@ -1731,6 +1732,124 @@ describe('currency', () => {
     expect(thenGold.ok).toBe(true);
     if (!thenGold.ok) return;
     expect(thenGold.value.state.items[0].affixes).not.toEqual(viaGold.value.state.items[0].affixes);
+  });
+});
+
+describe('accessories', () => {
+  /**
+   * A bare accessory of a given base.
+   *
+   * Hand-built rather than rolled: nothing drops one yet - that is the Abyss's job, in a
+   * later commit - and the slot machinery has to be right before there is anything to
+   * put in it.
+   */
+  const accessory = (baseId: string, uid = 'a1'): ItemInstance => ({
+    uid,
+    baseId,
+    rarity: 'common',
+    itemLevel: ABYSS_UNLOCK_STAGE,
+    affixes: [],
+    baseAffix: { affixId: BASE_AFFIXES[baseId].id, tier: 0, value: BASE_AFFIXES[baseId].tiers[0].value },
+    rerolls: 0,
+    crafts: 0,
+  });
+
+  const owning = (items: ItemInstance[]): SaveState => ({ ...newSave(1, T0), items });
+
+  it('puts a ring in a ring slot and refuses everything else', () => {
+    const ring = accessory('signet');
+    const amulet = accessory('pendant', 'a2');
+    const gear = rollItem(1, 50, 40);
+    const save = owning([ring, amulet, gear]);
+
+    const ok = applyCommand(save, { type: 'equipAccessory', slot: 0, itemId: ring.uid }, T0);
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(ok.value.state.accessories).toEqual([ring.uid, null, null]);
+
+    // The refusals say WHY. "Nothing happened" is the worst possible answer to a player
+    // dragging a pendant onto a ring slot.
+    const wrongSlot = applyCommand(save, { type: 'equipAccessory', slot: 0, itemId: amulet.uid }, T0);
+    expect(wrongSlot.ok).toBe(false);
+    if (!wrongSlot.ok) expect(wrongSlot.error).toMatch(/amulet, not a ring/);
+
+    const notAnAccessory = applyCommand(
+      save,
+      { type: 'equipAccessory', slot: 2, itemId: gear.uid },
+      T0,
+    );
+    expect(notAnAccessory.ok).toBe(false);
+    if (!notAnAccessory.ok) expect(notAnAccessory.error).toBe('that is not an accessory');
+  });
+
+  it('never wears the same accessory twice', () => {
+    // One item contributing from two slots is the rule the weapon enforces against the
+    // loadout, applied within this array.
+    const ring = accessory('band');
+    const save = owning([ring]);
+
+    const first = applyCommand(save, { type: 'equipAccessory', slot: 0, itemId: ring.uid }, T0);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const second = applyCommand(
+      first.value.state,
+      { type: 'equipAccessory', slot: 1, itemId: ring.uid },
+      T0,
+    );
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.value.state.accessories).toEqual([null, ring.uid, null]);
+  });
+
+  it('contributes its implicit to the sheet, and only while worn', () => {
+    const ring = accessory('signet');
+    const save = owning([ring]);
+    const ctx = { stage: 100, isBoss: false, enemyHpFraction: 1 };
+
+    const bare = deriveStats(save, ctx);
+    const worn = applyCommand(save, { type: 'equipAccessory', slot: 0, itemId: ring.uid }, T0);
+    expect(worn.ok).toBe(true);
+    if (!worn.ok) return;
+
+    // Owned but unequipped does nothing - the rule every other item obeys.
+    expect(deriveStats({ ...save, items: [ring] }, ctx).damage.toString()).toBe(
+      bare.damage.toString(),
+    );
+    expect(deriveStats(worn.value.state, ctx).damage.gt(bare.damage)).toBe(true);
+  });
+
+  it('cannot change the equip slot count', () => {
+    // Accessories sit outside `slotsFrom`'s fixed point on purpose - a second one feeding
+    // through the first is a shape nobody wants to reason about. Asserted on the CONTENT
+    // rather than the code, so authoring an equipSlots accessory affix fails here.
+    for (const base of ACCESSORY_BASES) {
+      const implicit = BASE_AFFIXES[base.id];
+      expect(implicit, `${base.id} has no implicit`).toBeDefined();
+      expect(implicit.effect.kind).toBe('statMod');
+    }
+    const ring = accessory('signet');
+    const worn: SaveState = { ...owning([ring]), accessories: [ring.uid, null, null] };
+    expect(equipSlots(worn, { stage: 1, isBoss: false, enemyHpFraction: 1 })).toBe(ITEM_SLOTS);
+  });
+
+  it('refuses to dissemble one you are wearing', () => {
+    const ring = accessory('seal');
+    const worn: SaveState = { ...owning([ring]), accessories: [ring.uid, null, null] };
+    const result = applyCommand(worn, { type: 'dissembleItems', uids: [ring.uid] }, T0);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('unequip it first');
+  });
+
+  it('gains three empty slots on migration, and nothing else moves', () => {
+    // v11 -> v12 is additive, exactly like `weapon` in v6 and `tablets` in v10.
+    const v11 = { ...newSave(2, T0), contentVersion: 11, items: [rollItem(2, 1, 40)] };
+    delete (v11 as Partial<SaveState>).accessories;
+
+    const { state, migrated } = migrateSave(v11 as SaveState);
+    expect(migrated).toBe(true);
+    expect(state.accessories).toEqual([null, null, null]);
+    expect(state.items).toEqual(v11.items);
+    expect(state.loadout).toEqual(v11.loadout);
   });
 });
 

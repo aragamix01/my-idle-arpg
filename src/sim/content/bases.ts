@@ -57,6 +57,22 @@ const tabletTiers = (values: readonly [number, number, number, number]) =>
   values.map((value, i) => ({ minStage: TABLET_GATES[i], value }));
 
 /**
+ * Tier gates for accessories.
+ *
+ * Their own scale, spanning the ABYSSAL depth range rather than the ladder's. An
+ * accessory's item level comes from `abyssalDepth(tier)`, which starts at 80 - so under
+ * the gear gates of [1, 15, 40, 80] every accessory that could ever exist would sit on
+ * the top tier and the table would be four names for one number.
+ *
+ * Spread across the tier ladder instead, so a deeper tablet pays a better accessory and
+ * the tier is worth climbing for something other than gold.
+ */
+const ACCESSORY_GATES = [80, 128, 176, 224] as const;
+
+const accessoryTiers = (values: readonly [number, number, number, number]) =>
+  values.map((value, i) => ({ minStage: ACCESSORY_GATES[i], value }));
+
+/**
  * The implicit affix of each base, keyed by base id.
  *
  * These are AffixDefinitions like any other - same tier machinery, same effect
@@ -169,6 +185,76 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
   },
 
   /*
+    Accessory implicits.
+
+    **Each SLOT carries both axes**, and that is structural rather than flavour. If rings
+    were the offensive slot and amulets the defensive one, a defensive build could not use
+    its two ring slots at all - which is the offence/defence asymmetry that has broken
+    this game three times, arriving by construction on the day accessories ship. So a
+    defensive build wears two Bands and a Locket, an offensive one a Signet, a Seal and a
+    Pendant, and both fill every slot.
+
+    **Sized to the same rule every other implicit obeys** - roughly a third of a rolled
+    affix on the same stat, and never more than 0.45 of one. That bound is not a gear
+    rule that accessories happen to inherit; its reasoning applies here exactly, and
+    harder: a guaranteed modifier that was also the strongest modifier would make the
+    rolled half decorative, on the one item type whose rolled half is meant to be the
+    reason to farm.
+
+    The first cut had these at three to four times a rolled affix, on the theory that
+    accessories should be a power spike. They should - but the spike belongs in the
+    ROLLED pool, where a player chases it, not in the half handed over with the drop.
+
+    What accessories get instead is the GATE SCALE: these sit near the top of the
+    permitted band at every tier, and the tier tracks Abyssal depth rather than the
+    ladder, so a deep tablet pays a measurably better implicit.
+  */
+  signet: {
+    id: 'implicit-signet-damage',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
+    tiers: accessoryTiers([0.0088, 0.013, 0.0172, 0.0231]),
+  },
+  band: {
+    id: 'implicit-band-hp',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
+    // Sized against of-Vigour rather than Vital: the bound is measured against the
+    // WEAKEST rolled peer on the stat, so the peer that matters is whichever that is.
+    tiers: accessoryTiers([0.0067, 0.0105, 0.0142, 0.0188]),
+  },
+  seal: {
+    id: 'implicit-seal-crit',
+    kind: 'suffix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
+    tiers: accessoryTiers([0.0029, 0.0055, 0.0076, 0.0092]),
+  },
+  pendant: {
+    id: 'implicit-pendant-speed',
+    kind: 'suffix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'attackSpeed', op: 'increased' },
+    tiers: accessoryTiers([0.0063, 0.0097, 0.013, 0.0176]),
+  },
+  locket: {
+    id: 'implicit-locket-toughness',
+    kind: 'suffix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
+    tiers: accessoryTiers([0.0063, 0.0101, 0.0139, 0.0181]),
+  },
+  talisman: {
+    id: 'implicit-talisman-gold',
+    kind: 'suffix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'goldFind', op: 'increased' },
+    tiers: accessoryTiers([0.026, 0.039, 0.051, 0.064]),
+  },
+
+  /*
     Tablet implicits.
 
     Gated on TIER, not on stage - a tablet's itemLevel carries its tier of 1..15, so
@@ -252,6 +338,35 @@ export const GEAR_BASES: ItemBase[] = [
  * `tabletReward` - they produce no Effect at all, and their magnitude is amplified by
  * whatever explicits the tablet carries. See content/tablets.ts for the coupling.
  */
+/**
+ * Accessory bases.
+ *
+ * `wear` is what makes a base an accessory and which slot it goes in, following the rule
+ * `skillId` set for weapons and `pays` for tablets: one field, so nothing can disagree
+ * about what kind of thing this is.
+ *
+ * Three of each, because the implicit is the half of an item you CHOOSE - picking a Band
+ * over a Signet is the same decision as picking a Whetstone over a Purse, and one base
+ * per slot would make that decision disappear.
+ *
+ * Names are plain nouns so composition reads: "Brutal Signet of Haste" works. The art is
+ * picked so no two share a palette - at 16px a ring is five pixels of metal and one of
+ * stone, so colour is most of what separates them.
+ */
+export const RING_BASES: ItemBase[] = [
+  { id: 'signet', name: 'Signet', sprite: 'item.signet', wear: 'ring' },
+  { id: 'band', name: 'Band', sprite: 'item.band', wear: 'ring' },
+  { id: 'seal', name: 'Seal', sprite: 'item.seal', wear: 'ring' },
+];
+
+export const AMULET_BASES: ItemBase[] = [
+  { id: 'pendant', name: 'Pendant', sprite: 'item.pendant', wear: 'amulet' },
+  { id: 'locket', name: 'Locket', sprite: 'item.locket', wear: 'amulet' },
+  { id: 'talisman', name: 'Talisman', sprite: 'item.talisman', wear: 'amulet' },
+];
+
+export const ACCESSORY_BASES: ItemBase[] = [...RING_BASES, ...AMULET_BASES];
+
 export const TABLET_BASES: ItemBase[] = [
   { id: 'hoarding-tablet', name: 'Hoarding Tablet', sprite: 'item.deep_delvers_idol', pays: 'quantity' },
   { id: 'auspicious-tablet', name: 'Auspicious Tablet', sprite: 'item.swarm_lens', pays: 'rarity' },
@@ -259,12 +374,17 @@ export const TABLET_BASES: ItemBase[] = [
 ];
 
 /**
- * Every base: gear, weapon and tablet.
+ * Every base: gear, weapon, accessory and tablet.
  *
  * Kept as the flat list it always was, so validation, sprite checks and the display
  * path do not have to know the split exists. Only the roll path does.
  */
-export const BASES: ItemBase[] = [...GEAR_BASES, ...WEAPON_BASES, ...TABLET_BASES];
+export const BASES: ItemBase[] = [
+  ...GEAR_BASES,
+  ...WEAPON_BASES,
+  ...ACCESSORY_BASES,
+  ...TABLET_BASES,
+];
 
 const byId = new Map(BASES.map((b) => [b.id, b]));
 

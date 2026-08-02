@@ -1172,6 +1172,42 @@ exports[`content registry > matches its snapshot 1`] = `
       "sprite": "item.staff",
     },
     {
+      "id": "signet",
+      "name": "Signet",
+      "sprite": "item.signet",
+      "wear": "ring",
+    },
+    {
+      "id": "band",
+      "name": "Band",
+      "sprite": "item.band",
+      "wear": "ring",
+    },
+    {
+      "id": "seal",
+      "name": "Seal",
+      "sprite": "item.seal",
+      "wear": "ring",
+    },
+    {
+      "id": "pendant",
+      "name": "Pendant",
+      "sprite": "item.pendant",
+      "wear": "amulet",
+    },
+    {
+      "id": "locket",
+      "name": "Locket",
+      "sprite": "item.locket",
+      "wear": "amulet",
+    },
+    {
+      "id": "talisman",
+      "name": "Talisman",
+      "sprite": "item.talisman",
+      "wear": "amulet",
+    },
+    {
       "id": "hoarding-tablet",
       "name": "Hoarding Tablet",
       "pays": "quantity",

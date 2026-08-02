@@ -464,7 +464,27 @@ export interface ItemBase {
    * half, and the explicits are the lottery.
    */
   pays?: TabletPays;
+  /**
+   * Which accessory slot this base goes in. Absent on everything else.
+   *
+   * The third field in the same family as `skillId` and `pays`: presence makes a base an
+   * accessory, and the value says which of the two slot kinds it fits. One field, so
+   * there is no separate flag to keep in agreement with it.
+   */
+  wear?: AccessorySlot;
 }
+
+/**
+ * The two accessory slot kinds.
+ *
+ * Rings and amulets differ ONLY in how many you can wear - two against one - and in
+ * which bases fit. Every base of either kind can build offence or defence, deliberately:
+ * if rings were the offensive slot and amulets the defensive one, a defensive character
+ * could not use two of its three accessory slots at all, which is the offence/defence
+ * asymmetry arriving structurally on the day the feature ships.
+ */
+export const ACCESSORY_WEARS = ['ring', 'amulet'] as const;
+export type AccessorySlot = (typeof ACCESSORY_WEARS)[number];
 
 /**
  * What a tablet's implicit pays out in.

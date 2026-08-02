@@ -172,6 +172,21 @@ export const ITEM_SLOTS = 4;
 export const MAX_ITEM_SLOTS = 7;
 
 /**
+ * Accessory positions: two rings, then the amulet.
+ *
+ * A FIXED count, unlike the gear slots. The loadout's count is derived because a unique
+ * can grant or remove one, and that derivation is a fixed point with a window rule
+ * holding it together - see `slotsFrom` in stats.ts. Accessories deliberately sit outside
+ * it: a unique that granted a ring slot would feed a second fixed point through the
+ * first, and the mechanic buys nothing that a stronger accessory does not.
+ *
+ * Their own array for the same reason. Sharing `loadout` would mean every equip, sort,
+ * dissemble and slot-count path filtering rings back out.
+ */
+export const ACCESSORY_SLOT_KINDS = ['ring', 'ring', 'amulet'] as const;
+export const ACCESSORY_SLOTS = ACCESSORY_SLOT_KINDS.length;
+
+/**
  * Floor from which the Abyss exists at all.
  *
  * Not arbitrary, and not a difficulty judgement. The last affix gate is stage 80, so
@@ -286,6 +301,14 @@ export interface SaveState {
    * is purely additive - `weapon` absent reads as null and the save still works.
    */
   weapon: string | null;
+  /**
+   * Equipped accessories: two rings, then the amulet. ACCESSORY_SLOTS long.
+   *
+   * Its own array rather than more `loadout` positions, and additively rather than by
+   * reinterpreting existing ones - the same reasoning `weapon` records. Absent reads as
+   * three nulls and a returning character is bit-identical on load.
+   */
+  accessories: (string | null)[];
   /**
    * Monotonic source of item uids, and part of every item's roll seed.
    *

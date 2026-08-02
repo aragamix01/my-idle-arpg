@@ -29,6 +29,7 @@ import {
   CurrencyIdSchema,
   DISSEMBLE_YIELD,
   getCurrency,
+  getBase,
   isWeaponBase,
   tabletReward,
   WAVE_RARITY_WEIGHTS,
@@ -56,6 +57,8 @@ import {
 import { equipSlots, findItem, keyDropMultiplier } from './stats';
 import {
   MAX_ITEM_SLOTS,
+  ACCESSORY_SLOTS,
+  ACCESSORY_SLOT_KINDS,
   ABYSS_UNLOCK_STAGE,
   TABLET_CAP,
   INVENTORY_CAP,
@@ -105,6 +108,19 @@ export const CommandSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('equipWeapon'),
       /** Item uid, or null to fight unarmed. */
+      itemId: z.string().nullable(),
+    })
+    .strict(),
+  /**
+   * Its own command for the same reason `equipWeapon` is: only a ring fits a ring slot,
+   * and that is a check `equipItem` has no cause to carry.
+   */
+  z
+    .object({
+      type: z.literal('equipAccessory'),
+      /** 0 and 1 are rings, 2 is the amulet - see ACCESSORY_SLOT_KINDS. */
+      slot: z.number().int().min(0).max(ACCESSORY_SLOTS - 1),
+      /** Item uid, or null to clear the slot. */
       itemId: z.string().nullable(),
     })
     .strict(),
@@ -226,6 +242,7 @@ export function newSave(seed: number, nowMs: number): SaveState {
     // A new character starts unarmed, and Unarmed's bases are the old global
     // BASE_STATS - so stage 1 plays exactly as it did before weapons existed.
     weapon: null,
+    accessories: Array<string | null>(ACCESSORY_SLOTS).fill(null),
     nextItemId: 1,
     lastSeenAt: nowMs,
   };
@@ -428,6 +445,30 @@ export function applyCommand(
       break;
     }
 
+    case 'equipAccessory': {
+      const { slot, itemId } = command;
+      if (slot >= ACCESSORY_SLOTS) return err(`no accessory slot ${slot}`);
+
+      if (itemId !== null) {
+        const item = findItem(next, itemId);
+        if (!item) return err(`not owned: ${itemId}`);
+        const wear = getBase(item.baseId)?.wear;
+        // Refused with the reason rather than silently ignored, the same way a Charm in
+        // the weapon slot is. "Nothing happened" is the worst possible answer.
+        if (!wear) return err('that is not an accessory');
+        if (wear !== ACCESSORY_SLOT_KINDS[slot]) {
+          return err(`that is a ${wear}, not a ${ACCESSORY_SLOT_KINDS[slot]}`);
+        }
+        // The same accessory in two slots would be one item contributing twice - the
+        // rule the weapon slot enforces against the loadout, applied within this array.
+        const already = next.accessories.indexOf(itemId);
+        if (already !== -1) next.accessories[already] = null;
+      }
+
+      next.accessories = next.accessories.map((held, i) => (i === slot ? itemId : held));
+      break;
+    }
+
     case 'rerollItem': {
       const index = next.items.findIndex((item) => item.uid === command.uid);
       if (index === -1) return err(`not owned: ${command.uid}`);
@@ -470,7 +511,11 @@ export function applyCommand(
       const item = shelf[index];
       // The exact string the craft modal greys the option out with. One rule
       // set, so the UI cannot promise something the server then refuses.
-      const illegal = currencyLegality(item, currency, next.loadout.includes(item.uid));
+      const illegal = currencyLegality(
+        item,
+        currency,
+        next.loadout.includes(item.uid) || next.accessories.includes(item.uid),
+      );
       if (illegal) return err(illegal);
 
       const result = applyCurrencyToItem(next.seed, item, currency);
@@ -545,8 +590,9 @@ export function applyCommand(
       //
       // The weapon counts as equipped. It is the most expensive item a player owns -
       // it carries their skill and their skill level - so the one thing this guard
-      // must not miss is the thing they are holding.
-      const equipped = [...next.loadout, next.weapon];
+      // must not miss is the thing they are holding. Accessories count for the same
+      // reason: they drop only from the Abyss, one tablet at a time.
+      const equipped = [...next.loadout, next.weapon, ...next.accessories];
       if (uids.some((uid) => equipped.includes(uid))) return err('unequip it first');
 
       // Dissembling replaced discarding outright. An item you do not want is

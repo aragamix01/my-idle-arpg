@@ -12,7 +12,7 @@
 import { fromSave, toSave } from './big';
 import { CONTENT_VERSION, getAffix, getUnique, rollUniqueValues, type RolledAffix } from './content';
 import { rollStream, rollTablet } from './items';
-import { ITEM_SLOTS, MAX_ITEM_SLOTS, type SaveState } from './types';
+import { ACCESSORY_SLOTS, ITEM_SLOTS, MAX_ITEM_SLOTS, type SaveState } from './types';
 
 /** First version whose saves use rolled item instances. */
 export const ITEMS_VERSION = 2;
@@ -226,6 +226,22 @@ export function migrateSave(state: SaveState): MigrationResult {
       const uid = Number(legacy.uid ?? next.nextItemId + i);
       return rollTablet(next.seed, uid, legacy.tier ?? 1);
     });
+    migrated = true;
+  }
+
+  if (!Array.isArray(next.accessories) || next.accessories.length !== ACCESSORY_SLOTS) {
+    // v11 -> v12 adds the accessory array. Purely additive, exactly like `weapon` in v6
+    // and `tablets` in v10: an existing save loads with three empty slots, derives
+    // identical stats, and fills them the first time the Abyss pays one. Nothing is
+    // rerolled and no gear moves.
+    //
+    // Length-checked as well as presence-checked, so a save written by a build with a
+    // different slot count is padded or truncated rather than left a size the equip
+    // command would index past.
+    const padded = Array<string | null>(ACCESSORY_SLOTS).fill(null);
+    const held = Array.isArray(next.accessories) ? next.accessories : [];
+    for (let i = 0; i < Math.min(ACCESSORY_SLOTS, held.length); i++) padded[i] = held[i] ?? null;
+    next.accessories = padded;
     migrated = true;
   }
 

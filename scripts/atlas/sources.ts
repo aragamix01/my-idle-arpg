@@ -143,6 +143,26 @@ export const RAVEN_FANTASY_ICONS: GridSource = {
     'item.travellers_harness': 2092,
     'item.monomaniacs_seal': 2060,
 
+    /*
+      Accessories.
+
+      The pack draws jewellery across two bands - a grey/silver run at the end of row
+      128 and a blue-and-gold run in the last row - and these are picked from both so no
+      two accessories share a palette. At 16px a ring is four or five pixels of metal
+      and one of stone, so COLOUR is most of what separates them; three silver bands
+      would be one icon shown three times.
+
+      2060 is a plain silver band and is deliberately NOT here: Monomaniac's Seal already
+      claims it, and the builder refuses an id claimed twice rather than letting one
+      silently win.
+    */
+    'item.signet': 2061,
+    'item.band': 2185,
+    'item.seal': 2186,
+    'item.pendant': 2064,
+    'item.locket': 2176,
+    'item.talisman': 2181,
+
     // Currency. Tiny Dungeon had no crafting icons at all and these were the weakest
     // art in the game - potions and torches standing in for ores and flames.
     //

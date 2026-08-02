@@ -27,6 +27,7 @@ import {
 import { itemEffects, itemPower } from './items';
 import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
+  ACCESSORY_SLOTS,
   BASE_STATS,
   ITEM_SLOTS,
   MAGNITUDE_STAT_KEYS,
@@ -149,6 +150,20 @@ export function equippedWeapon(save: SaveState): ItemInstance | undefined {
   return save.weapon ? findItem(save, save.weapon) : undefined;
 }
 
+/** Accessories currently worn, in slot order. Empty positions are simply absent. */
+export function equippedAccessories(save: SaveState): ItemInstance[] {
+  const out: ItemInstance[] = [];
+  for (let i = 0; i < ACCESSORY_SLOTS; i++) {
+    const uid = save.accessories?.[i];
+    // Optional-chained because a save written before accessories existed has no array at
+    // all, and deriveStats runs before migrate on the optimistic client path.
+    if (!uid) continue;
+    const item = findItem(save, uid);
+    if (item) out.push(item);
+  }
+  return out;
+}
+
 /**
  * How many gear slots are live right now.
  *
@@ -262,6 +277,13 @@ export function equippedGroups(save: SaveState, ctx: EffectContext): Effect[][] 
 
   const weapon = equippedWeapon(save);
   if (weapon) out.push(itemEffects(weapon));
+  // Accessories are ordinary equipped items in every way that matters here - their own
+  // group each, so `amplifyOthers` counts them the way it counts gear.
+  //
+  // They cannot change the slot count and are deliberately resolved AFTER it: no
+  // accessory affix carries `equipSlots`, and keeping them out of `slotsFrom`'s window
+  // is what stops a second fixed point feeding through the first.
+  for (const accessory of equippedAccessories(save)) out.push(itemEffects(accessory));
   return out;
 }
 

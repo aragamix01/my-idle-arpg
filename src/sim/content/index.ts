@@ -22,7 +22,7 @@ import {
   UniqueSchema,
   type UniqueEffect,
 } from './schema';
-import { BASE_STATS, MAX_TABLET_TIER } from '../types';
+import { ABYSS_UNLOCK_STAGE, BASE_STATS, MAX_TABLET_TIER } from '../types';
 
 /** 2: artifacts became rolled item instances with prefixes and suffixes. */
 /** 3: bases carry implicits, drops come in threes, and "artifact" became "item". */
@@ -34,7 +34,8 @@ import { BASE_STATS, MAX_TABLET_TIER } from '../types';
 /** 9: skills carry an element, targets carry resistance, and penetration is a stat. */
 /** 10: Abyssal tablets - a tier you hold, with modifiers, in its own save array. */
 /** 11: a tablet is an item - rarity for rows, an implicit that pays, explicits that buff monsters. */
-export const CONTENT_VERSION = 11;
+/** 12: accessories - two rings and an amulet, from the Abyss only. */
+export const CONTENT_VERSION = 12;
 
 export * from './schema';
 export * from './affixes';
@@ -43,6 +44,21 @@ export * from './currency';
 export * from './skills';
 export * from './uniques';
 export * from './tablets';
+
+/**
+ * The shallowest item level anything carrying this affix can have.
+ *
+ * Implicits are keyed by base id rather than tagged, so the base is what says which
+ * scale an implicit's gates are on. Rolled affixes read it off `rollsOn`.
+ */
+function affixFloor(affixId: string): number {
+  const owner = Object.entries(BASE_AFFIXES).find(([, affix]) => affix.id === affixId)?.[0];
+  const base = owner ? getBase(owner) : undefined;
+  if (base?.wear) return ABYSS_UNLOCK_STAGE;
+  // Tablets count their itemLevel in TIERS from 1, and gear starts at stage 1, so both
+  // floors are the same number by coincidence rather than by sharing a scale.
+  return 1;
+}
 
 /**
  * Validates the whole registry.
@@ -67,8 +83,20 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
         errors.push(`${affix.id}: tier ${i} unlocks before tier ${i - 1}`);
       }
     }
-    // Tier 0 must be reachable at stage 1 or nothing can roll the affix.
-    if (affix.tiers[0]?.minStage > 1) errors.push(`${affix.id}: lowest tier is gated above stage 1`);
+    /*
+      Tier 0 must be reachable by the shallowest item that can carry the affix, or
+      nothing can ever roll it.
+
+      "Stage 1" was that floor while every item could drop at stage 1. An accessory
+      cannot: it comes only from the Abyss, so the shallowest one that exists is at
+      `abyssalDepth(1)` and gating its tier 0 there is exactly what gating a Whetstone's
+      at stage 1 means. Checking accessories against 1 would demand a tier no accessory
+      could ever be shallow enough to want.
+    */
+    const floor = affixFloor(affix.id);
+    if (affix.tiers[0]?.minStage > floor) {
+      errors.push(`${affix.id}: lowest tier is gated above ${floor}, so nothing can roll it`);
+    }
 
     // THE PARTITION, asserted in both directions.
     //

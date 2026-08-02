@@ -49,6 +49,14 @@ export const SPRITE_IDS = [
   'item.maul',
   'item.staff',
 
+  // Accessories. Rings and amulets, from the Abyss only.
+  'item.band',
+  'item.signet',
+  'item.seal',
+  'item.pendant',
+  'item.locket',
+  'item.talisman',
+
   // Currency - must stay in step with src/sim/content/currency.ts.
   'currency.sacred_idol',
   'currency.dark_idol',
