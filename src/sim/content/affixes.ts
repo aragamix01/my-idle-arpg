@@ -441,6 +441,137 @@ export const SUFFIXES: AffixDefinition[] = [
   },
 ];
 
+// --- Accessory extras -----------------------------------------------------
+
+/**
+ * Tier gates for accessory-only affixes.
+ *
+ * Kept in step with ACCESSORY_GATES in bases.ts, for the same reason the implicit gates
+ * match the rolled ones everywhere else: an accessory whose implicit jumped a tier while
+ * its affixes did not is something no player could work out.
+ */
+const ACCESSORY_GATES = [80, 128, 176, 224] as const;
+
+const accessoryTiers = (values: readonly [number, number, number, number]) =>
+  values.map((value, i) => ({ minStage: ACCESSORY_GATES[i], value }));
+
+/**
+ * What only an accessory can roll.
+ *
+ * **Additive, not a partition.** Unlike the tablet pool, these JOIN what gear can roll
+ * rather than replacing it - an accessory rolls everything a Whetstone can, plus these.
+ * That is the difference between the two, and `eligibleAffixes` says so in one branch.
+ *
+ * ## This is where the spike lives
+ *
+ * Accessories drop only from the Abyss, one tablet at a time, past floor 80. Their
+ * implicits are held to the same third-of-a-rolled-affix bound everything else obeys, so
+ * if these were ordinary the whole item type would be a Whetstone with a different icon.
+ * The reason to farm is here, in the half a player chases.
+ *
+ * ## Skill levels, and why they are the headline
+ *
+ * A skill level raises the skill's BASE - the position `flat` adds to and `increased` and
+ * `more` both multiply - so it compounds with every other thing a character owns. Three
+ * accessories at +2 is `1.06^6` ~= **1.42x damage before a single percentage rolls**.
+ * Everything else here is sized against that rather than beside it.
+ *
+ * Still weapon-TYPE locked in effect: `physicalSkillLevel` does nothing for a caster. On
+ * a weapon that would be a dead row, which is why the weapon versions are `rollsOn`
+ * gated; on an accessory it is a build decision, because a player chooses which ring to
+ * wear and can simply not wear that one.
+ *
+ * ## The defensive half has to MATCH, and cannot match in kind
+ *
+ * Nothing defensive touches `base` - there is no such thing as an HP skill level - so
+ * defence cannot answer skill levels with the same mechanism. It answers with magnitude
+ * instead, on the layer it already uses. The offence/defence invariant is measured as a
+ * ratio of resulting multipliers, so what has to match is the multiplier, not the trick
+ * that produced it.
+ *
+ * Every value here is provisional until the budget is re-derived with three extra slots
+ * in the search. Measure; do not read these as settled.
+ */
+const ACCESSORY_PREFIXES: AffixDefinition[] = [
+  {
+    id: 'abyssal-might',
+    kind: 'prefix',
+    nameFragment: 'Abyssal',
+    effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
+    rollsOn: 'accessory',
+    tiers: accessoryTiers([0.04, 0.06, 0.08, 0.11]),
+  },
+  {
+    id: 'abyssal-vitality',
+    kind: 'prefix',
+    nameFragment: 'Undying',
+    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
+    rollsOn: 'accessory',
+    tiers: accessoryTiers([0.042, 0.062, 0.082, 0.112]),
+  },
+];
+
+const ACCESSORY_SUFFIXES: AffixDefinition[] = [
+  {
+    /**
+     * TWO tiers, not four, and that is forced rather than stylistic.
+     *
+     * A skill level is an integer and the accessory range has to stay small - there are
+     * three accessory slots against one weapon, so of-Mastery's 1-4 would be +12 levels
+     * from jewellery alone. Squeezing four tiers into that range means repeating a
+     * value, and two tiers granting the identical +1 is a tier that does nothing.
+     *
+     * validateRegistry caught exactly that: a repeated value inside one table trips the
+     * duplicate-line guard against itself, which is the guard being right.
+     */
+    id: 'of-ascendancy',
+    kind: 'suffix',
+    nameFragment: 'of Ascendancy',
+    effect: { kind: 'statMod', stat: 'physicalSkillLevel', op: 'flat' },
+    rollsOn: 'accessory',
+    tiers: [
+      { minStage: ACCESSORY_GATES[0], value: 1 },
+      { minStage: ACCESSORY_GATES[2], value: 2 },
+    ],
+  },
+  {
+    id: 'of-communion',
+    kind: 'suffix',
+    nameFragment: 'of Communion',
+    effect: { kind: 'statMod', stat: 'magicalSkillLevel', op: 'flat' },
+    rollsOn: 'accessory',
+    tiers: [
+      { minStage: ACCESSORY_GATES[0], value: 1 },
+      { minStage: ACCESSORY_GATES[2], value: 2 },
+    ],
+  },
+  {
+    id: 'of-warding',
+    kind: 'suffix',
+    nameFragment: 'of Warding',
+    effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
+    rollsOn: 'accessory',
+    tiers: accessoryTiers([0.038, 0.055, 0.072, 0.098]),
+  },
+  {
+    /**
+     * The offensive suffix that is NOT a skill level.
+     *
+     * Half the skill-level pool is dead for any given character - a physical ring does
+     * nothing for a caster - so without this an offensive accessory build would be
+     * hunting one specific affix. Crit multiplier is `flat` here, like every other
+     * critMult roll: it multiplies into DPS through critFactor already, so a `more`
+     * layer on top would compound twice and validateRegistry rejects it.
+     */
+    id: 'of-annihilation',
+    kind: 'suffix',
+    nameFragment: 'of Annihilation',
+    effect: { kind: 'statMod', stat: 'critMult', op: 'flat' },
+    rollsOn: 'accessory',
+    tiers: accessoryTiers([0.115, 0.165, 0.215, 0.285]),
+  },
+];
+
 // --- Tablet modifiers -----------------------------------------------------
 
 /**
@@ -574,13 +705,23 @@ const TABLET_SUFFIXES: AffixDefinition[] = [
 export const AFFIXES: AffixDefinition[] = [
   ...PREFIXES,
   ...SUFFIXES,
+  ...ACCESSORY_PREFIXES,
+  ...ACCESSORY_SUFFIXES,
   ...TABLET_PREFIXES,
   ...TABLET_SUFFIXES,
 ];
 
-/** Every prefix in the game, tablet or not. Partitioned at roll time, never here. */
-export const ALL_PREFIXES: AffixDefinition[] = [...PREFIXES, ...TABLET_PREFIXES];
-export const ALL_SUFFIXES: AffixDefinition[] = [...SUFFIXES, ...TABLET_SUFFIXES];
+/** Every prefix in the game, whatever it rolls on. Filtered at roll time, never here. */
+export const ALL_PREFIXES: AffixDefinition[] = [
+  ...PREFIXES,
+  ...ACCESSORY_PREFIXES,
+  ...TABLET_PREFIXES,
+];
+export const ALL_SUFFIXES: AffixDefinition[] = [
+  ...SUFFIXES,
+  ...ACCESSORY_SUFFIXES,
+  ...TABLET_SUFFIXES,
+];
 
 /**
  * The danger a rolled tablet modifier adds, and on which axis.

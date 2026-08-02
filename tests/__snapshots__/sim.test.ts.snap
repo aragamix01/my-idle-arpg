@@ -883,6 +883,164 @@ exports[`content registry > matches its snapshot 1`] = `
     },
     {
       "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "damage",
+      },
+      "id": "abyssal-might",
+      "kind": "prefix",
+      "nameFragment": "Abyssal",
+      "rollsOn": "accessory",
+      "tiers": [
+        {
+          "minStage": 80,
+          "value": 0.04,
+        },
+        {
+          "minStage": 128,
+          "value": 0.06,
+        },
+        {
+          "minStage": 176,
+          "value": 0.08,
+        },
+        {
+          "minStage": 224,
+          "value": 0.11,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "maxHp",
+      },
+      "id": "abyssal-vitality",
+      "kind": "prefix",
+      "nameFragment": "Undying",
+      "rollsOn": "accessory",
+      "tiers": [
+        {
+          "minStage": 80,
+          "value": 0.042,
+        },
+        {
+          "minStage": 128,
+          "value": 0.062,
+        },
+        {
+          "minStage": 176,
+          "value": 0.082,
+        },
+        {
+          "minStage": 224,
+          "value": 0.112,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "physicalSkillLevel",
+      },
+      "id": "of-ascendancy",
+      "kind": "suffix",
+      "nameFragment": "of Ascendancy",
+      "rollsOn": "accessory",
+      "tiers": [
+        {
+          "minStage": 80,
+          "value": 1,
+        },
+        {
+          "minStage": 176,
+          "value": 2,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "magicalSkillLevel",
+      },
+      "id": "of-communion",
+      "kind": "suffix",
+      "nameFragment": "of Communion",
+      "rollsOn": "accessory",
+      "tiers": [
+        {
+          "minStage": 80,
+          "value": 1,
+        },
+        {
+          "minStage": 176,
+          "value": 2,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "increased",
+        "stat": "toughness",
+      },
+      "id": "of-warding",
+      "kind": "suffix",
+      "nameFragment": "of Warding",
+      "rollsOn": "accessory",
+      "tiers": [
+        {
+          "minStage": 80,
+          "value": 0.038,
+        },
+        {
+          "minStage": 128,
+          "value": 0.055,
+        },
+        {
+          "minStage": 176,
+          "value": 0.072,
+        },
+        {
+          "minStage": 224,
+          "value": 0.098,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "kind": "statMod",
+        "op": "flat",
+        "stat": "critMult",
+      },
+      "id": "of-annihilation",
+      "kind": "suffix",
+      "nameFragment": "of Annihilation",
+      "rollsOn": "accessory",
+      "tiers": [
+        {
+          "minStage": 80,
+          "value": 0.115,
+        },
+        {
+          "minStage": 128,
+          "value": 0.165,
+        },
+        {
+          "minStage": 176,
+          "value": 0.215,
+        },
+        {
+          "minStage": 224,
+          "value": 0.285,
+        },
+      ],
+    },
+    {
+      "effect": {
         "axis": "hp",
         "kind": "monsterBuff",
       },

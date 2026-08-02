@@ -124,10 +124,16 @@ export function eligibleAffixes(pool: AffixDefinition[], baseId?: string): Affix
   if (base?.pays) return pool.filter((affix) => affix.rollsOn === 'tablet');
 
   const skill = base?.skillId ? getSkill(base.skillId) : undefined;
+  // Accessories ADD to the gear pool rather than replacing it, which is the whole
+  // difference between `'accessory'` and `'tablet'`. A ring rolls everything a Whetstone
+  // can plus its own extras; a tablet rolls only its own.
+  const accessory = base?.wear !== undefined;
+
   return pool.filter((affix) => {
     // Closed the other way too: a tablet affix is never eligible off a tablet, whether
     // or not the caller knew what base it was rolling for.
     if (affix.rollsOn === 'tablet') return false;
+    if (affix.rollsOn === 'accessory') return accessory;
     if (!affix.rollsOn) return true;
     return affix.rollsOn === 'gear' ? skill === undefined : affix.rollsOn === skill?.kind;
   });

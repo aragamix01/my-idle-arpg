@@ -11,6 +11,7 @@
  */
 
 import { AFFIXES, IMPLICIT_AFFIXES } from './affixes';
+import { eligibleAffixes } from '../items';
 import { BASE_AFFIXES, BASES, getBase } from './bases';
 import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
 import { UNIQUES } from './uniques';
@@ -20,6 +21,7 @@ import {
   EffectSchema,
   UNIQUE_TIER_WEIGHTS,
   UniqueSchema,
+  type AffixDefinition,
   type UniqueEffect,
 } from './schema';
 import { ABYSS_UNLOCK_STAGE, BASE_STATS, MAX_TABLET_TIER } from '../types';
@@ -51,13 +53,35 @@ export * from './tablets';
  * Implicits are keyed by base id rather than tagged, so the base is what says which
  * scale an implicit's gates are on. Rolled affixes read it off `rollsOn`.
  */
-function affixFloor(affixId: string): number {
-  const owner = Object.entries(BASE_AFFIXES).find(([, affix]) => affix.id === affixId)?.[0];
-  const base = owner ? getBase(owner) : undefined;
-  if (base?.wear) return ABYSS_UNLOCK_STAGE;
+function affixFloor(affix: AffixDefinition): number {
+  if (affix.rollsOn === 'accessory') return ABYSS_UNLOCK_STAGE;
+  // Implicits carry no `rollsOn` - they are keyed by base id - so the base is what says
+  // which scale their gates are on.
+  const owner = Object.entries(BASE_AFFIXES).find(([, a]) => a.id === affix.id)?.[0];
+  if (owner && getBase(owner)?.wear) return ABYSS_UNLOCK_STAGE;
   // Tablets count their itemLevel in TIERS from 1, and gear starts at stage 1, so both
   // floors are the same number by coincidence rather than by sharing a scale.
   return 1;
+}
+
+/**
+ * Whether two affixes can ever land on the same item.
+ *
+ * The duplicate-value rule exists because an item carrying two affixes that render the
+ * identical line reads as a bug. Two affixes that can never co-roll cannot do that, and
+ * holding them apart anyway forbids perfectly good content: `of-Ascendancy` grants +1
+ * physical skill level on an accessory and `of-Mastery` grants +1 on a weapon, and since
+ * skill levels are integers there is no way to make them differ that is not arbitrary.
+ *
+ * Decided by asking every base, rather than by reasoning about the tags - the eligibility
+ * rules live in `eligibleAffixes` and this must not become a second copy of them that can
+ * disagree.
+ */
+function canCoRoll(a: AffixDefinition, b: AffixDefinition): boolean {
+  return BASES.some((base) => {
+    const eligible = eligibleAffixes([a, b], base.id);
+    return eligible.length === 2;
+  });
 }
 
 /**
@@ -93,7 +117,7 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
       at stage 1 means. Checking accessories against 1 would demand a tier no accessory
       could ever be shallow enough to want.
     */
-    const floor = affixFloor(affix.id);
+    const floor = affixFloor(affix);
     if (affix.tiers[0]?.minStage > floor) {
       errors.push(`${affix.id}: lowest tier is gated above ${floor}, so nothing can roll it`);
     }
@@ -188,19 +212,28 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     if (!BASE_AFFIXES[base.id]) errors.push(`${base.id}: no implicit affix`);
   }
 
-  // Two affixes on the same stat must never share a value at any tier, or an
-  // item carrying both renders the identical line twice and reads as a bug.
-  // The roll-sampling test catches this too, but only for combinations it
-  // happens to roll; this catches it the moment a table is edited.
-  const byStat = new Map<string, { id: string; value: number }[]>();
+  /*
+    Two affixes on the same stat must never share a value at any tier, or an item
+    carrying both renders the identical line twice and reads as a bug. The roll-sampling
+    test catches this too, but only for combinations it happens to roll; this catches it
+    the moment a table is edited.
+
+    Only for pairs that can actually CO-ROLL. `of-Ascendancy` grants +1 physical skill
+    level on an accessory and `of-Mastery` grants +1 on a weapon, and no item is both -
+    skill levels are integers, so forbidding the overlap would mean picking arbitrary
+    different integers for no reader's benefit.
+  */
+  const byStat = new Map<string, { affix: AffixDefinition; value: number }[]>();
   for (const affix of [...AFFIXES, ...IMPLICIT_AFFIXES]) {
     if (affix.effect.kind !== 'statMod') continue;
     const key = `${affix.effect.stat}:${affix.effect.op}`;
     const seen = byStat.get(key) ?? [];
     for (const tier of affix.tiers) {
-      const clash = seen.find((other) => other.value === tier.value);
-      if (clash) errors.push(`${affix.id} and ${clash.id} both grant ${tier.value} ${key}`);
-      seen.push({ id: affix.id, value: tier.value });
+      const clash = seen.find(
+        (other) => other.value === tier.value && canCoRoll(affix, other.affix),
+      );
+      if (clash) errors.push(`${affix.id} and ${clash.affix.id} both grant ${tier.value} ${key}`);
+      seen.push({ affix, value: tier.value });
     }
     byStat.set(key, seen);
   }

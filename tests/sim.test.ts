@@ -50,6 +50,9 @@ import {
   eligibleAffixes,
   GEAR_BASES,
   ACCESSORY_BASES,
+  RING_BASES,
+  AMULET_BASES,
+  TABLET_BASES,
   getCurrency,
   getSkill,
   getUnique,
@@ -1838,6 +1841,104 @@ describe('accessories', () => {
     const result = applyCommand(worn, { type: 'dissembleItems', uids: [ring.uid] }, T0);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe('unequip it first');
+  });
+
+  it('adds to the gear pool rather than replacing it', () => {
+    /*
+      THE difference between `'accessory'` and `'tablet'`, asserted.
+
+      A tablet PARTITIONS - it rolls its own pool and nothing else. An accessory ADDS: it
+      rolls everything a Whetstone can, plus its own extras. Getting these the same way
+      round would make a ring either a Whetstone with a nicer icon or an item with four
+      possible modifiers.
+    */
+    const extras = AFFIXES.filter((a) => a.rollsOn === 'accessory').map((a) => a.id);
+    expect(extras.length).toBeGreaterThan(0);
+
+    const onRing = eligibleAffixes(AFFIXES, 'signet').map((a) => a.id);
+    const onGear = eligibleAffixes(AFFIXES, 'whetstone').map((a) => a.id);
+
+    // Everything gear can roll, and then some.
+    for (const id of onGear) expect(onRing, `${id} missing from the ring pool`).toContain(id);
+    for (const id of extras) expect(onRing).toContain(id);
+    expect(onRing.length).toBeGreaterThan(onGear.length);
+
+    // And closed the other way: an accessory extra never appears anywhere else.
+    for (const baseId of [...GEAR_BASES, ...WEAPON_BASES, ...TABLET_BASES].map((b) => b.id)) {
+      const pool = eligibleAffixes(AFFIXES, baseId).map((a) => a.id);
+      for (const id of extras) expect(pool, `${id} leaked onto ${baseId}`).not.toContain(id);
+    }
+  });
+
+  it('grants skill levels that only help the matching weapon', () => {
+    // Weapon-TYPE locked in effect rather than in eligibility. On a weapon that would be
+    // a dead row - hence the rollsOn gate on of-Mastery - but on a ring it is a build
+    // decision, because a player chooses which ring to wear.
+    // No implicit: a Signet's is increased damage, which would move a caster's sheet on
+    // its own and make this test pass for the wrong reason. The skill level has to be
+    // the only thing the ring contributes.
+    const ring: ItemInstance = {
+      ...accessory('signet'),
+      baseAffix: undefined,
+      affixes: [{ affixId: 'of-ascendancy', tier: 1, value: 2 }],
+    };
+    const axe = WEAPON_BASES.find((b) => b.id === 'axe')!;
+    const wand = WEAPON_BASES.find((b) => b.id === 'wand')!;
+    const ctx = { stage: 100, isBoss: false, enemyHpFraction: 1 };
+
+    const withWeapon = (baseId: string): SaveState => {
+      const weapon = { ...accessory('signet', 'w1'), baseId, baseAffix: undefined };
+      const save = { ...owning([ring, weapon]), weapon: weapon.uid };
+      return { ...save, accessories: [ring.uid, null, null] };
+    };
+    const without = (save: SaveState): SaveState => ({ ...save, accessories: [null, null, null] });
+
+    const physical = withWeapon(axe.id);
+    const magical = withWeapon(wand.id);
+
+    // The physical skill level moves a physical character and does nothing for a caster.
+    expect(deriveStats(physical, ctx).damage.gt(deriveStats(without(physical), ctx).damage)).toBe(
+      true,
+    );
+    expect(deriveStats(magical, ctx).damage.toString()).toBe(
+      deriveStats(without(magical), ctx).damage.toString(),
+    );
+  });
+
+  it('can build offence or defence out of either slot kind', () => {
+    // The structural half of the offence/defence invariant. If rings were the offensive
+    // slot, a defensive character could not use two of its three accessory slots - the
+    // asymmetry arriving by construction rather than by a value being wrong.
+    const DEFENSIVE = new Set(['maxHp', 'toughness']);
+    const OFFENSIVE = new Set([
+      'damage',
+      'attackSpeed',
+      'critChance',
+      'critMult',
+      'area',
+      'physicalSkillLevel',
+      'magicalSkillLevel',
+    ]);
+    const statOf = (baseId: string) => {
+      const effect = BASE_AFFIXES[baseId].effect;
+      return effect.kind === 'statMod' ? effect.stat : '';
+    };
+
+    for (const [kind, bases] of [
+      ['ring', RING_BASES],
+      ['amulet', AMULET_BASES],
+    ] as const) {
+      const stats = bases.map((b) => statOf(b.id));
+      expect(stats.some((s) => OFFENSIVE.has(s)), `no offensive ${kind}`).toBe(true);
+      expect(stats.some((s) => DEFENSIVE.has(s)), `no defensive ${kind}`).toBe(true);
+    }
+    // And both axes exist among the rolled extras too, or the implicit is the only place
+    // a slot's axis is decided.
+    const extras = AFFIXES.filter((a) => a.rollsOn === 'accessory');
+    const stats = extras.flatMap((a) => (a.effect.kind === 'statMod' ? [a.effect.stat] : []));
+    expect(stats).toContain('damage');
+    expect(stats).toContain('maxHp');
+    expect(stats).toContain('toughness');
   });
 
   it('gains three empty slots on migration, and nothing else moves', () => {

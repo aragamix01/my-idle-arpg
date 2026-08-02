@@ -353,7 +353,7 @@ export interface AffixDefinition {
    * nothing else ever rolls one. `validateRegistry` asserts both halves - the partition
    * is what makes a tablet safe to store as an ItemInstance.
    */
-  rollsOn?: 'gear' | 'tablet' | SkillKind;
+  rollsOn?: 'gear' | 'tablet' | 'accessory' | SkillKind;
   /** Ascending by strength. Index 0 is the weakest and always available. */
   tiers: AffixTier[];
 }
