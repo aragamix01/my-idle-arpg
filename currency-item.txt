@@ -10,6 +10,11 @@ Order:  1 -> 5a-1 -> 5a-2 -> 6a -> 6b -> 2 -> 5a-3 -> 3 -> 4 -> 5b -> 5c
 
 Status: [done] shipped and verified  [next] in progress or up next  [todo] not started
 
+THIS FILE IS THE SPEC. Read the relevant phase before starting work on it and update it
+after finishing - what shipped, what diverged, and any spoken decision that overrode what
+is written here. Phase 4 shipped eight divergences from this file because it was planned
+from memory of an earlier read; every one of them had to be rebuilt.
+
 
 ## [done] Phase 1 - Crafting items & the dungeon
 - Each stage drops 1 to 3 items at random
@@ -256,63 +261,108 @@ Uniques are already the only content using the `more` layer, which is what makes
 one feel like a different class of item rather than a rare with a name.
 
 
-## [todo] Phase 5a-3 - Elements, resistances, penetration
-> Deferred twice now, and it belongs AFTER the magical playstyle rather than before.
-> Elements are a stat-surface expansion, so they should expand the final damage model
-> once - not get built against the physical-only one and then extended to spells.
+## [done] Phase 5a-3 - Elements, resistances, penetration
 
-- Damage splits into pools: physical plus fire, cold, lightning, darkness
-- Each pool carries its own flat and increased layers; the gold damage track
-  multiplies all of them, or an elemental build has no exponential engine and walls
-- Defensive layer gets resistance
-- Penetration, subtracted from a target's resistance before it applies
+Both open questions were settled by measuring rather than by argument:
 
-Open design question to settle before starting: four elements against a single
-constant enemy resistance would be four NAMES for one stat - identical math, four
-times the balance surface, and no decision anywhere. So enemy resistance has to
-vary by stage, which means damage swings as you climb and the clear-time band has to
-survive it. That is the thing to measure first.
+- **A hit is SHARES of one number by element**, not four damage pools with four sets of
+  layers. The skill's own element sits at 1 and each `gain X% as extra` affix adds a
+  share, so the DPS a target takes is `damage x speed x critFactor x Σ share x
+  mitigation(element)`. One map plus one stat instead of four of everything
+- **ONE penetration stat**, not four. Four means four affixes competing for the same
+  rows, each dead unless it matches the element you happen to deal - book-keeping dressed
+  as a build decision
+- Enemy resistance rises with stage toward `RESISTANCE_CAP`, uniform across elements on
+  the ladder. **0.25, and measured**: the first cut at 0.40 doubled the ladder, 7.8d to
+  16.0d. Not a wall - clear times were fine - but a pacing change wearing a scaling
+  axis's clothes
+- Dungeons and the Abyss carry an AFFINITY instead: one element resisted, one vulnerable,
+  derived from the account seed so it is knowable before the key or tablet is spent.
+  0.35 for a dungeon, 0.55 for the Abyss. 0.70 was rejected - it puts the resisted case
+  at x0.12, which against a tier-scaled boss is a timeout, which is "impossible" wearing
+  a different word
 
-Also unresolved: one penetration stat and one resistance stat, or four of each. Four
-of each is a gearing tax that makes sense across a dozen equipment slots; across
-four it is book-keeping.
+So elements are a scaling axis you can ignore on the ladder and the whole fight in the
+content that carries an affinity, which was the brief.
 
-
-## [todo] Phase 3 - More loot
-- Monster waves drop items rarely, relative to how many monsters die
-	- dungeon keys
-	- some uniques
-	- other rare drops later
-- This affects offline play
-- If the inventory is full, overflow into a temporary inventory the player has to
-  check and clear before continuing
-- Currency menu needs clear effect descriptions
-
-> Cheapest remaining phase and almost formula-independent, so it can slot in
-> anywhere. The currency descriptions are already a known gap.
+**The gap this left, and it is now the most visible thing in the game:** four weapons
+cover three elements. Lightning and darkness have no weapon at all, so an affinity
+resisting either is a free pass, and one resisting your only element has no answer -
+conversion is not one at 1.2-3.3% against a x0.27. See Phase 4's closing note.
 
 
-## [todo] Phase 4 - Tablets & the Abyssal dungeon
-- Monster waves drop a new currency
-	- Tablet, around 0.1% - rare but not hard to obtain given the kill rate
-- Tablets are the entry to the Abyssal dungeon
-- Clear (n) waves, then the boss
-- Tablets have tiers like items (common, magic, rare)
-- Tablets carry implicit and explicit modifiers
-- Implicit enhances loot, drop rate, gold found
-- Explicit is prefix/suffix like an item, but buffs the monsters and the boss
-- More explicits is harder and also enhances the implicit. High risk, high return
-- Higher tablet tier needs more waves cleared
-- Limited HP inside; at zero you leave with nothing
-- Tablets get their own tab in the character modal, holding 200 like items
-- Most crafting currency works on a tablet
+## [mostly] Phase 3 - More loot
 
-> Authors a whole second affix pool, and its explicit modifiers buff monsters - a
-> dimension that does not exist yet. Comes after the formula is settled, and after
-> 5a-3 if tablet modifiers are to use elements.
+Shipped:
+
+- Monster waves drop items, 5% per kill capped at 6 a clear, and they fall on screen out
+  of the enemy that dropped them. Rolled client-side from the same pure function the
+  server uses, so what you watch fall is what lands in the inventory
+- **Wave loot draws from its own rarity table**, and unique is ZERO there. That is
+  structural rather than flavour: wave loot multiplies drop volume several times over, so
+  sharing the normal table would multiply the unique rate with it and quietly undo the
+  tier weights. Volume changes what you have to dissemble, never what you are hunting
+- Tablets ride the same faucet at 0.1% - see Phase 4
+- Measured across four seeds before and after: throughput quadrupled, **pacing did not
+  move**. Baseline 8.2/7.1/12.8/4.2d against 10.1/11.4/9.6/4.8d - mixed signs, spread
+  dwarfing the difference. A single seed cannot tell a pacing change from drop luck
+- Offline play: a welcome-back receipt, auto-claimed, so gold is never owed and
+  uncollected
+
+Still open:
+
+- **Overflow inventory.** A full inventory swallows the rest of the wave and says how
+  many were lost; there is no temporary shelf to clear. INVENTORY_CAP is 200 now and
+  wave loot puts it under real pressure, so this is a live gap rather than a nicety
+- **Currency menu descriptions.** Still the known gap it was
+- **Wave loot on a failed attempt.** Gold pays partial credit through `fractionOfTrash`;
+  items pay nothing. Same kills, two rules - unresolved, and worth resolving
 
 
-## [todo] Phase 5b - Accessories
+## [done] Phase 4 - Tablets & the Abyssal dungeon
+
+Everything below shipped. Two things were decided in conversation and OVERRIDE what was
+originally written here:
+
+- **Tier 1-15 as well as rarity**, PoE2-waystone style. Rarity buys explicit rows exactly
+  as it does on an item; the tier is the difficulty and the wave count. The original
+  "tiers like items (common, magic, rare)" is the rarity half only
+- **The Abyss unlocks at floor 80** - the last affix gate, so it is the floor where the
+  ladder stops paying in gear and starts paying in tablets
+
+What shipped:
+
+- Monster waves drop tablets at 0.1% per kill, past floor 80. The ladder tops out at
+  **T3, one tier per 60 floors** - the Abyss owns the tier ladder, and a ladder that
+  reached the top made the mode's own tier-up reward pointless (measured: it collapsed
+  10th-percentile clear time to 4.4-6.9s against a 12s floor)
+- A tablet **IS an `ItemInstance`**: rarity is the row count, `itemLevel` is the tier,
+  `baseAffix` is the implicit, `affixes` are the explicits. The affix pool is partitioned
+  by `rollsOn: 'tablet'` rather than the type being forked
+- Explicits are prefix/suffix affixes that ONLY buff monsters - four axes, hp / damage /
+  count / waves. They produce no `Effect` at all, so there is no code path from a tablet
+  modifier to `deriveStats`
+- The implicit pays, and its magnitude is the rolled value times `(1 + Σ explicits)`.
+  One knob: an explicit is pure downside and the implicit is what turns it into a payout
+- Waves then the boss, wave count from the tier. **Health carries across the whole run**
+  and nothing refills it, so `waves` is a danger axis rather than a time cost
+- Delves get their own time limit, `STAGE_TIME_LIMIT_SECONDS x (1 + waves x 0.5)`
+- Tablets take crafting currency, in their own tab, capped at 200. Spirits and the unique
+  gamble are refused with reasons; gold reroll is off because `rerollCost` scales on item
+  level and a tablet's is its tier
+- A boss entrance beat between the wave and the boss, costing real time and no simulated
+  time
+
+Still open, and visible now that the mode exists:
+
+- **Lightning and darkness have no weapon.** Four weapons, three elements, so an Abyssal
+  run resisting either is a free pass. The affinity is the biggest number in the fight
+  and there is no answer to two of the five cases
+- The extra-element affixes are 1.2-3.3%, nothing against a resisted x0.27, so conversion
+  is not an answer either. Growing them is its own decision
+
+
+## [next] Phase 5b - Accessories
 > Split out of the original Phase 5. Its drop source is the Abyssal dungeon, so it
 > belongs with Phase 4 rather than with the formula rework.
 
@@ -346,7 +396,30 @@ four it is book-keeping.
   Worth deciding whether that spread is the intended shape of the game before reading
   any single "reached stage 300 in Xd" as a pacing statement
 - /api/health passes Supabase error strings straight to a public endpoint. Delete it
-- Gold passes Number.MAX_SAFE_INTEGER around stage 290 and nothing warns. The
-  gentler curve after 5a-1 pushed this out but did not remove it
-- Prestige vs big numbers is still undecided, and stage 300 in ~2 days of optimal
-  play suggests the pacing dial (upgrade costGrowth) is worth a look
+- Gold no longer overflows - it is a decimal string in the save and a Big everywhere it
+  is arithmetic, since 5a-1's Phase 7. `damage` and `maxHp` are Bigs for the same reason.
+  Attack speed and resource regen are the two stats that could still overflow, at roughly
+  18,000 levels, which the cost curve reaches only far beyond stage 1e5
+- Prestige vs big numbers is still undecided. `lifetimeGold` exists and is credited, so
+  the input is there; what it BUYS is the undecided half
+- **The element roster is short two weapons.** Lightning and darkness have no weapon, so
+  two of the five Abyssal affinities are a free pass and one of the other three has no
+  answer. The cheapest fix is two weapon bases; the deeper one is making conversion
+  viable, which means growing the extra-element affixes and re-deriving the power budget
+- **The Raven pack's licence is unverified.** No licence file shipped with it, only a
+  thank-you note, and its art is on every item. CREDITS.md records the uncertainty rather
+  than guessing at a licence
+
+## Verification, for any phase
+
+`pnpm exec tsc --noEmit`, `pnpm exec eslint . --max-warnings 0`, `pnpm exec vitest run`,
+`pnpm exec playwright test`, then `pnpm balance` and READ the diff.
+
+Two habits this project has paid for the hard way:
+
+- **A single seed cannot tell a pacing change from drop luck.** Sweep four with
+  `runLadder(seed)` before claiming anything moved. Total ladder time spans 4.8-11.4d
+  across seeds on identical code
+- **The browser pane does not composite**, so requestAnimationFrame never fires there and
+  the replay never advances. Anything in the cosmetic layer has to be driven from node -
+  `tests/cosmetic.test.ts` - or it is not being tested at all. Playwright does composite
