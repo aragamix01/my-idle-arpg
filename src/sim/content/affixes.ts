@@ -492,24 +492,22 @@ const accessoryTiers = (values: readonly [number, number, number, number]) =>
  * Every value here is provisional until the budget is re-derived with three extra slots
  * in the search. Measure; do not read these as settled.
  */
-const ACCESSORY_PREFIXES: AffixDefinition[] = [
-  {
-    id: 'abyssal-might',
-    kind: 'prefix',
-    nameFragment: 'Abyssal',
-    effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
-    rollsOn: 'accessory',
-    tiers: accessoryTiers([0.04, 0.06, 0.08, 0.11]),
-  },
-  {
-    id: 'abyssal-vitality',
-    kind: 'prefix',
-    nameFragment: 'Undying',
-    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
-    rollsOn: 'accessory',
-    tiers: accessoryTiers([0.042, 0.062, 0.082, 0.112]),
-  },
-];
+/**
+ * No accessory-only PREFIXES, and that is the correction.
+ *
+ * The first cut had two - bigger increased damage and bigger increased max HP - and the
+ * harness said what they were: three extra slots of gear-equivalent affixes is ALREADY a
+ * 75% increase in equipment, and doubling the per-affix values on top of that took the
+ * ladder from 15.4 days to 2.0 and post-80 clear times from 11 seconds to 0.7.
+ *
+ * They were also redundant. An accessory rolls the whole gear pool, so Brutal and Vital
+ * already appear on rings; `abyssal-might` was Brutal with a bigger number and a
+ * different name, which is not content.
+ *
+ * **The spike is the slots.** What belongs in an accessory-only pool is what gear cannot
+ * have at all.
+ */
+const ACCESSORY_PREFIXES: AffixDefinition[] = [];
 
 const ACCESSORY_SUFFIXES: AffixDefinition[] = [
   {
@@ -546,29 +544,24 @@ const ACCESSORY_SUFFIXES: AffixDefinition[] = [
     ],
   },
   {
+    /**
+     * Defence's answer to a skill level, and it has to be one.
+     *
+     * Nothing defensive touches `base`, so defence cannot match the mechanism - it
+     * matches the MULTIPLIER. Three rings at +2 skill levels is 1.06^6 ~= 1.42x damage;
+     * three at the top toughness roll is about +36% effective HP. Comparable, which is
+     * what the offence/defence invariant actually measures.
+     *
+     * Roughly three times of-Stone's top roll, and that is the point: it is the only
+     * defensive affix a ring can carry that gear cannot, so it has to be worth the slot
+     * against an offensive character taking skill levels.
+     */
     id: 'of-warding',
     kind: 'suffix',
     nameFragment: 'of Warding',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
     rollsOn: 'accessory',
-    tiers: accessoryTiers([0.038, 0.055, 0.072, 0.098]),
-  },
-  {
-    /**
-     * The offensive suffix that is NOT a skill level.
-     *
-     * Half the skill-level pool is dead for any given character - a physical ring does
-     * nothing for a caster - so without this an offensive accessory build would be
-     * hunting one specific affix. Crit multiplier is `flat` here, like every other
-     * critMult roll: it multiplies into DPS through critFactor already, so a `more`
-     * layer on top would compound twice and validateRegistry rejects it.
-     */
-    id: 'of-annihilation',
-    kind: 'suffix',
-    nameFragment: 'of Annihilation',
-    effect: { kind: 'statMod', stat: 'critMult', op: 'flat' },
-    rollsOn: 'accessory',
-    tiers: accessoryTiers([0.115, 0.165, 0.215, 0.285]),
+    tiers: accessoryTiers([0.045, 0.065, 0.09, 0.12]),
   },
 ];
 

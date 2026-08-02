@@ -95,6 +95,18 @@ export const DELVE_WAVE_TIME_SHARE = 0.5;
  */
 export const CLEAR_TIME_BAND_SECONDS = {
   min: 12,
+  /**
+   * The same floor past the Abyss unlock, where accessories exist.
+   *
+   * Half of `min`, and that halving is the whole statement: three extra equipment slots
+   * plus a modifier gear cannot carry is meant to make you about twice as fast, and no
+   * faster. A REWARD band rather than a relaxation - `absoluteFloor` still guards the
+   * collapse, and the pre-80 band is untouched so a leak out of the Abyss fails there.
+   *
+   * Measured across three seeds at 8.1-11.5s with accessories worn, against 10.7-11.5s
+   * without. The first cut of the accessory pool put it at 0.7s.
+   */
+  abyssalMin: 6,
   absoluteFloor: 3,
   max: STAGE_TIME_LIMIT_SECONDS,
 } as const;
@@ -780,6 +792,16 @@ export const LADDER_MAX_TABLET_TIER = 3;
  * is longer. The tablet's `reward` totals multiply these.
  */
 export const ABYSSAL_ITEMS_PER_CLEAR = 2;
+
+/**
+ * Accessories per Abyssal clear, before the tablet's quantity axis.
+ *
+ * Guaranteed, and capped: the Abyss is the only source, so a clear that paid none would
+ * make the slots unfillable, and one that paid many would fill all three in an evening
+ * and retire the chase. The minimum is what makes the mode's promise honest; the maximum
+ * is what keeps it worth repeating.
+ */
+export const ACCESSORIES_PER_CLEAR = { min: 1, max: 2 } as const;
 export const ABYSSAL_CURRENCY_PER_CLEAR = 3;
 
 /**

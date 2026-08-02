@@ -27,7 +27,10 @@ import {
   formatBig,
   fromSave,
   getAffix,
+  getBase,
   getCurrency,
+  ACCESSORY_SLOTS,
+  ACCESSORY_SLOT_KINDS,
   INVENTORY_CAP,
   isUpgradeMaxed,
   equipSlots,
@@ -69,6 +72,15 @@ const SEED = 0xc0ffee;
  * wall whether or not the arithmetic terminates.
  */
 const PATIENCE_SECONDS = 21 * 24 * 3600;
+
+/**
+ * Inventory slots the agent keeps free for what an Abyssal clear is about to pay.
+ *
+ * Sized for the worst case one run can produce: its items, plus its accessories, plus
+ * a little slack. A player who walks into the Abyss with a full bag loses the rewards,
+ * and modelling that player would measure their mistake rather than the mode.
+ */
+const ABYSSAL_HEADROOM = 8;
 const GOLDEN_PATH = resolve(process.cwd(), 'tests/__snapshots__/balance.golden.txt');
 
 /** How close the agent is to beating a stage. >1 means it clears. */
@@ -181,7 +193,20 @@ function takeDrop(save: SaveState, stage: number): SaveState {
   // commons are what dissemble into the fragment stream - so a harness that skipped
   // it would understate currency and make the ladder look slower than it is.
   for (let i = 0; i < waveDrops + drops; i++) {
-    if (owned.length >= INVENTORY_CAP) {
+    /*
+      Kept BELOW the cap, not at it.
+
+      The agent used to fill the bag exactly and stay there, which quietly made the
+      Abyss pay nothing: `attemptAbyssal` refuses a drop into a full inventory and
+      counts it lost, so every accessory the mode produced was destroyed on arrival.
+      Three hundred stages, zero accessories owned, zero worn - and the harness reported
+      it as a clear-time number rather than as the faucet being closed.
+
+      A player about to spend a tablet clears space first. `ABYSSAL_HEADROOM` is that
+      habit, and it is the difference between measuring the Abyss and measuring an
+      inventory bug.
+    */
+    if (owned.length >= INVENTORY_CAP - ABYSSAL_HEADROOM) {
       // Dissemble rather than delete: the weakest spare is now raw material,
       // and an agent that threw it away would model a player who ignores half
       // the crafting economy.
@@ -189,7 +214,14 @@ function takeDrop(save: SaveState, stage: number): SaveState {
       // the agent owns - it carries the skill and the skill level - so dissembling
       // it to make room for a common would model a player with a death wish.
       const spare = owned
-        .filter((item) => !save.loadout.includes(item.uid) && item.uid !== save.weapon)
+        .filter(
+          (item) =>
+            !save.loadout.includes(item.uid) &&
+            item.uid !== save.weapon &&
+            // Nor a worn accessory - it cost a tablet, which is scarcer than anything
+            // else the agent can spend.
+            !save.accessories.includes(item.uid),
+        )
         .sort((a, b) => itemPower(a) - itemPower(b))[0];
       if (!spare) break;
       owned = owned.filter((item) => item.uid !== spare.uid);
@@ -260,11 +292,53 @@ function runDungeons(save: SaveState): { save: SaveState; seconds: number } {
  * Highest winnable tier first, and only when it is winnable. A tablet is consumed on a
  * loss, so throwing them at a tier that beats you burns the progression itself.
  */
+/**
+ * Dissemble the weakest spares until `free` slots are open.
+ *
+ * The same rule `takeDrop` uses - never what is equipped, worn or wielded - lifted out
+ * so the Abyssal pass can apply it at the moment it matters rather than inheriting
+ * whatever space happened to survive the dungeon pass.
+ */
+function makeRoom(save: SaveState, free: number): SaveState {
+  let items = [...save.items];
+  const currency = { ...save.currency };
+
+  while (items.length > INVENTORY_CAP - free) {
+    const spare = items
+      .filter(
+        (item) =>
+          !save.loadout.includes(item.uid) &&
+          item.uid !== save.weapon &&
+          !save.accessories.includes(item.uid),
+      )
+      .sort((a, b) => itemPower(a) - itemPower(b))[0];
+    if (!spare) break;
+    items = items.filter((item) => item.uid !== spare.uid);
+    const yielded = DISSEMBLE_YIELD[spare.rarity];
+    currency[yielded] = (currency[yielded] ?? 0) + 1;
+  }
+
+  return { ...save, items, currency };
+}
+
 function runAbyssals(save: SaveState): { save: SaveState; seconds: number } {
   let current = save;
   let seconds = 0;
 
   for (let i = 0; i < 50; i++) {
+    /*
+      Room first, every time.
+
+      `attemptAbyssal` refuses a drop into a full inventory and counts it lost, and the
+      agent runs at the cap by construction - so every accessory the mode produced was
+      destroyed on arrival. Three hundred stages, zero accessories owned and zero worn.
+
+      Clearing space once per stage clear was not enough: the dungeon pass runs between
+      that and this, and eats the headroom. A player empties their bag before the run
+      they are about to do, not at some earlier point in the evening.
+    */
+    current = makeRoom(current, ABYSSAL_HEADROOM);
+
     // Deepest first: a tier that still clears pays more than a shallower one, and
     // clearing it is also the only way the tier ladder climbs.
     const best = [...current.tablets]
@@ -500,7 +574,10 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
     for (let slot = 0; slot < slots; slot++) {
       for (const item of candidates) {
         if (current.loadout.includes(item.uid)) continue;
-        if (isWeaponBase(item.baseId)) continue; // weapons have their own slot
+        // Weapons and accessories both have their own slots, and applyCommand refuses
+        // either in a gear position - so trying one here would model a move the game
+        // does not allow.
+        if (isWeaponBase(item.baseId) || getBase(item.baseId)?.wear) continue;
         const loadout = [...current.loadout];
         loadout[slot] = item.uid;
         const candidate = { ...current, loadout };
@@ -544,6 +621,45 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
       const candidate = { ...current, weapon: item.uid };
       const gain = value(candidate, stage) - baseline;
       if (gain > 0 && (!best || gain > best.gain)) best = { save: candidate, gain };
+    }
+
+    /*
+      Accessories, exhaustively, for the same reason weapons are.
+
+      `itemPower` cannot rank them against gear: it scores a flat contribution, and an
+      accessory's headline is a SKILL LEVEL, which raises the skill's base and therefore
+      compounds with everything else the character owns. Ranked by that heuristic a ring
+      granting +2 levels looks like a small flat roll and would never enter the candidate
+      window at all - the same failure the slot granters had, where "the search rejected
+      it" and "the search never looked" are very different findings.
+
+      There are at most a handful owned, so exhaustive costs nothing.
+    */
+    for (const item of current.items) {
+      const wear = getBase(item.baseId)?.wear;
+      if (!wear || current.accessories.includes(item.uid)) continue;
+      for (let slot = 0; slot < ACCESSORY_SLOTS; slot++) {
+        if (ACCESSORY_SLOT_KINDS[slot] !== wear) continue;
+        const accessories = [...current.accessories];
+        const wasEmpty = accessories[slot] === null;
+        accessories[slot] = item.uid;
+        const candidate = { ...current, accessories };
+        const gain = value(candidate, stage) - baseline;
+
+        /*
+          An EMPTY slot is filled on a tie, and that is not a fudge.
+
+          `value` is `min(survival, speed)` plus farm rate, so while survival is the
+          binding term an offence-only improvement scores exactly zero - and a strict
+          `gain > 0` then leaves an empty accessory slot empty forever. The agent held
+          accessories for two hundred stages and wore none.
+
+          No player leaves a ring slot open. Filling one has no downside at all: there
+          is nothing to give up, so anything beats nothing.
+        */
+        const worth = wasEmpty ? gain >= 0 : gain > 0;
+        if (worth && (!best || gain > best.gain)) best = { save: candidate, gain };
+      }
     }
 
     if (!best) break;
@@ -631,6 +747,12 @@ export function runLadder(seed = SEED): {
         const abyssals = runAbyssals(save);
         save = abyssals.save;
         elapsed += abyssals.seconds;
+        // Equip again, because the Abyss is the ONLY source of accessories and it pays
+        // them after the loadout pass above has already run. Without this the agent
+        // finished 300 stages owning none and wearing none - not because the search
+        // rejected them, but because it never looked after the only thing that produces
+        // one, and `takeDrop` dissembled them as spares on the next clear.
+        save = improveLoadout(save, stage);
         save = spendCurrency(save, stage);
         break;
       }

@@ -23,6 +23,7 @@ import {
   abyssalDepth,
   ABYSSAL_ITEMS_PER_CLEAR,
   ABYSSAL_CURRENCY_PER_CLEAR,
+  ACCESSORIES_PER_CLEAR,
 } from './curves';
 import {
   CONTENT_VERSION,
@@ -47,6 +48,7 @@ import {
   rollDropCount,
   rollDungeonCurrency,
   rollDungeonItem,
+  rollAccessory,
   rollItem,
   rollStageBossDrops,
   rollWaveDropCount,
@@ -420,7 +422,22 @@ export function applyCommand(
       const live = equipSlots(next, { stage: next.currentStage, isBoss: false, enemyHpFraction: 1 });
       if (slot >= live) return err(`slot ${slot + 1} is locked: you have ${live} slots`);
       if (itemId !== null) {
-        if (!findItem(next, itemId)) return err(`not owned: ${itemId}`);
+        const item = findItem(next, itemId);
+        if (!item) return err(`not owned: ${itemId}`);
+
+        /*
+          A gear slot takes GEAR. Nothing checked this before, and nothing needed to
+          while gear and weapons were the only two kinds - a weapon in a gear slot
+          contributed its affixes and not its skill, which was odd but bounded.
+
+          Accessories make it a hole. Three dedicated slots plus four gear slots would
+          mean seven accessories worn at once, and the power budget is derived on the
+          assumption that there are exactly three.
+        */
+        const base = getBase(item.baseId);
+        if (base?.wear) return err(`equip a ${base.wear} in its own slot`);
+        if (base?.skillId) return err('equip a weapon in the weapon slot');
+
         const existing = next.loadout.indexOf(itemId);
         if (existing !== -1 && existing !== slot) next.loadout[existing] = null;
       }
@@ -738,6 +755,45 @@ export function applyCommand(
           rarity: item.rarity,
         });
       }
+      /*
+        Accessories, and the only place in the game that produces one.
+
+        Guaranteed, 1-2 per clear, at the depth the tier fights at - so a T12 pays a
+        floor-212 accessory and the tier is worth climbing for something other than gold.
+        The quantity axis raises the count and the rarity axis raises the item level, so
+        both tablet bases already steer this through machinery that exists; the `pays`
+        axis additionally biases WHICH base drops. See rollAccessory for the honest limit
+        on that - only gold has an accessory to point at.
+
+        They land in `items` and count against INVENTORY_CAP like anything else. A
+        separate cap would be a third shelf to explain for an item you own three of.
+      */
+      const accessoryCount = Math.max(
+        ACCESSORIES_PER_CLEAR.min,
+        Math.round(ACCESSORIES_PER_CLEAR.min * (1 + paid('quantity'))),
+      );
+      for (let i = 0; i < Math.min(accessoryCount, ACCESSORIES_PER_CLEAR.max); i++) {
+        const uid = next.nextItemId;
+        next.nextItemId = uid + 1;
+        if (next.items.length >= INVENTORY_CAP) {
+          lost++;
+          continue;
+        }
+        const accessory = rollAccessory(
+          next.seed,
+          uid,
+          Math.round(depth * (1 + paid('rarity'))),
+          reward?.pays,
+        );
+        next.items.push(accessory);
+        events.push({
+          type: 'itemDropped',
+          itemId: accessory.uid,
+          name: itemName(accessory),
+          rarity: accessory.rarity,
+        });
+      }
+
       if (lost > 0) events.push({ type: 'inventoryFull', lost });
 
       const currencyUid = next.nextItemId;

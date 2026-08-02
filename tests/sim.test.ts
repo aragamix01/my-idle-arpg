@@ -53,6 +53,9 @@ import {
   RING_BASES,
   AMULET_BASES,
   TABLET_BASES,
+  rollAccessory,
+  getBase,
+  type TabletPays,
   getCurrency,
   getSkill,
   getUnique,
@@ -1932,13 +1935,81 @@ describe('accessories', () => {
       expect(stats.some((s) => OFFENSIVE.has(s)), `no offensive ${kind}`).toBe(true);
       expect(stats.some((s) => DEFENSIVE.has(s)), `no defensive ${kind}`).toBe(true);
     }
-    // And both axes exist among the rolled extras too, or the implicit is the only place
-    // a slot's axis is decided.
+    /*
+      And both axes exist among the accessory-ONLY extras too.
+
+      Not the same stats gear uses - those already roll on accessories, so an extra that
+      duplicated one would be Brutal with a different name, and measuring said so: it
+      took the ladder from 15.4 days to 2.0. What is here is what gear CANNOT have, and
+      offence and defence each need one or the invariant breaks structurally.
+    */
     const extras = AFFIXES.filter((a) => a.rollsOn === 'accessory');
     const stats = extras.flatMap((a) => (a.effect.kind === 'statMod' ? [a.effect.stat] : []));
-    expect(stats).toContain('damage');
-    expect(stats).toContain('maxHp');
-    expect(stats).toContain('toughness');
+    expect(stats.some((s) => OFFENSIVE.has(s)), 'no offensive accessory extra').toBe(true);
+    expect(stats.some((s) => DEFENSIVE.has(s)), 'no defensive accessory extra').toBe(true);
+  });
+
+  it('drops from the Abyss and from nowhere else', () => {
+    /*
+      THE assertion the whole power budget rests on.
+
+      Accessories carry skill levels and the biggest percentages in the game, and they can
+      only afford to because they cost a tablet. A leak into the ladder's drop table would
+      hand them out by the hundred without the Abyss being involved at all.
+    */
+    const isAccessory = (item: ItemInstance) => getBase(item.baseId)?.wear !== undefined;
+
+    for (let uid = 1; uid <= 800; uid++) {
+      const stage = 1 + (uid % 300);
+      expect(isAccessory(rollItem(4, uid, stage)), `stage clear at ${stage}`).toBe(false);
+      expect(isAccessory(rollItem(4, uid, stage, WAVE_RARITY_WEIGHTS)), 'wave loot').toBe(false);
+      expect(isAccessory(rollDungeonItem(4, uid, stage)), 'dungeon').toBe(false);
+      // A tablet is an item too, and must not come back as a ring.
+      expect(isAccessory(rollTablet(4, uid, 1 + (uid % MAX_TABLET_TIER))), 'tablet').toBe(false);
+    }
+
+    // And the Abyss does produce them, or the slots are unfillable.
+    expect(isAccessory(rollAccessory(4, 1, ABYSS_UNLOCK_STAGE))).toBe(true);
+  });
+
+  it('rolls deeper the deeper the tablet was', () => {
+    // The reason to climb the tier ladder for something other than gold. An accessory's
+    // item level is the tablet's DEPTH, and the gates are spread across that range - so
+    // a T12 pays tiers a T1 cannot reach.
+    const shallow = rollAccessory(8, 10, abyssalDepth(1));
+    const deep = rollAccessory(8, 10, abyssalDepth(MAX_TABLET_TIER));
+
+    expect(shallow.itemLevel).toBe(abyssalDepth(1));
+    expect(deep.itemLevel).toBeGreaterThan(shallow.itemLevel);
+
+    // Measured on the IMPLICIT, which is the only modifier guaranteed to be on the
+    // accessory gate scale. A ring also rolls gear affixes, and those gate at [1,15,40,80]
+    // - so their top tier is already reachable at floor 80 and says nothing about depth.
+    const best = (level: number) =>
+      Math.max(
+        ...Array.from({ length: 60 }, (_, i) => rollAccessory(8, i + 1, level).baseAffix?.tier ?? 0),
+      );
+    expect(best(abyssalDepth(1))).toBe(0);
+    expect(best(abyssalDepth(MAX_TABLET_TIER))).toBeGreaterThan(0);
+  });
+
+  it('steers toward the base a gold tablet pays in', () => {
+    // A bias, not a guarantee - a promise would make the other five bases unreachable for
+    // anyone farming gold. Only the gold axis has an accessory to point at; quantity and
+    // rarity steer the drop through count and item level instead.
+    const goldFinders = (pays: TabletPays | undefined) => {
+      let found = 0;
+      for (let uid = 1; uid <= 600; uid++) {
+        const item = rollAccessory(11, uid, ABYSS_UNLOCK_STAGE, pays);
+        const implicit = BASE_AFFIXES[item.baseId].effect;
+        if (implicit.kind === 'statMod' && implicit.stat === 'goldFind') found++;
+      }
+      return found;
+    };
+
+    expect(goldFinders('gold')).toBeGreaterThan(goldFinders(undefined));
+    // And never to the exclusion of everything else.
+    expect(goldFinders('gold')).toBeLessThan(600);
   });
 
   it('gains three empty slots on migration, and nothing else moves', () => {
@@ -3480,15 +3551,38 @@ describe('clear time stays watchable', () => {
     // a median floor is added so this is a STRONGER claim than before rather than a
     // looser one: it now asserts the typical fight is comfortably watchable, which
     // the old single-percentile check never did.
-    const sorted = rows.map((r) => r.clearSeconds).sort((a, b) => a - b);
-    const at = (q: number) => sorted[Math.floor(sorted.length * q)];
+    /*
+      SPLIT AT THE UNLOCK FLOOR, because the game has two regimes now.
 
-    const p10 = at(0.1);
-    expect(p10, `10th percentile clear time is ${p10.toFixed(2)}s`).toBeGreaterThanOrEqual(
+      Accessories exist only past floor 80 and are meant to be a real power spike, so a
+      single percentile over all 300 stages averages a band that did not move with one
+      that deliberately did - and hides which. Measured across three seeds: pre-80 sits
+      at 12.3-15.0s with or without accessories, post-80 at 8.1-11.5s with them and
+      10.7-11.5s without.
+
+      Two numbers, two claims. The pre-80 floor says the first eighty floors are exactly
+      as watchable as they always were, so nothing leaked out of the Abyss. The post-80
+      floor says the Abyss makes you roughly twice as fast and no faster - it is a
+      REWARD band, not a relaxation, and `absoluteFloor` still guards the collapse.
+    */
+    const preAbyss = rows.filter((r) => r.stage < ABYSS_UNLOCK_STAGE);
+    const postAbyss = rows.filter((r) => r.stage >= ABYSS_UNLOCK_STAGE);
+    const percentile = (subset: typeof rows, q: number) => {
+      const sorted = subset.map((r) => r.clearSeconds).sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length * q)];
+    };
+
+    const pre = percentile(preAbyss, 0.1);
+    expect(pre, `pre-Abyss 10th percentile is ${pre.toFixed(2)}s`).toBeGreaterThanOrEqual(
       CLEAR_TIME_BAND_SECONDS.min,
     );
 
-    const median = at(0.5);
+    const post = percentile(postAbyss, 0.1);
+    expect(post, `post-Abyss 10th percentile is ${post.toFixed(2)}s`).toBeGreaterThanOrEqual(
+      CLEAR_TIME_BAND_SECONDS.abyssalMin,
+    );
+
+    const median = percentile(rows, 0.5);
     expect(median, `median clear time is ${median.toFixed(2)}s`).toBeGreaterThanOrEqual(
       CLEAR_TIME_BAND_SECONDS.min * 1.25,
     );

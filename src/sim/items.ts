@@ -10,19 +10,29 @@
 
 import {
   AFFIX_LIMITS,
+  ACCESSORY_AFFIX_LIMITS,
   RARITY_WEIGHTS,
+  ACCESSORY_RARITY_WEIGHTS,
   TABLET_RARITY_WEIGHTS,
   type AffixDefinition,
   type Effect,
   type ItemInstance,
   type Rarity,
   type RolledAffix,
+  type TabletPays,
 } from './content/schema';
 // ALL_PREFIXES/ALL_SUFFIXES rather than PREFIXES/SUFFIXES: the roll paths hand the
 // WHOLE pool to eligibleAffixes and let it partition, because a tablet and a Whetstone
 // take the same code path and only the filter knows the difference between them.
 import { availableTiers, getAffix, ALL_PREFIXES, ALL_SUFFIXES } from './content/affixes';
-import { GEAR_BASES, TABLET_BASES, WEAPON_BASES, getBase, getBaseAffix } from './content/bases';
+import {
+  ACCESSORY_BASES,
+  GEAR_BASES,
+  TABLET_BASES,
+  WEAPON_BASES,
+  getBase,
+  getBaseAffix,
+} from './content/bases';
 import { getSkill } from './content/skills';
 import {
   CURRENCY_DROP_WEIGHTS,
@@ -74,6 +84,9 @@ const TABLET_STREAM = 0x3b9a_ca07;
 
 /** And for what an Abyssal clear paid, which must not collide with a dungeon's. */
 const ABYSSAL_STREAM = 0x5bd1_e995;
+
+/** And for accessories, which must not shift the items or currency a clear already paid. */
+const ACCESSORY_STREAM = 0x7ed5_5d16;
 
 /**
  * The RNG stream for an item's current roll.
@@ -173,7 +186,12 @@ function rollAffixes(
  * fifth row is not a special case anyone has to remember.
  */
 export function affixRows(item: ItemInstance): { prefix: number; suffix: number } {
-  const limits = AFFIX_LIMITS[item.rarity];
+  // Accessories carry half a piece of gear's rows - see ACCESSORY_AFFIX_LIMITS for the
+  // measurement that forced it. Read here rather than at the roll site so display,
+  // crafting and validation all agree about how many rows a ring has.
+  const limits = getBase(item.baseId)?.wear
+    ? ACCESSORY_AFFIX_LIMITS[item.rarity]
+    : AFFIX_LIMITS[item.rarity];
   const delta = item.spiritDelta ?? { prefix: 0, suffix: 0 };
   return {
     // Clamped at zero and at the pool size: a row count larger than the pool
@@ -201,7 +219,10 @@ function rollAffixesForRarity(
   rng: Rng,
   baseId: string,
 ): RolledAffix[] {
-  return rollAffixesForRows(AFFIX_LIMITS[rarity], itemLevel, rng, baseId);
+  // The same branch affixRows makes, and it has to be the same one: rolling six rows and
+  // then displaying four would hand out modifiers nothing could ever reroll.
+  const limits = getBase(baseId)?.wear ? ACCESSORY_AFFIX_LIMITS[rarity] : AFFIX_LIMITS[rarity];
+  return rollAffixesForRows(limits, itemLevel, rng, baseId);
 }
 
 /** Which side of the pool an affix id belongs to. */
@@ -523,6 +544,62 @@ export function rollDungeonItem(accountSeed: number, uid: number, itemLevel: num
     rarity: upgraded,
     affixes: rollAffixesForRarity(upgraded, itemLevel, rng, item.baseId),
   };
+}
+
+/**
+ * Roll one accessory.
+ *
+ * Only ever called from an Abyssal clear - there is no other caller, and a test asserts
+ * no other drop path can produce one. That exclusivity is the whole reason accessories
+ * can carry the numbers they carry.
+ *
+ * ## What the tablet decides
+ *
+ * The `pays` axis biases which BASE drops, so which tablet you spend decides what you are
+ * farming for rather than only how much of it you get. It is a bias and not a guarantee:
+ * a Gilded tablet favours the Talisman, it does not promise one, or the other five bases
+ * would be unreachable for anyone farming gold.
+ *
+ * **Only the gold axis has an accessory to point at, and that is worth saying plainly.**
+ * `quantity` and `rarity` are not stats - nothing a ring can carry means "more items" -
+ * so they steer the drop through the machinery that already exists in `attemptAbyssal`:
+ * quantity raises how many drop, rarity raises the item level they roll at, which is a
+ * better roll on every axis at once. Inventing a stat for each would be a bigger change
+ * than this commit, and a fake mapping would be worse than none.
+ */
+export function rollAccessory(
+  accountSeed: number,
+  uid: number,
+  itemLevel: number,
+  pays?: TabletPays,
+): ItemInstance {
+  const rng = createRng(accountSeed).fork(uid * ACCESSORY_STREAM);
+  const rarity = weightedRarity(rng, ACCESSORY_RARITY_WEIGHTS);
+
+  // The favoured base gets a second entry in the draw rather than a separate branch, so
+  // "twice as likely" is the whole rule and there is no path that excludes anything.
+  const favoured = pays ? ACCESSORY_BASES.filter((b) => baseFavours(b.id, pays)) : [];
+  const pool = [...ACCESSORY_BASES, ...favoured];
+  const base = pool[rng.int(pool.length)];
+
+  return {
+    uid: String(uid),
+    baseId: base.id,
+    rarity,
+    itemLevel,
+    affixes: rollAffixesForRarity(rarity, itemLevel, rng, base.id),
+    baseAffix: rollBaseAffix(base.id, itemLevel, rng),
+    rerolls: 0,
+    crafts: 0,
+  };
+}
+
+/** Whether this accessory base is the one a tablet paying `pays` steers toward. */
+function baseFavours(baseId: string, pays: TabletPays): boolean {
+  const effect = getBaseAffix(baseId)?.effect;
+  if (effect?.kind !== 'statMod') return false;
+  // Gold is the only axis with a stat. See the note on rollAccessory.
+  return pays === 'gold' && effect.stat === 'goldFind';
 }
 
 /**

@@ -884,64 +884,6 @@ exports[`content registry > matches its snapshot 1`] = `
     {
       "effect": {
         "kind": "statMod",
-        "op": "increased",
-        "stat": "damage",
-      },
-      "id": "abyssal-might",
-      "kind": "prefix",
-      "nameFragment": "Abyssal",
-      "rollsOn": "accessory",
-      "tiers": [
-        {
-          "minStage": 80,
-          "value": 0.04,
-        },
-        {
-          "minStage": 128,
-          "value": 0.06,
-        },
-        {
-          "minStage": 176,
-          "value": 0.08,
-        },
-        {
-          "minStage": 224,
-          "value": 0.11,
-        },
-      ],
-    },
-    {
-      "effect": {
-        "kind": "statMod",
-        "op": "increased",
-        "stat": "maxHp",
-      },
-      "id": "abyssal-vitality",
-      "kind": "prefix",
-      "nameFragment": "Undying",
-      "rollsOn": "accessory",
-      "tiers": [
-        {
-          "minStage": 80,
-          "value": 0.042,
-        },
-        {
-          "minStage": 128,
-          "value": 0.062,
-        },
-        {
-          "minStage": 176,
-          "value": 0.082,
-        },
-        {
-          "minStage": 224,
-          "value": 0.112,
-        },
-      ],
-    },
-    {
-      "effect": {
-        "kind": "statMod",
         "op": "flat",
         "stat": "physicalSkillLevel",
       },
@@ -994,48 +936,19 @@ exports[`content registry > matches its snapshot 1`] = `
       "tiers": [
         {
           "minStage": 80,
-          "value": 0.038,
+          "value": 0.045,
         },
         {
           "minStage": 128,
-          "value": 0.055,
+          "value": 0.065,
         },
         {
           "minStage": 176,
-          "value": 0.072,
+          "value": 0.09,
         },
         {
           "minStage": 224,
-          "value": 0.098,
-        },
-      ],
-    },
-    {
-      "effect": {
-        "kind": "statMod",
-        "op": "flat",
-        "stat": "critMult",
-      },
-      "id": "of-annihilation",
-      "kind": "suffix",
-      "nameFragment": "of Annihilation",
-      "rollsOn": "accessory",
-      "tiers": [
-        {
-          "minStage": 80,
-          "value": 0.115,
-        },
-        {
-          "minStage": 128,
-          "value": 0.165,
-        },
-        {
-          "minStage": 176,
-          "value": 0.215,
-        },
-        {
-          "minStage": 224,
-          "value": 0.285,
+          "value": 0.12,
         },
       ],
     },

@@ -211,6 +211,28 @@ export const AFFIX_LIMITS: Record<Rarity, { prefix: number; suffix: number }> = 
   unique: { prefix: 0, suffix: 0 },
 };
 
+/**
+ * How many affixes an ACCESSORY carries. Half a piece of gear, near enough.
+ *
+ * **Measured, and this is the number that decides whether accessories are shippable.**
+ * Three extra slots is a 75% increase in equipment positions, and at gear row counts
+ * that alone - with no accessory-only prefixes and modest suffixes - took the ladder
+ * from 15.4 days to 2.7 and post-80 clear times from 11 seconds to 5.
+ *
+ * The spike a player feels is having three more things to equip and a modifier gear
+ * cannot carry. It was never supposed to be six more rows apiece.
+ *
+ * A common accessory rolls a prefix and nothing else, which also gives the rarity
+ * currency somewhere to bite: on gear the step from common to rare is 2 rows to 6, and
+ * here it is 1 to 4.
+ */
+export const ACCESSORY_AFFIX_LIMITS: Record<Rarity, { prefix: number; suffix: number }> = {
+  common: { prefix: 1, suffix: 0 },
+  magic: { prefix: 1, suffix: 1 },
+  rare: { prefix: 2, suffix: 2 },
+  unique: { prefix: 0, suffix: 0 },
+};
+
 /** Relative drop weights. Rolled once per drop; every clear yields an item. */
 export const RARITY_WEIGHTS: Record<Rarity, number> = {
   common: 55,
@@ -256,6 +278,24 @@ export const TABLET_RARITY_WEIGHTS: Record<Rarity, number> = {
   common: 62,
   magic: 30,
   rare: 8,
+  unique: 0,
+};
+
+/**
+ * How a dropped accessory's rarity rolls.
+ *
+ * Weighted far above gear, and it can afford to be: an accessory costs a tablet, and a
+ * tablet costs a run past floor 80. A common ring out of a T12 would make the deepest
+ * thing in the game pay worse than a stage clear.
+ *
+ * **Unique is zero.** There are no authored accessory uniques yet - drawing one would
+ * hand back an item with no base and no modifiers. When they exist this is where they
+ * arrive, and the weight is the only thing that changes.
+ */
+export const ACCESSORY_RARITY_WEIGHTS: Record<Rarity, number> = {
+  common: 20,
+  magic: 45,
+  rare: 35,
   unique: 0,
 };
 
