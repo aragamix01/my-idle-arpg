@@ -463,6 +463,9 @@ export function Game() {
           busy={pending}
           onEquip={(slot, itemId) => void send({ type: 'equipItem', slot, itemId })}
           onEquipWeapon={(itemId) => void send({ type: 'equipWeapon', itemId })}
+          onEquipAccessory={(slot, itemId) =>
+            void send({ type: 'equipAccessory', slot, itemId })
+          }
           onReroll={(uid) => void send({ type: 'rerollItem', uid })}
           onDissemble={(uids) => void send({ type: 'dissembleItems', uids })}
           onApplyCurrency={(currencyId, uid) => void send({ type: 'applyCurrency', currencyId, uid })}

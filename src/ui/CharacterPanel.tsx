@@ -23,6 +23,7 @@ import {
   explainStats,
   formatBig,
   fromSave,
+  getBase,
   getCurrency,
   itemName,
   itemPower,
@@ -40,6 +41,7 @@ import {
   statsDps,
   statsFromWire,
   critFactor,
+  ACCESSORY_SLOT_KINDS,
   type CurrencyId,
   type HudSnapshot,
   type ItemInstance,
@@ -107,6 +109,22 @@ function WeaponMark({ className = '' }: { className?: string }) {
   );
 }
 
+/**
+ * Whether there is anywhere to put this item.
+ *
+ * Three answers, because there are three kinds of slot. A weapon always has somewhere -
+ * equipping one is a straight swap, not a hunt - while gear and accessories each need a
+ * free position of their own kind.
+ */
+function hasFreeSlotFor(item: ItemInstance, hud: HudSnapshot): boolean {
+  if (isWeaponBase(item.baseId)) return true;
+  const wear = getBase(item.baseId)?.wear;
+  if (wear) {
+    return ACCESSORY_SLOT_KINDS.some((kind, i) => kind === wear && hud.accessories[i] === null);
+  }
+  return hud.loadout.includes(null);
+}
+
 /** Descending, so "sort by rarity" puts the interesting end first. */
 const RARITY_ORDER: Record<Rarity, number> = { unique: 3, rare: 2, magic: 1, common: 0 };
 const RARITIES: Rarity[] = ['common', 'magic', 'rare', 'unique'];
@@ -117,6 +135,7 @@ interface Props {
   busy: boolean;
   onEquip: (slot: number, itemId: string | null) => void;
   onEquipWeapon: (itemId: string | null) => void;
+  onEquipAccessory: (slot: number, itemId: string | null) => void;
   onReroll: (uid: string) => void;
   onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
@@ -130,6 +149,7 @@ export function CharacterPanel({
   busy,
   onEquip,
   onEquipWeapon,
+  onEquipAccessory,
   onReroll,
   onDissemble,
   onApplyCurrency,
@@ -218,6 +238,7 @@ export function CharacterPanel({
               armed={armed}
               onEquip={onEquip}
               onEquipWeapon={onEquipWeapon}
+              onEquipAccessory={onEquipAccessory}
               onReroll={onReroll}
               onDissemble={onDissemble}
               onApplyCurrency={(currencyId, uid) => {
@@ -386,6 +407,7 @@ function InventoryTab({
   armed,
   onEquip,
   onEquipWeapon,
+  onEquipAccessory,
   onReroll,
   onDissemble,
   onApplyCurrency,
@@ -397,6 +419,7 @@ function InventoryTab({
   armed: CurrencyId | null;
   onEquip: (slot: number, itemId: string | null) => void;
   onEquipWeapon: (itemId: string | null) => void;
+  onEquipAccessory: (slot: number, itemId: string | null) => void;
   onReroll: (uid: string) => void;
   onDissemble: (uids: string[]) => void;
   onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
@@ -446,9 +469,12 @@ function InventoryTab({
    * A useCallback because the filter memo below depends on it, and a plain
    * function would be a new value every render and defeat the memo entirely.
    */
+  // Worn accessories count as equipped everywhere it matters: the filter, the
+  // multi-select, and the dissemble guard the server enforces.
   const isEquipped = useCallback(
-    (uid: string) => hud.loadout.includes(uid) || hud.weapon === uid,
-    [hud.loadout, hud.weapon],
+    (uid: string) =>
+      hud.loadout.includes(uid) || hud.weapon === uid || hud.accessories.includes(uid),
+    [hud.loadout, hud.weapon, hud.accessories],
   );
 
   const visible = useMemo(() => {
@@ -498,6 +524,25 @@ function InventoryTab({
     if (item && isWeaponBase(item.baseId)) {
       return onEquipWeapon(hud.weapon === uid ? null : uid);
     }
+
+    // An accessory goes in a slot of its own KIND - a ring in one of the two ring
+    // positions, an amulet in the one amulet position. `applyCommand` refuses the
+    // mismatch, so offering it here would be offering a click that cannot land.
+    const wear = item ? getBase(item.baseId)?.wear : undefined;
+    if (wear) {
+      const worn = hud.accessories.indexOf(uid);
+      if (worn !== -1) return onEquipAccessory(worn, null);
+      const slots = ACCESSORY_SLOT_KINDS.map((kind, i) => ({ kind, i })).filter(
+        (s) => s.kind === wear,
+      );
+      const free = slots.find((s) => hud.accessories[s.i] === null);
+      // Full is a decision for the player, not an error to swallow - the same rule the
+      // gear slots follow. Swapping into an occupied ring slot would silently choose
+      // which of two rings to remove.
+      if (!free) return;
+      return onEquipAccessory(free.i, uid);
+    }
+
     const equippedSlot = hud.loadout.indexOf(uid);
     if (equippedSlot !== -1) return onEquip(equippedSlot, null);
     const free = hud.loadout.indexOf(null);
@@ -668,6 +713,52 @@ function InventoryTab({
         </div>
       </Section>
 
+      {/*
+        Accessories, in their own row.
+
+        A fixed three, never locked and never granted - they sit outside the derived slot
+        count entirely, so there is no `x/y` here the way Equipped has one. Labelled by
+        KIND, because which position takes which is a rule the player has to be able to
+        see: an amulet dropped onto a ring slot is refused by the server, and a row that
+        did not say so would make that refusal look like a bug.
+      */}
+      <Section title="Accessories">
+        <div className="grid grid-cols-3 gap-2">
+          {hud.accessories.map((uid, slot) => {
+            const item = uid ? byUid.get(uid) : undefined;
+            const kind = ACCESSORY_SLOT_KINDS[slot];
+            return (
+              <button
+                key={slot}
+                type="button"
+                disabled={busy || !item}
+                onClick={() => item && setSelected(item.uid)}
+                title={item ? itemName(item) : `Empty ${kind} slot`}
+                className={`flex flex-col items-center gap-1 rounded border p-2 text-center ${
+                  item
+                    ? `${RARITY_STYLE[item.rarity].border} bg-neutral-900 hover:bg-neutral-800`
+                    : 'border-dashed border-neutral-800 bg-neutral-900/50'
+                }`}
+              >
+                {item ? (
+                  <>
+                    <AtlasSprite id={itemSprite(item)} scale={2} />
+                    <span className={`text-[10px] leading-tight ${RARITY_STYLE[item.rarity].text}`}>
+                      {itemName(item)}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <div className="h-8 w-8" />
+                    <span className="text-[10px] text-neutral-600">{kind}</span>
+                  </>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <label htmlFor="inv-sort" className="text-neutral-400">
           Sort
@@ -810,7 +901,14 @@ function InventoryTab({
           // which is the only form in which a cost tells a player anything.
           resourceRegen={stats.resourceRegen}
           equipped={selectedItem ? isEquipped(selectedItem.uid) : false}
-          slotsFull={!hud.loadout.includes(null)}
+          /*
+            Whichever slots THIS item would go in.
+
+            A gear-only check said "Slots full" over an accessory whenever the four gear
+            positions were taken - which for a character deep enough to see one is
+            always - so the button refused the item it was pointing at.
+          */
+          slotsFull={selectedItem ? !hasFreeSlotFor(selectedItem, hud) : false}
           busy={busy}
           state={state}
           // Priced at the deepest stage cleared, which is where the loadout is

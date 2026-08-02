@@ -21,6 +21,7 @@ import { computeOffline } from './offline';
 import { deriveStats, equipSlots } from './stats';
 import {
   ABYSS_UNLOCK_STAGE,
+  ACCESSORY_SLOTS,
   INVENTORY_CAP,
   TABLET_CAP,
   UPGRADE_KEYS,
@@ -123,6 +124,13 @@ export interface HudSnapshot {
   /** Equipped weapon uid, or null for unarmed. */
   weapon: string | null;
   /**
+   * Worn accessory uids: two rings, then the amulet. ACCESSORY_SLOTS long.
+   *
+   * A fixed count, so unlike `loadout` there is no companion number saying how many are
+   * live - see ACCESSORY_SLOT_KINDS for which position is which.
+   */
+  accessories: (string | null)[];
+  /**
    * What the next dungeon resists and what it is weak to, or null before one is
    * possible.
    *
@@ -216,6 +224,13 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     loadout: save.loadout,
     equipSlots: equipSlots(save, ctx),
     weapon: save.weapon,
+    // Padded rather than sent raw: a save that has not been through the v12 migration
+    // yet - which the client can hold briefly on the optimistic path - would otherwise
+    // send undefined and the panel would render nothing at all.
+    accessories: Array.from(
+      { length: ACCESSORY_SLOTS },
+      (_, i) => save.accessories?.[i] ?? null,
+    ),
     dungeon:
       save.bestStage >= 1
         ? { stage: save.bestStage, ...dungeonAffinity(save.seed, save.bestStage) }

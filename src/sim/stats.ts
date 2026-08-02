@@ -9,6 +9,7 @@
 import {
   baseSkillId,
   ELEMENTS,
+  getBase,
   getSkill,
   resourceLabel,
   UNARMED,
@@ -28,6 +29,7 @@ import { itemEffects, itemPower } from './items';
 import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
   ACCESSORY_SLOTS,
+  ACCESSORY_SLOT_KINDS,
   BASE_STATS,
   ITEM_SLOTS,
   MAGNITUDE_STAT_KEYS,
@@ -621,6 +623,29 @@ export function previewEquip(
 
   if (baseSkillId(item.baseId) !== undefined) {
     return { ...save, items: owned, weapon: item.uid };
+  }
+
+  /*
+    An accessory goes in an accessory slot, of its own kind.
+
+    Without this it was simulated into a GEAR slot - which the equip command refuses, so
+    the panel priced a swap the player could not make, and did it by displacing a piece
+    of gear that was never going anywhere.
+  */
+  const wear = getBase(item.baseId)?.wear;
+  if (wear) {
+    const accessories = [...save.accessories];
+    const worn = accessories.indexOf(item.uid);
+    if (worn !== -1) return { ...save, items: owned, accessories };
+
+    const matching = ACCESSORY_SLOT_KINDS.map((kind, i) => ({ kind, i })).filter(
+      (s) => s.kind === wear,
+    );
+    // Prefer an empty slot; otherwise displace the first of its kind, which is what
+    // "if you equipped it" has to mean once the slots are full.
+    const target = matching.find((s) => accessories[s.i] === null) ?? matching[0];
+    if (target) accessories[target.i] = item.uid;
+    return { ...save, items: owned, accessories };
   }
 
   const loadout = [...save.loadout];

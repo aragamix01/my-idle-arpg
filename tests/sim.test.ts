@@ -2012,6 +2012,39 @@ describe('accessories', () => {
     expect(goldFinders('gold')).toBeLessThan(600);
   });
 
+  it('crosses the wire, so the panel has slots to draw', () => {
+    // The gap that shipped: the command, the save shape and the stat path all existed
+    // and the HUD sent nothing, so accessories dropped into an inventory with nowhere
+    // to put them. A feature the player cannot reach is not a shipped feature.
+    const ring = accessory('signet');
+    const save: SaveState = { ...owning([ring]), accessories: [ring.uid, null, null] };
+    const hud = getHudSnapshot(save, T0);
+
+    expect(hud.accessories).toEqual([ring.uid, null, null]);
+    // Padded to the full slot count even from a save that predates them, because the
+    // client holds an unmigrated save briefly on the optimistic path.
+    const legacy = { ...owning([]) } as SaveState;
+    delete (legacy as Partial<SaveState>).accessories;
+    expect(getHudSnapshot(legacy, T0).accessories).toEqual([null, null, null]);
+  });
+
+  it('prices a ring against a ring slot, not a gear slot', () => {
+    // previewEquip drives "if you equipped it" in the detail pane. Simulated into a gear
+    // slot it priced a swap the command refuses, and did it by displacing a piece of gear
+    // that was never going anywhere.
+    const ring = accessory('signet');
+    const gear = rollItem(3, 60, 40);
+    const save: SaveState = {
+      ...owning([ring, gear]),
+      loadout: [gear.uid, null, null, null, null, null, null],
+    };
+
+    const preview = previewEquip(save, ring, { stage: 100, isBoss: false, enemyHpFraction: 1 });
+    expect(preview.accessories[0]).toBe(ring.uid);
+    // The gear it would have displaced is untouched.
+    expect(preview.loadout[0]).toBe(gear.uid);
+  });
+
   it('gains three empty slots on migration, and nothing else moves', () => {
     // v11 -> v12 is additive, exactly like `weapon` in v6 and `tablets` in v10.
     const v11 = { ...newSave(2, T0), contentVersion: 11, items: [rollItem(2, 1, 40)] };
