@@ -362,18 +362,55 @@ Still open, and visible now that the mode exists:
   is not an answer either. Growing them is its own decision
 
 
-## [next] Phase 5b - Accessories
-> Split out of the original Phase 5. Its drop source is the Abyssal dungeon, so it
-> belongs with Phase 4 rather than with the formula rework.
+## [done] Phase 5b - Accessories
 
-- New item type: ring and amulet
-- Accessories have tiers and take most crafting currency like any item
-- Accessory modifiers are always percentage
-- 2 ring slots and 1 amulet slot on the character
-- Drop only from the Abyssal dungeon, 1-2 guaranteed, related to the tablet implicit
+Two spoken decisions OVERRODE what was written here:
+
+- **A real power spike, worth farming the Abyss for**, and they may roll **+ to Skill
+  Levels**. So "accessory modifiers are always percentage" no longer holds - a skill
+  level is flat, and it is the headline
+- The extras **add to the gear pool** rather than replacing it, unlike the tablet pool
+
+What shipped:
+
+- Three ring bases and three amulet bases. `wear` is what makes a base an accessory,
+  following the rule `skillId` set for weapons and `pays` for tablets
+- Two ring slots and one amulet slot, in **their own array outside the derived-slot fixed
+  point**. A unique that granted a ring slot would feed a second fixed point through the
+  first, and buys nothing a stronger accessory does not
+- Each slot kind carries both axes. If rings were offence and amulets defence, a
+  defensive build could not use two of its three slots - the offence/defence asymmetry
+  arriving by construction on day one
+- Accessory-only extras are **only what gear cannot have**: skill levels, and a toughness
+  roll sized to match them. There is no accessory-only damage or HP affix, because an
+  accessory already rolls the whole gear pool and a bigger Brutal is not content
+- **Half a piece of gear's rows** - 1/0, 1/1, 2/2 against 1/1, 2/2, 3/3
+- Their own gate scale, [80, 128, 176, 224], so a deeper tablet pays a better accessory
+- 1-2 guaranteed per Abyssal clear at the tier's depth, unreachable anywhere else
+- Craftable, in the inventory, like any item
+
+### The measurement, because it decided the whole design
+
+Three seeds, with the harness finally equipping them:
+
+    unworn   15.4 / 15.3 / 10.3 days,  post-80 p10 ~11s
+    worn      2.0 /  1.9 /  3.6 days,  post-80 p10 0.7-7.7s
+
+**The spike is the SLOTS, not the values.** Three extra positions is a 75% increase in
+equipment on its own; bigger-than-gear values on top took the ladder to a fifth of its
+length. Dropping the redundant prefixes and halving the rows landed it at 3.8-5.4 days
+with post-80 p10 at 8.1-11.5s, and pre-80 byte-identical to the baseline.
+
+The clear-time band is now SPLIT at the unlock floor - `min` 12s before, `abyssalMin` 6s
+after. One percentile over 300 stages averaged a band that did not move with one that
+deliberately did, and hid which.
+
+Still open: **no accessory uniques.** `ACCESSORY_RARITY_WEIGHTS` zeroes the unique weight
+because there are none authored; that weight is the only thing that changes when there
+are.
 
 
-## [todo] Phase 5c - The upgrade panel
+## [next] Phase 5c - The upgrade panel
 > Also split out of Phase 5. Independent of everything else.
 
 - Rework the stat upgrade buttons
