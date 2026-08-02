@@ -68,6 +68,17 @@ export const TUNING = {
 export const STAGE_TIME_LIMIT_SECONDS = 75;
 
 /**
+ * What each wave of a delve adds to that limit, as a share of it.
+ *
+ * A delve's waves are the same fight a stage's are, so a wave is worth about what a
+ * stage's whole trash phase is worth against the full budget - roughly two thirds - and
+ * this is deliberately tighter than that. The timer has to stay a live failure mode on a
+ * deep tablet, and a per-wave budget generous enough to be comfortable would retire it
+ * for exactly the runs where it should bite hardest.
+ */
+export const DELVE_WAVE_TIME_SHARE = 0.5;
+
+/**
  * First-clear time should land in this band. Enforced by a test over sampled
  * stages, because "the fight is long enough to watch" is the entire reason the
  * cosmetic layer exists and it degrades silently.

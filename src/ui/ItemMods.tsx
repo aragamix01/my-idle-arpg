@@ -23,7 +23,9 @@ import { AFFIX_SLOT_STYLE, describeEffect, describeRolledAffix } from './format'
 
 export function ItemMods({ item }: { item: ItemInstance }) {
   const isUnique = item.rarity === 'unique';
-  const implicit = item.baseAffix ? describeRolledAffix(item.baseAffix, true) : null;
+  // The base id goes through for the tablet implicit, whose sentence depends on which
+  // reward the BASE pays rather than on the affix.
+  const implicit = item.baseAffix ? describeRolledAffix(item.baseAffix, true, item.baseId) : null;
   const spirit = item.spirit ? getCurrency(item.spirit) : undefined;
   const rows = affixRows(item);
 

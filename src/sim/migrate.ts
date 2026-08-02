@@ -11,7 +11,7 @@
 
 import { fromSave, toSave } from './big';
 import { CONTENT_VERSION, getAffix, getUnique, rollUniqueValues, type RolledAffix } from './content';
-import { rollStream } from './items';
+import { rollStream, rollTablet } from './items';
 import { ITEM_SLOTS, MAX_ITEM_SLOTS, type SaveState } from './types';
 
 /** First version whose saves use rolled item instances. */
@@ -40,6 +40,9 @@ export const ELEMENTS_VERSION = 9;
 
 /** First version carrying Abyssal tablets. */
 export const TABLETS_VERSION = 10;
+
+/** First version where a tablet is an ItemInstance with rarity, an implicit and rows. */
+export const TABLET_ITEMS_VERSION = 11;
 
 export interface MigrationResult {
   state: SaveState;
@@ -203,6 +206,26 @@ export function migrateSave(state: SaveState): MigrationResult {
     // collecting them the next time it clears a boss past the unlock floor. Nothing
     // is rerolled and no gear is touched.
     next.tablets = [];
+    migrated = true;
+  } else if (state.contentVersion < TABLET_ITEMS_VERSION) {
+    /*
+      v10 -> v11: a tablet became an ItemInstance.
+
+      The old shape was `{ uid, tier, mods, crafts }` where `mods` were ids into a
+      registry that no longer exists. There is no honest translation - the six bespoke
+      mods had their own rewards baked in, and the new pool is pure danger paid for by
+      an implicit that the old shape had no field for.
+
+      So they are RE-ROLLED at the tier they were held at. A tablet is a consumable four
+      commits old, not a chase item: regenerating one is a smaller loss than a
+      translation nobody would ever exercise twice, and it cannot produce a tablet whose
+      modifiers half-exist.
+    */
+    next.tablets = next.tablets.map((tablet, i) => {
+      const legacy = tablet as unknown as { uid?: string; tier?: number };
+      const uid = Number(legacy.uid ?? next.nextItemId + i);
+      return rollTablet(next.seed, uid, legacy.tier ?? 1);
+    });
     migrated = true;
   }
 

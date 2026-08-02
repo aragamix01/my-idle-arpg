@@ -9,7 +9,6 @@
 import { big, type Big } from './big';
 import type { CurrencyPurse } from './content/currency';
 import type { ItemInstance } from './content/schema';
-import type { TabletInstance } from './content/tablets';
 
 export const STAT_KEYS = [
   'damage',
@@ -199,7 +198,7 @@ export const MAX_TABLET_TIER = 15;
  * since trash kills started dropping - roughly eight items a clear at depth - and making
  * tablets compete for that space would mean a good tablet losing to a common.
  */
-export const TABLET_CAP = 60;
+export const TABLET_CAP = 200;
 
 /**
  * Inventory size.
@@ -261,14 +260,15 @@ export interface SaveState {
   /**
    * Abyssal tablets. Bounded by TABLET_CAP.
    *
-   * A second array rather than a flag on `items`, because a tablet is not equipment: it
-   * cannot be worn, must not compete for INVENTORY_CAP, and would otherwise have to be
-   * filtered out of every grid, sort and dissemble path in the panel.
+   * An `ItemInstance`, with every field meaning something specific - `rarity` is the row
+   * count, `itemLevel` is the TIER, `baseAffix` is the reward, `affixes` are the monster
+   * buffs. See content/tablets.ts.
    *
-   * Its OWN shape rather than an ItemInstance - see TabletInstance for why the
-   * similarity is a trap rather than a saving.
+   * A second ARRAY rather than a flag on `items`, though, because a tablet is not
+   * equipment: it cannot be worn, must not compete for INVENTORY_CAP, and would
+   * otherwise have to be filtered out of every equip, sort and dissemble path.
    */
-  tablets: TabletInstance[];
+  tablets: ItemInstance[];
   /**
    * Crafting currency counts.
    *

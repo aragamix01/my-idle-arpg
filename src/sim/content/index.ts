@@ -11,11 +11,17 @@
  */
 
 import { AFFIXES, IMPLICIT_AFFIXES } from './affixes';
-import { BASE_AFFIXES, BASES } from './bases';
+import { BASE_AFFIXES, BASES, getBase } from './bases';
 import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
 import { UNIQUES } from './uniques';
-import { availableTabletMods, TABLET_MODS, tabletModSlots } from './tablets';
-import { EffectSchema, UNIQUE_TIER_WEIGHTS, UniqueSchema, type UniqueEffect } from './schema';
+import { wavesForTier } from './tablets';
+import {
+  AFFIX_LIMITS,
+  EffectSchema,
+  UNIQUE_TIER_WEIGHTS,
+  UniqueSchema,
+  type UniqueEffect,
+} from './schema';
 import { BASE_STATS, MAX_TABLET_TIER } from '../types';
 
 /** 2: artifacts became rolled item instances with prefixes and suffixes. */
@@ -27,7 +33,8 @@ import { BASE_STATS, MAX_TABLET_TIER } from '../types';
 /** 8: equip slots are derived, so the loadout array is MAX_ITEM_SLOTS long. */
 /** 9: skills carry an element, targets carry resistance, and penetration is a stat. */
 /** 10: Abyssal tablets - a tier you hold, with modifiers, in its own save array. */
-export const CONTENT_VERSION = 10;
+/** 11: a tablet is an item - rarity for rows, an implicit that pays, explicits that buff monsters. */
+export const CONTENT_VERSION = 11;
 
 export * from './schema';
 export * from './affixes';
@@ -63,24 +70,51 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     // Tier 0 must be reachable at stage 1 or nothing can roll the affix.
     if (affix.tiers[0]?.minStage > 1) errors.push(`${affix.id}: lowest tier is gated above stage 1`);
 
-    // Every template must produce an effect the interpreter accepts.
-    const sample =
-      affix.effect.kind === 'goldOnKill'
-        ? { kind: 'goldOnKill' as const, multiplier: affix.tiers[0].value }
-        : affix.effect.kind === 'extraElement'
-          ? {
-              kind: 'extraElement' as const,
-              element: affix.effect.element,
-              fraction: affix.tiers[0].value,
-            }
-          : {
-              kind: 'statMod' as const,
-              stat: affix.effect.stat,
-              op: affix.effect.op,
-              value: affix.tiers[0].value,
-            };
-    const parsed = EffectSchema.safeParse(sample);
-    if (!parsed.success) errors.push(`${affix.id}: produces an invalid effect`);
+    // THE PARTITION, asserted in both directions.
+    //
+    // A tablet is stored as an ItemInstance, so nothing but this stops `rerollAffixes`
+    // handing one increased crit chance, or a Whetstone rolling "monsters have 40% more
+    // health". Storing tablets in a separate type used to enforce it; a pair of checks
+    // that run on every build enforces it better, and without the duplicate type.
+    if ((affix.effect.kind === 'monsterBuff') !== (affix.rollsOn === 'tablet')) {
+      errors.push(
+        affix.effect.kind === 'monsterBuff'
+          ? `${affix.id}: buffs monsters but is not tagged rollsOn: 'tablet'`
+          : `${affix.id}: is tagged rollsOn: 'tablet' but does not buff monsters`,
+      );
+    }
+
+    // Every template must produce an effect the interpreter accepts - except the two
+    // that deliberately produce none. A tablet's modifiers act on the RUN, so there is
+    // nothing here to parse; the partition check above is what holds them in place.
+    const template = affix.effect;
+    const runOnly = template.kind === 'monsterBuff' || template.kind === 'tabletReward';
+    if (template.kind === 'goldOnKill' || template.kind === 'extraElement' || template.kind === 'statMod') {
+      const sample =
+        template.kind === 'goldOnKill'
+          ? { kind: 'goldOnKill' as const, multiplier: affix.tiers[0].value }
+          : template.kind === 'extraElement'
+            ? {
+                kind: 'extraElement' as const,
+                element: template.element,
+                fraction: affix.tiers[0].value,
+              }
+            : {
+                kind: 'statMod' as const,
+                stat: template.stat,
+                op: template.op,
+                value: affix.tiers[0].value,
+              };
+      const parsed = EffectSchema.safeParse(sample);
+      if (!parsed.success) errors.push(`${affix.id}: produces an invalid effect`);
+    }
+
+    // A tablet modifier is pure downside on its own - the implicit is what pays for it.
+    // One that added no danger would be a free reward multiplier, which collapses the
+    // trade the whole mode rests on.
+    if (runOnly && affix.tiers.some((tier) => tier.value <= 0)) {
+      errors.push(`${affix.id}: a tablet modifier must carry a positive magnitude`);
+    }
 
     if (affix.effect.kind === 'statMod') {
       const { stat, op } = affix.effect;
@@ -219,30 +253,37 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     }
   }
 
-  const seenTabletMod = new Set<string>();
-  for (const mod of TABLET_MODS) {
-    if (seenTabletMod.has(mod.id)) errors.push(`duplicate tablet mod id: ${mod.id}`);
-    seenTabletMod.add(mod.id);
-
-    // The trade IS the mechanic. A mod with danger and no reward is a punishment
-    // nobody would ever apply; one with reward and no danger makes crafting mandatory
-    // rather than interesting, and both collapse the decision the tablet exists to pose.
-    if (mod.danger <= 0) errors.push(`${mod.id}: a tablet mod must add danger`);
-    if (mod.reward <= 0) errors.push(`${mod.id}: a tablet mod must pay for its danger`);
-
-    if (mod.minTier < 1 || mod.minTier > MAX_TABLET_TIER) {
-      errors.push(`${mod.id}: minTier ${mod.minTier} is outside 1..${MAX_TABLET_TIER}`);
+  // A tablet base must pay something, and its implicit must be a reward rather than a
+  // stat - otherwise a run would hand the player a permanent modifier for clearing it.
+  for (const base of BASES.filter((b) => b.pays)) {
+    if (BASE_AFFIXES[base.id]?.effect.kind !== 'tabletReward') {
+      errors.push(`${base.id}: a tablet base's implicit must be a tabletReward`);
+    }
+  }
+  for (const [baseId, affix] of Object.entries(BASE_AFFIXES)) {
+    if (affix.effect.kind === 'tabletReward' && !getBase(baseId)?.pays) {
+      errors.push(`${baseId}: pays out like a tablet but is not one`);
     }
   }
 
-  // A tier whose pool is smaller than its slot count would roll fewer modifiers than
-  // it claims - silently, because the roll loop simply runs out of candidates.
-  for (let tier = 1; tier <= MAX_TABLET_TIER; tier++) {
-    const available = availableTabletMods(tier).length;
-    const slots = tabletModSlots(tier);
-    if (available < slots) {
-      errors.push(`tablet tier ${tier}: ${slots} slots but only ${available} eligible mods`);
+  // A rare needs three rows per side, so the tablet pool has to hold at least that many
+  // on each - otherwise a rare tablet silently rolls fewer modifiers than it claims.
+  const tabletPool = AFFIXES.filter((a) => a.rollsOn === 'tablet');
+  for (const side of ['prefix', 'suffix'] as const) {
+    const available = tabletPool.filter((a) => a.kind === side).length;
+    const needed = AFFIX_LIMITS.rare[side];
+    if (available < needed) {
+      errors.push(`tablet ${side} pool: ${needed} rows but only ${available} modifiers`);
     }
+  }
+
+  // Every tier must be able to roll something, or a shallow tablet has no modifiers at
+  // all and its implicit pays the bare base rate forever.
+  for (let tier = 1; tier <= MAX_TABLET_TIER; tier++) {
+    if (!tabletPool.some((a) => a.tiers[0].minStage <= tier)) {
+      errors.push(`tablet tier ${tier}: nothing in the pool can roll`);
+    }
+    if (wavesForTier(tier) < 1) errors.push(`tablet tier ${tier}: a run with no waves`);
   }
 
   // Every tier must have at least one unique, or its share of the drop weight is

@@ -264,7 +264,7 @@ function runAbyssals(save: SaveState): { save: SaveState; seconds: number } {
     // Deepest first: a tier that still clears pays more than a shallower one, and
     // clearing it is also the only way the tier ladder climbs.
     const best = [...current.tablets]
-      .sort((a, b) => b.tier - a.tier)
+      .sort((a, b) => b.itemLevel - a.itemLevel)
       .find((tablet) => resolveAbyssal(current, tablet).cleared);
     if (!best) break;
 

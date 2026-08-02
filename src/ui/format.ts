@@ -12,8 +12,10 @@ import {
   displayTier,
   formatBig,
   getAffix,
+  getBase,
   resourceLabel,
   SKILL_LEVEL_GAIN,
+  type AffixDefinition,
   type CurrencyTier,
   type Effect,
   type Element,
@@ -277,7 +279,16 @@ export interface AffixLine {
  * `implicit` is passed by the caller rather than read off the affix, because an
  * implicit's `kind` is inert - it is neither prefix nor suffix for row counting.
  */
-export function describeRolledAffix(rolled: RolledAffix, implicit = false): AffixLine {
+export function describeRolledAffix(
+  rolled: RolledAffix,
+  implicit = false,
+  /**
+   * The base the affix is rolled on. Only a tablet's implicit needs it: which reward it
+   * pays is the BASE's identity, not the affix's, so the line cannot be written without
+   * knowing what it is sitting on.
+   */
+  baseId?: string,
+): AffixLine {
   const affix = getAffix(rolled.affixId);
   if (!affix) {
     return { text: 'unknown modifier', tier: '', slot: 'implicit', badge: '-' };
@@ -286,11 +297,45 @@ export function describeRolledAffix(rolled: RolledAffix, implicit = false): Affi
   const effect = affixEffect(rolled);
   const slot: AffixSlot = implicit ? 'implicit' : affix.kind;
   return {
-    text: effect ? describeEffect(effect) : 'unknown modifier',
+    // A tablet's modifiers produce no Effect at all - deliberately, so they cannot reach
+    // deriveStats - which means describeEffect has nothing to render and they need their
+    // own sentence. Without this every tablet reads as six unknown modifiers.
+    text: describeRunModifier(affix.effect, rolled.value, baseId) ??
+      (effect ? describeEffect(effect) : 'unknown modifier'),
     tier: `T${displayTier(affix, rolled.tier)}`,
     slot,
     badge: slot === 'implicit' ? '-' : slot === 'prefix' ? 'P' : 'S',
   };
+}
+
+/** What a tablet modifier does to the RUN, or null when it is an ordinary affix. */
+function describeRunModifier(
+  template: AffixDefinition['effect'],
+  value: number,
+  baseId?: string,
+): string | null {
+  const percent = `${Math.round(value * 100)}%`;
+  if (template.kind === 'monsterBuff') {
+    switch (template.axis) {
+      case 'hp':
+        return `Monsters have ${percent} more health`;
+      case 'damage':
+        return `Monsters deal ${percent} more damage`;
+      case 'count':
+        return `${percent} more monsters`;
+      case 'waves':
+        return `${percent} more waves`;
+    }
+  }
+  if (template.kind === 'tabletReward') {
+    // The axis comes off the base rather than the affix, so one implicit definition can
+    // serve every tablet base without three near-identical copies of this line.
+    const pays = baseId ? getBase(baseId)?.pays : undefined;
+    const noun =
+      pays === 'gold' ? 'gold found' : pays === 'rarity' ? 'item rarity' : 'items and currency';
+    return `${percent} increased ${noun} from this run`;
+  }
+  return null;
 }
 
 /** Badge colour per half, so the two are separable at a glance. */

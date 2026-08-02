@@ -73,7 +73,7 @@
  */
 
 import { BASE_AFFIXES } from './bases';
-import { ELEMENTS, type AffixDefinition, type Element } from './schema';
+import { ELEMENTS, type AffixDefinition, type Element, type MonsterAxis } from './schema';
 
 /**
  * Tier gates. An item may only roll tiers whose minStage it meets, so a stage-3
@@ -441,8 +441,165 @@ export const SUFFIXES: AffixDefinition[] = [
   },
 ];
 
-/** The rollable pool. Implicits are deliberately not in here - they never roll. */
-export const AFFIXES: AffixDefinition[] = [...PREFIXES, ...SUFFIXES];
+// --- Tablet modifiers -----------------------------------------------------
+
+/**
+ * Tier gates for tablet modifiers.
+ *
+ * TIERS, not stages. A tablet's `itemLevel` carries its tier of 1..15, so `availableTiers`
+ * compares against these unchanged - the same mechanism, a different scale. The gear
+ * GATES of [1, 15, 40, 80] are stage numbers and would mean a T15 tablet was still stuck
+ * on the weakest roll of everything.
+ */
+const TABLET_GATES = [1, 4, 8, 12] as const;
+
+const tabletTiers = (values: readonly [number, number, number, number]) =>
+  values.map((value, i) => ({ minStage: TABLET_GATES[i], value }));
+
+/**
+ * The tablet pool.
+ *
+ * Every entry is pure downside - it raises danger and pays nothing. The implicit is what
+ * pays, and it scales with the sum of these, so applying one is buying reward with risk.
+ * `validateRegistry` rejects a tablet modifier whose value is not positive, because a
+ * free one would break that trade in the only direction that matters.
+ *
+ * ## The two halves differ in kind, not only in number
+ *
+ * Prefixes are the deep, heavily gated modifiers: a T1 tablet can only roll the weakest
+ * of them, and the biggest are out of reach until T12. Suffixes are cheaper and available
+ * from the first tier. So a shallow tablet is shaped mostly by its suffixes and a deep
+ * one by its prefixes, which is the same job the gear pool's lean does - it makes
+ * "1 prefix" and "1 suffix" mean different things rather than different counts.
+ *
+ * ## Four per side against three rows
+ *
+ * A rare rolls 3 of 4, so there is a lottery. Three per side would make every rare
+ * tablet identical, which would turn rarity into a number rather than a roll.
+ *
+ * ## Sizing
+ *
+ * Deliberately modest. These sum into `(1 + Σ)` and multiply against a tier curve that
+ * is already exponential, so a fully-rolled rare at T15 carries six of them - the six
+ * biggest together are roughly +180% danger on top of the tier, and the implicit pays
+ * the same multiple back. Measure before believing any of these numbers: the harness is
+ * the instrument, not this comment.
+ */
+const TABLET_PREFIXES: AffixDefinition[] = [
+  {
+    id: 'tablet-bloated',
+    kind: 'prefix',
+    nameFragment: 'Bloated',
+    effect: { kind: 'monsterBuff', axis: 'hp' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.15, 0.25, 0.35, 0.45]),
+  },
+  {
+    id: 'tablet-savage',
+    kind: 'prefix',
+    nameFragment: 'Savage',
+    effect: { kind: 'monsterBuff', axis: 'damage' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.12, 0.2, 0.28, 0.36]),
+  },
+  {
+    id: 'tablet-teeming',
+    kind: 'prefix',
+    nameFragment: 'Teeming',
+    effect: { kind: 'monsterBuff', axis: 'count' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.14, 0.22, 0.3, 0.4]),
+  },
+  {
+    /**
+     * The one that only means anything because health carries across the run.
+     *
+     * More waves against a pool that never refills is pure accumulated exposure. In a
+     * run that healed between fights this would be a time cost and nothing else.
+     */
+    id: 'tablet-endless',
+    kind: 'prefix',
+    nameFragment: 'Endless',
+    effect: { kind: 'monsterBuff', axis: 'waves' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.2, 0.3, 0.4, 0.5]),
+  },
+];
+
+const TABLET_SUFFIXES: AffixDefinition[] = [
+  {
+    id: 'tablet-of-stone',
+    kind: 'suffix',
+    nameFragment: 'of Stone',
+    effect: { kind: 'monsterBuff', axis: 'hp' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.08, 0.13, 0.18, 0.24]),
+  },
+  {
+    id: 'tablet-of-fury',
+    kind: 'suffix',
+    nameFragment: 'of Fury',
+    effect: { kind: 'monsterBuff', axis: 'damage' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.07, 0.11, 0.15, 0.2]),
+  },
+  {
+    id: 'tablet-of-the-swarm',
+    kind: 'suffix',
+    nameFragment: 'of the Swarm',
+    effect: { kind: 'monsterBuff', axis: 'count' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.09, 0.14, 0.19, 0.25]),
+  },
+  {
+    id: 'tablet-of-descent',
+    kind: 'suffix',
+    nameFragment: 'of Descent',
+    effect: { kind: 'monsterBuff', axis: 'waves' },
+    rollsOn: 'tablet',
+    tiers: tabletTiers([0.1, 0.16, 0.22, 0.28]),
+  },
+];
+
+/**
+ * The rollable pool.
+ *
+ * Tablet modifiers are in here, and they have to be: `getAffix` resolves every stored
+ * id through this list, so leaving them out would render a crafted tablet as six unknown
+ * modifiers. `eligibleAffixes` is what keeps them off gear - see the partition note there
+ * and the pair of assertions in validateRegistry.
+ *
+ * Implicits are deliberately not in here - they never roll.
+ */
+export const AFFIXES: AffixDefinition[] = [
+  ...PREFIXES,
+  ...SUFFIXES,
+  ...TABLET_PREFIXES,
+  ...TABLET_SUFFIXES,
+];
+
+/** Every prefix in the game, tablet or not. Partitioned at roll time, never here. */
+export const ALL_PREFIXES: AffixDefinition[] = [...PREFIXES, ...TABLET_PREFIXES];
+export const ALL_SUFFIXES: AffixDefinition[] = [...SUFFIXES, ...TABLET_SUFFIXES];
+
+/**
+ * The danger a rolled tablet modifier adds, and on which axis.
+ *
+ * The counterpart to `affixEffect` for the pool that has no Effects: between them they
+ * partition the registry exactly as the pool itself is partitioned, and neither can
+ * return anything for the other's half.
+ *
+ * Here rather than beside `affixEffect` in items.ts so content/tablets.ts can read it
+ * without importing a module that already depends on the content registry.
+ */
+export function affixDanger(rolled: {
+  affixId: string;
+  value: number;
+}): { axis: MonsterAxis; value: number } | null {
+  const template = byId.get(rolled.affixId)?.effect;
+  if (template?.kind !== 'monsterBuff') return null;
+  return { axis: template.axis, value: rolled.value };
+}
 
 /** Base implicits, as a flat list for validation. */
 export const IMPLICIT_AFFIXES: AffixDefinition[] = Object.values(BASE_AFFIXES);

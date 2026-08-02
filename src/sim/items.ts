@@ -11,14 +11,18 @@
 import {
   AFFIX_LIMITS,
   RARITY_WEIGHTS,
+  TABLET_RARITY_WEIGHTS,
   type AffixDefinition,
   type Effect,
   type ItemInstance,
   type Rarity,
   type RolledAffix,
 } from './content/schema';
-import { availableTiers, getAffix, PREFIXES, SUFFIXES } from './content/affixes';
-import { GEAR_BASES, WEAPON_BASES, getBase, getBaseAffix } from './content/bases';
+// ALL_PREFIXES/ALL_SUFFIXES rather than PREFIXES/SUFFIXES: the roll paths hand the
+// WHOLE pool to eligibleAffixes and let it partition, because a tablet and a Whetstone
+// take the same code path and only the filter knows the difference between them.
+import { availableTiers, getAffix, ALL_PREFIXES, ALL_SUFFIXES } from './content/affixes';
+import { GEAR_BASES, TABLET_BASES, WEAPON_BASES, getBase, getBaseAffix } from './content/bases';
 import { getSkill } from './content/skills';
 import {
   CURRENCY_DROP_WEIGHTS,
@@ -31,7 +35,6 @@ import {
   type SpiritDelta,
 } from './content/currency';
 import { getUnique, pickUnique, rollUniqueValues, uniqueEffects } from './content/uniques';
-import { rollTabletMods, type TabletInstance } from './content/tablets';
 import {
   DROPS_PER_CLEAR,
   DUNGEON_CURRENCY_PER_CLEAR,
@@ -100,18 +103,28 @@ function weightedRarity(rng: Rng, weights: Record<Rarity, number> = RARITY_WEIGH
  *
  * An affix with a `weapons` kind rolls only on weapons of that kind - so a wand never
  * rolls `+ to Physical Skill Levels`, and no gear rolls either. An affix without the
- * tag rolls anywhere, which is every affix that existed before weapons did.
+ * tag rolls anywhere a character can wear it, which is every affix that existed before
+ * weapons did.
+ *
+ * **Tablets are a partition, not another division.** "Untagged rolls anywhere" is exactly
+ * what must NOT hold for them: a tablet storing its modifiers as an ItemInstance would
+ * otherwise roll increased crit chance, which is the failure that made me give tablets
+ * their own type in the first place. So the tablet pool is closed in both directions -
+ * a tablet rolls only tablet affixes, and nothing else ever rolls one.
  *
  * `baseId` is optional so the reroll and spirit paths that already know they are
  * working on a real item can pass it, and the handful of callers that do not have it
  * fall back to the unrestricted pool rather than silently rolling nothing.
  */
 export function eligibleAffixes(pool: AffixDefinition[], baseId?: string): AffixDefinition[] {
-  const kind = baseId ? getBase(baseId)?.skillId : undefined;
-  const skill = kind ? getSkill(kind) : undefined;
-  // Untagged rolls anywhere. 'gear' rolls only where there is no skill; a kind
-  // rolls only on a weapon granting a skill of that kind.
+  const base = baseId ? getBase(baseId) : undefined;
+  if (base?.pays) return pool.filter((affix) => affix.rollsOn === 'tablet');
+
+  const skill = base?.skillId ? getSkill(base.skillId) : undefined;
   return pool.filter((affix) => {
+    // Closed the other way too: a tablet affix is never eligible off a tablet, whether
+    // or not the caller knew what base it was rolling for.
+    if (affix.rollsOn === 'tablet') return false;
     if (!affix.rollsOn) return true;
     return affix.rollsOn === 'gear' ? skill === undefined : affix.rollsOn === skill?.kind;
   });
@@ -156,8 +169,8 @@ export function affixRows(item: ItemInstance): { prefix: number; suffix: number 
   return {
     // Clamped at zero and at the pool size: a row count larger than the pool
     // would silently roll fewer affixes than it claims.
-    prefix: Math.max(0, Math.min(PREFIXES.length, limits.prefix + delta.prefix)),
-    suffix: Math.max(0, Math.min(SUFFIXES.length, limits.suffix + delta.suffix)),
+    prefix: Math.max(0, Math.min(ALL_PREFIXES.length, limits.prefix + delta.prefix)),
+    suffix: Math.max(0, Math.min(ALL_SUFFIXES.length, limits.suffix + delta.suffix)),
   };
 }
 
@@ -168,8 +181,8 @@ function rollAffixesForRows(
   baseId: string,
 ): RolledAffix[] {
   return [
-    ...rollAffixes(PREFIXES, rows.prefix, itemLevel, rng, baseId),
-    ...rollAffixes(SUFFIXES, rows.suffix, itemLevel, rng, baseId),
+    ...rollAffixes(ALL_PREFIXES, rows.prefix, itemLevel, rng, baseId),
+    ...rollAffixes(ALL_SUFFIXES, rows.suffix, itemLevel, rng, baseId),
   ];
 }
 
@@ -305,16 +318,33 @@ export function rollWaveDropCount(accountSeed: number, firstUid: number, stage: 
 /**
  * Roll one tablet.
  *
+ * An `ItemInstance` like anything else, and it goes through the same machinery: the same
+ * rarity draw, the same row counts, the same implicit roll. What makes it a tablet is
+ * the BASE - `pays` is set, so `eligibleAffixes` hands it only the tablet pool.
+ *
+ * `itemLevel` carries the TIER. That is the one field whose meaning differs, and it is
+ * the reason the tablet gates in affixes.ts count to 15 rather than to 80.
+ *
  * Seeded on the uid like every other roll, so the client's optimistic prediction and the
- * server's authoritative re-run produce the same modifiers - the same property that
- * lets a stage replay be a preview rather than a guess.
+ * server's authoritative re-run produce the same tablet - the same property that lets a
+ * stage replay be a preview rather than a guess.
  */
-export function rollTablet(accountSeed: number, uid: number, tier: number): TabletInstance {
+export function rollTablet(accountSeed: number, uid: number, tier: number): ItemInstance {
   const clamped = Math.max(1, Math.min(MAX_TABLET_TIER, Math.round(tier)));
+  const rng = rollStream(accountSeed, uid, 0);
+  // Never unique. A tablet's rarity is a row count, and there is no authored tablet to
+  // draw - drawing one would hand back an item with no base and no modifiers at all.
+  const rarity = weightedRarity(rng, TABLET_RARITY_WEIGHTS);
+  const base = TABLET_BASES[rng.int(TABLET_BASES.length)];
+
   return {
     uid: String(uid),
-    tier: clamped,
-    mods: rollTabletMods(clamped, rollStream(accountSeed, uid, 0)),
+    baseId: base.id,
+    rarity,
+    itemLevel: clamped,
+    affixes: rollAffixesForRarity(rarity, clamped, rng, base.id),
+    baseAffix: rollBaseAffix(base.id, clamped, rng),
+    rerolls: 0,
     crafts: 0,
   };
 }
@@ -344,9 +374,9 @@ export function rollAbyssalTablets(
   accountSeed: number,
   firstUid: number,
   tier: number,
-): TabletInstance[] {
+): ItemInstance[] {
   const rng = createRng(accountSeed).fork(firstUid * ABYSSAL_STREAM);
-  const out: TabletInstance[] = [];
+  const out: ItemInstance[] = [];
 
   if (rng.next() < ABYSSAL_TABLET_RETURN_CHANCE) {
     out.push(rollTablet(accountSeed, firstUid, tier));
@@ -614,7 +644,7 @@ export function applyCurrencyToItem(
       // idols: a targeted reroll a player can repeat without losing the half
       // that already landed well.
       const kept = item.affixes.filter((a) => sideOf(a.affixId) !== action.only);
-      const pool = action.only === 'prefix' ? PREFIXES : SUFFIXES;
+      const pool = action.only === 'prefix' ? ALL_PREFIXES : ALL_SUFFIXES;
       const count = affixRows(item)[action.only];
       next.affixes = [...kept, ...rollAffixes(pool, count, item.itemLevel, rng, item.baseId)];
       return { item: next, transmuted: false };
@@ -650,13 +680,13 @@ export function applyCurrencyToItem(
       const after = affixRows(next);
       const added = [
         ...rollAffixes(
-          PREFIXES.filter((a) => !item.affixes.some((r) => r.affixId === a.id)),
+          ALL_PREFIXES.filter((a) => !item.affixes.some((r) => r.affixId === a.id)),
           Math.max(0, after.prefix - before.prefix),
           item.itemLevel,
           rng,
         ),
         ...rollAffixes(
-          SUFFIXES.filter((a) => !item.affixes.some((r) => r.affixId === a.id)),
+          ALL_SUFFIXES.filter((a) => !item.affixes.some((r) => r.affixId === a.id)),
           Math.max(0, after.suffix - before.suffix),
           item.itemLevel,
           rng,
@@ -706,7 +736,7 @@ export function applyCurrencyToItem(
       const suffixes = trim('suffix');
 
       const grow = (side: AffixSide, current: RolledAffix[]) => {
-        const pool = (side === 'prefix' ? PREFIXES : SUFFIXES).filter(
+        const pool = (side === 'prefix' ? ALL_PREFIXES : ALL_SUFFIXES).filter(
           (a) => !current.some((r) => r.affixId === a.id),
         );
         return rollAffixes(pool, rows[side] - current.length, item.itemLevel, rng, item.baseId);
@@ -731,12 +761,20 @@ export function affixEffect(rolled: RolledAffix): Effect | null {
   const affix = getAffix(rolled.affixId);
   if (!affix) return null; // save referencing an affix that no longer exists
   const template = affix.effect;
+  // A tablet's modifiers act on the RUN, and there is no Effect for that - deliberately.
+  // These two lines are what make it impossible for a tablet to reach deriveStats: not a
+  // rule someone has to remember, but a missing code path. It holds even for a tablet
+  // that somehow ends up in the loadout.
+  if (template.kind === 'monsterBuff' || template.kind === 'tabletReward') return null;
   if (template.kind === 'goldOnKill') return { kind: 'goldOnKill', multiplier: rolled.value };
   if (template.kind === 'extraElement') {
     return { kind: 'extraElement', element: template.element, fraction: rolled.value };
   }
   return { kind: 'statMod', stat: template.stat, op: template.op, value: rolled.value };
 }
+// Its counterpart for the pool that has no Effects is `affixDanger`, in content/affixes.ts.
+// It lives there rather than here so content/tablets.ts can read it without importing this
+// module, which items.ts already depends on through the content registry.
 
 /** Everything an item contributes: implicit, rolled affixes, or authored effects. */
 export function itemEffects(item: ItemInstance): Effect[] {

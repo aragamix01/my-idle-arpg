@@ -15,6 +15,7 @@ import {
   contactCount,
   abyssalDepth,
   ABYSSAL_PROFILE,
+  DELVE_WAVE_TIME_SHARE,
   DUNGEON_PROFILE,
   enemyCount,
   dungeonResistances,
@@ -27,7 +28,7 @@ import {
   type DepthProfile,
   type Resistances,
 } from './curves';
-import { tabletTotals, type TabletInstance } from './content';
+import { tabletDanger, wavesForTier, type DangerByAxis, type ItemInstance } from './content';
 import {
   damageShares,
   deriveStats,
@@ -222,81 +223,144 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
  * at zero, which is what lets the replay renderer handle both unchanged.
  */
 export function resolveDungeon(save: SaveState, stage: number): StageOutcome {
-  return resolveDelve(save, stage, DUNGEON_PROFILE, 0);
+  return resolveDelve(save, stage, DUNGEON_PROFILE, NO_DANGER, 0);
 }
 
+/** A run with no tablet shaping it. A dungeon is exactly this. */
+const NO_DANGER: DangerByAxis = { hp: 0, damage: 0, count: 0, waves: 0 };
+
 /**
- * An Abyssal run.
+ * An Abyssal run: waves, then the boss.
  *
- * Indexed on the TABLET, never on bestStage: the tier decides the depth, so two players
- * running a T7 fight the same thing. The tablet's modifiers raise the danger, and the
- * same modifiers raise what it pays - which is applied where the rewards are granted,
- * not here.
+ * Indexed on the TABLET, never on bestStage - the tier decides the depth, so two players
+ * running a T7 fight the same thing. The tablet's modifiers raise the danger on four
+ * separate axes, and the same modifiers raise what it pays, which is applied where the
+ * rewards are granted rather than here.
  */
-export function resolveAbyssal(save: SaveState, tablet: TabletInstance): StageOutcome {
-  const { danger } = tabletTotals(tablet);
-  return resolveDelve(save, abyssalDepth(tablet.tier), ABYSSAL_PROFILE, danger);
+export function resolveAbyssal(save: SaveState, tablet: ItemInstance): StageOutcome {
+  const danger = tabletDanger(tablet);
+  const tier = Math.max(1, Math.round(tablet.itemLevel));
+  // Rounded UP, so a tablet advertising more waves always delivers at least one more.
+  const waves = Math.ceil(wavesForTier(tier) * (1 + danger.waves));
+  return resolveDelve(save, abyssalDepth(tier), ABYSSAL_PROFILE, danger, waves);
 }
 
 /**
- * One boss, no wave, no escape - at whatever depth and difficulty the caller names.
+ * A delve: some number of waves, then one boss, and no escape.
  *
  * Was resolveDungeon's whole body. A dungeon and an Abyssal are the same fight with
- * different numbers, and two near-identical resolvers would be two places for the
- * closed-form property to break.
+ * different numbers - a dungeon simply runs zero waves.
  *
- * Returns the same StageOutcome shape as resolveStage with `trashPhaseSeconds` at zero,
- * which is what lets the replay renderer handle every kind of run unchanged.
+ * ## Health carries across every wave
+ *
+ * There is one `effectiveHp` for the entire run and nothing refills it. That is what
+ * "limited HP inside; at zero you leave with nothing" means, and it is why the `waves`
+ * modifier axis is dangerous rather than merely slow: another wave is another slice off
+ * a pool that is already down.
+ *
+ * ## The wave loop is not a tick loop
+ *
+ * It runs once per WAVE - at most a couple of dozen - not once per frame or per second.
+ * The closed-form property that lets the server resolve offline progress and lets the
+ * harness sweep 300 stages in milliseconds is about there being no simulation step, and
+ * a bounded sum over waves is still a formula. Do not read this as permission to add a
+ * per-tick loop anywhere.
+ *
+ * Returns the same StageOutcome shape as resolveStage, which is what lets the replay
+ * renderer handle every kind of run unchanged.
  */
 function resolveDelve(
   save: SaveState,
   stage: number,
   profile: DepthProfile,
-  /** Extra difficulty from a tablet's modifiers, as a fraction. Zero for a dungeon. */
-  danger: number,
+  /** Extra difficulty from a tablet's modifiers. All zero for a dungeon. */
+  danger: DangerByAxis,
+  /** Waves before the boss. Zero for a dungeon, which is a duel and nothing else. */
+  waves: number,
 ): StageOutcome {
   const bossCtx = ctxFor(stage, true, 1);
   const bossStats = deriveStats(save, bossCtx);
+  const trashCtx = ctxFor(stage, false, 1);
+  const stats = deriveStats(save, trashCtx);
 
-  const hp = bossHp(stage).mul(profile.hpMult).mul(1 + danger);
   // Where elements actually bite. The affinity is derived from the account seed and the
-  // stage, so it is the same every time and can be shown before the key is spent.
-  const seconds = timeToKill(
-    save,
-    hp,
-    stage,
-    true,
-    1,
-    dungeonResistances(save.seed, stage, profile.affinity),
-  );
-  const ehp = effectiveHp(bossStats);
-  const incoming = bossDps(stage).mul(profile.dpsMult).mul(1 + danger);
+  // stage, so it is the same every time and can be shown before the tablet is spent.
+  const resist = dungeonResistances(save.seed, stage, profile.affinity);
+  const ehp = effectiveHp(stats);
 
-  const damage = incoming.mul(seconds);
-  const died = damage.gte(ehp);
-  const timedOut = seconds > STAGE_TIME_LIMIT_SECONDS;
+  /*
+    --- The waves -------------------------------------------------------------
+
+    The profile's multipliers are BOSS multipliers and are deliberately not applied here.
+    Measured, because the first cut did apply them: hpMult of 3 turned one wave at depth
+    80 into 86 seconds of trash against 18 for the boss, and the incoming damage over
+    that stretch killed a character who clears the same floor in 35. A delve boss is
+    beefier than a stage boss; a delve's trash is just trash at that depth, and the depth
+    is already the difficulty.
+
+    The tablet's own modifiers DO apply, because that is what a player bought.
+  */
+  const count = enemyCount(stage) * (1 + danger.count);
+  const aoeTargets = Math.min(stats.area, count);
+  const wavePoolHp = enemyHp(stage).mul(count).mul(1 + danger.hp);
+  const perWaveSeconds =
+    waves > 0 ? timeToKill(save, wavePoolHp, stage, false, aoeTargets, resist) : 0;
+  const waveIncoming = enemyDps(stage)
+    .mul(contactCount(stage))
+    .mul(1 + danger.damage);
+
+  const trashPhaseSeconds = perWaveSeconds * waves;
+  const damageDuringTrash = waveIncoming.mul(trashPhaseSeconds);
+
+  // --- The boss ----------------------------------------------------------
+  const hp = bossHp(stage).mul(profile.hpMult).mul(1 + danger.hp);
+  const bossPhaseSeconds = timeToKill(save, hp, stage, true, 1, resist);
+  // A loadout can carry toughness conditional on boss fights, so the boss phase is
+  // measured against its own effective HP, expressed as a scale on the pool.
+  const bossIncoming = bossDps(stage)
+    .mul(profile.dpsMult)
+    .mul(1 + danger.damage)
+    .mul(ehp.div(effectiveHp(bossStats)));
+  const damageDuringBoss = bossIncoming.mul(bossPhaseSeconds);
+
+  const totalDamage = damageDuringTrash.add(damageDuringBoss);
+  const totalSeconds = trashPhaseSeconds + bossPhaseSeconds;
+  const limit = delveTimeLimit(waves);
 
   const outcome = {
-    trashPhaseSeconds: 0,
-    bossPhaseSeconds: seconds,
-    damageTakenFraction: damage.div(ehp).toNumber(),
-    trashDamageFraction: 0,
-    bossDamageFraction: damage.div(ehp).toNumber(),
+    trashPhaseSeconds,
+    bossPhaseSeconds,
+    damageTakenFraction: totalDamage.div(ehp).toNumber(),
+    trashDamageFraction: damageDuringTrash.div(ehp).toNumber(),
+    bossDamageFraction: damageDuringBoss.div(ehp).toNumber(),
   };
 
-  if (died || timedOut) {
-    // No partial credit. A dungeon pays on the kill or not at all - that is
-    // what makes spending the key a decision rather than a formality.
-    const survived = died
-      ? Math.min(seconds, ehp.div(bigMax(incoming, 1e-9)).toNumber())
-      : seconds;
+  const diedInWaves = damageDuringTrash.gte(ehp);
+  const died = totalDamage.gte(ehp);
+
+  if (died || totalSeconds > limit) {
+    // No partial credit, whether you fell in the third wave or on the boss. A delve pays
+    // on the clear or not at all - that is what makes spending the key, or the tablet, a
+    // decision rather than a formality.
+    const survived = diedInWaves
+      ? Math.min(trashPhaseSeconds, ehp.div(bigMax(waveIncoming, 1e-9)).toNumber())
+      : died
+        ? trashPhaseSeconds +
+          Math.min(
+            bossPhaseSeconds,
+            ehp.sub(damageDuringTrash).div(bigMax(bossIncoming, 1e-9)).toNumber(),
+          )
+        : totalSeconds;
+    const capped = Math.min(survived, limit);
     return {
       ...outcome,
       cleared: false,
       failure: died ? 'died' : 'timeout',
-      seconds: Math.min(survived, STAGE_TIME_LIMIT_SECONDS),
+      seconds: capped,
       goldEarned: BIG_ZERO,
-      bossPhaseSeconds: Math.min(survived, STAGE_TIME_LIMIT_SECONDS),
+      // Truncated to what was actually survived, so the replay stops where the run did.
+      trashPhaseSeconds: Math.min(trashPhaseSeconds, capped),
+      bossPhaseSeconds: Math.max(0, capped - Math.min(trashPhaseSeconds, capped)),
     };
   }
 
@@ -304,12 +368,32 @@ function resolveDelve(
     ...outcome,
     cleared: true,
     failure: 'none',
-    seconds,
+    seconds: totalSeconds,
     goldEarned: bossGold(stage)
       .mul(profile.goldMult)
       .mul(bossStats.goldFind)
-      .mul(1 + goldOnKillBonus(save, bossCtx)),
+      .mul(1 + goldOnKillBonus(save, bossCtx))
+      // The waves pay too, at the depth they were fought - otherwise a long run is pure
+      // exposure for a boss-sized reward and adding waves is strictly a punishment.
+      .add(goldPerTrashKill(save, stage).mul(count).mul(waves).mul(profile.goldMult)),
   };
+}
+
+/**
+ * How long a delve may run before it fails on the clock.
+ *
+ * STAGE_TIME_LIMIT_SECONDS is 75 for ONE wave and one boss. A run with eight waves
+ * against that limit would fail on arithmetic rather than on difficulty, so the budget
+ * grows with the wave count - the boss keeps the full stage allowance and each wave adds
+ * its own share.
+ *
+ * Sub-linear in neither direction on purpose: it is exactly proportional, so the timer
+ * stays as binding on a deep tablet as it is on a shallow one. A generous per-wave
+ * budget would quietly retire the timeout as a failure mode for exactly the runs where
+ * it should bite hardest.
+ */
+export function delveTimeLimit(waves: number): number {
+  return STAGE_TIME_LIMIT_SECONDS * (1 + Math.max(0, waves) * DELVE_WAVE_TIME_SHARE);
 }
 
 /**

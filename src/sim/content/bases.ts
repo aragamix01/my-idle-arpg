@@ -45,6 +45,18 @@ const tiers = (values: readonly [number, number, number, number]) =>
   values.map((value, i) => ({ minStage: GATES[i], value }));
 
 /**
+ * Tier gates for tablet implicits.
+ *
+ * Kept in step with TABLET_GATES in affixes.ts, for the same reason the implicit gates
+ * above match the rolled ones: a tablet whose implicit jumped a tier while its explicits
+ * did not is something no player could work out.
+ */
+const TABLET_GATES = [1, 4, 8, 12] as const;
+
+const tabletTiers = (values: readonly [number, number, number, number]) =>
+  values.map((value, i) => ({ minStage: TABLET_GATES[i], value }));
+
+/**
  * The implicit affix of each base, keyed by base id.
  *
  * These are AffixDefinitions like any other - same tier machinery, same effect
@@ -155,6 +167,46 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     // Held to about a third of Of Recovery, the weakest rolled peer on this stat.
     tiers: tiers([0.012, 0.02, 0.028, 0.036]),
   },
+
+  /*
+    Tablet implicits.
+
+    Gated on TIER, not on stage - a tablet's itemLevel carries its tier of 1..15, so
+    these use TABLET_GATES rather than the stage GATES above. A T15 tablet whose implicit
+    was still stuck on the weakest roll because 15 < 40 would make deep tiers pay a
+    shallow rate, which is the exact opposite of what the tier is for.
+
+    The magnitudes are the BASE rate, before the explicit coupling multiplies them - a
+    bare tablet pays these, and a fully-rolled rare pays several times more. Which is why
+    they can afford to look small.
+  */
+  'hoarding-tablet': {
+    id: 'implicit-tablet-quantity',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'tabletReward' },
+    tiers: tabletTiers([0.3, 0.5, 0.7, 0.9]),
+  },
+  'auspicious-tablet': {
+    /**
+     * Rarity is the one reward that reaches the power ceiling rather than the economy -
+     * it changes WHAT drops, not how much - so it is sized well under the other two.
+     */
+    id: 'implicit-tablet-rarity',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'tabletReward' },
+    tiers: tabletTiers([0.2, 0.32, 0.44, 0.56]),
+  },
+  'gilded-tablet': {
+    // Gold is the reward with the least reach: it feeds the upgrade tracks, which are
+    // already bounded by a cost curve. So it can afford to be the largest number here.
+    id: 'implicit-tablet-gold',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'tabletReward' },
+    tiers: tabletTiers([0.5, 0.85, 1.2, 1.55]),
+  },
 };
 
 /**
@@ -187,12 +239,32 @@ export const GEAR_BASES: ItemBase[] = [
 ];
 
 /**
- * Every base, gear and weapon.
+ * Tablet bases.
+ *
+ * `pays` is what makes a base a tablet, following the rule `skillId` set for weapons:
+ * one field, so nothing can disagree about what kind of thing this is.
+ *
+ * Three bases and three reward axes, one each. A tablet that raised every reward at once
+ * would make the bases interchangeable and picking one up would stop being a decision
+ * about what you are short of.
+ *
+ * The implicits are in BASE_AFFIXES below, and unlike every other implicit they are
+ * `tabletReward` - they produce no Effect at all, and their magnitude is amplified by
+ * whatever explicits the tablet carries. See content/tablets.ts for the coupling.
+ */
+export const TABLET_BASES: ItemBase[] = [
+  { id: 'hoarding-tablet', name: 'Hoarding Tablet', sprite: 'item.deep_delvers_idol', pays: 'quantity' },
+  { id: 'auspicious-tablet', name: 'Auspicious Tablet', sprite: 'item.swarm_lens', pays: 'rarity' },
+  { id: 'gilded-tablet', name: 'Gilded Tablet', sprite: 'item.coin_purse', pays: 'gold' },
+];
+
+/**
+ * Every base: gear, weapon and tablet.
  *
  * Kept as the flat list it always was, so validation, sprite checks and the display
  * path do not have to know the split exists. Only the roll path does.
  */
-export const BASES: ItemBase[] = [...GEAR_BASES, ...WEAPON_BASES];
+export const BASES: ItemBase[] = [...GEAR_BASES, ...WEAPON_BASES, ...TABLET_BASES];
 
 const byId = new Map(BASES.map((b) => [b.id, b]));
 

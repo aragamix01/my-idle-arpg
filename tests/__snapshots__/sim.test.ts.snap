@@ -881,6 +881,230 @@ exports[`content registry > matches its snapshot 1`] = `
         },
       ],
     },
+    {
+      "effect": {
+        "axis": "hp",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-bloated",
+      "kind": "prefix",
+      "nameFragment": "Bloated",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.15,
+        },
+        {
+          "minStage": 4,
+          "value": 0.25,
+        },
+        {
+          "minStage": 8,
+          "value": 0.35,
+        },
+        {
+          "minStage": 12,
+          "value": 0.45,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "axis": "damage",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-savage",
+      "kind": "prefix",
+      "nameFragment": "Savage",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.12,
+        },
+        {
+          "minStage": 4,
+          "value": 0.2,
+        },
+        {
+          "minStage": 8,
+          "value": 0.28,
+        },
+        {
+          "minStage": 12,
+          "value": 0.36,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "axis": "count",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-teeming",
+      "kind": "prefix",
+      "nameFragment": "Teeming",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.14,
+        },
+        {
+          "minStage": 4,
+          "value": 0.22,
+        },
+        {
+          "minStage": 8,
+          "value": 0.3,
+        },
+        {
+          "minStage": 12,
+          "value": 0.4,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "axis": "waves",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-endless",
+      "kind": "prefix",
+      "nameFragment": "Endless",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.2,
+        },
+        {
+          "minStage": 4,
+          "value": 0.3,
+        },
+        {
+          "minStage": 8,
+          "value": 0.4,
+        },
+        {
+          "minStage": 12,
+          "value": 0.5,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "axis": "hp",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-of-stone",
+      "kind": "suffix",
+      "nameFragment": "of Stone",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.08,
+        },
+        {
+          "minStage": 4,
+          "value": 0.13,
+        },
+        {
+          "minStage": 8,
+          "value": 0.18,
+        },
+        {
+          "minStage": 12,
+          "value": 0.24,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "axis": "damage",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-of-fury",
+      "kind": "suffix",
+      "nameFragment": "of Fury",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.07,
+        },
+        {
+          "minStage": 4,
+          "value": 0.11,
+        },
+        {
+          "minStage": 8,
+          "value": 0.15,
+        },
+        {
+          "minStage": 12,
+          "value": 0.2,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "axis": "count",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-of-the-swarm",
+      "kind": "suffix",
+      "nameFragment": "of the Swarm",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.09,
+        },
+        {
+          "minStage": 4,
+          "value": 0.14,
+        },
+        {
+          "minStage": 8,
+          "value": 0.19,
+        },
+        {
+          "minStage": 12,
+          "value": 0.25,
+        },
+      ],
+    },
+    {
+      "effect": {
+        "axis": "waves",
+        "kind": "monsterBuff",
+      },
+      "id": "tablet-of-descent",
+      "kind": "suffix",
+      "nameFragment": "of Descent",
+      "rollsOn": "tablet",
+      "tiers": [
+        {
+          "minStage": 1,
+          "value": 0.1,
+        },
+        {
+          "minStage": 4,
+          "value": 0.16,
+        },
+        {
+          "minStage": 8,
+          "value": 0.22,
+        },
+        {
+          "minStage": 12,
+          "value": 0.28,
+        },
+      ],
+    },
   ],
   "bases": [
     {
@@ -946,6 +1170,24 @@ exports[`content registry > matches its snapshot 1`] = `
       "name": "Staff",
       "skillId": "frost-nova",
       "sprite": "item.staff",
+    },
+    {
+      "id": "hoarding-tablet",
+      "name": "Hoarding Tablet",
+      "pays": "quantity",
+      "sprite": "item.deep_delvers_idol",
+    },
+    {
+      "id": "auspicious-tablet",
+      "name": "Auspicious Tablet",
+      "pays": "rarity",
+      "sprite": "item.swarm_lens",
+    },
+    {
+      "id": "gilded-tablet",
+      "name": "Gilded Tablet",
+      "pays": "gold",
+      "sprite": "item.coin_purse",
     },
   ],
   "uniques": [

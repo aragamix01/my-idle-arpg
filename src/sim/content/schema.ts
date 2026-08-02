@@ -240,6 +240,25 @@ export const WAVE_RARITY_WEIGHTS: Record<Rarity, number> = {
   unique: 0,
 };
 
+/**
+ * How a dropped tablet's rarity rolls.
+ *
+ * **Unique is zero and cannot be anything else.** A tablet's rarity is a row count, and
+ * a unique rolls no rows at all - drawing one would hand back a tablet with no base, no
+ * modifiers and no implicit. There is no authored tablet to be unique.
+ *
+ * Weighted toward common far more than gear is, because rarity here is a difficulty
+ * dial as much as a reward one: a rare tablet carries six modifiers, every one of which
+ * is pure danger. A player who mostly finds commons can choose to make them rarer with
+ * currency, which is the whole point of a craftable consumable.
+ */
+export const TABLET_RARITY_WEIGHTS: Record<Rarity, number> = {
+  common: 62,
+  magic: 30,
+  rare: 8,
+  unique: 0,
+};
+
 // --- Affixes --------------------------------------------------------------
 
 export type AffixKind = 'prefix' | 'suffix';
@@ -254,7 +273,47 @@ export type AffixEffectTemplate =
   | { kind: 'statMod'; stat: StatKey; op: ModLayer }
   | { kind: 'goldOnKill' }
   /** The element is part of the affix's identity; only the fraction comes from a tier. */
-  | { kind: 'extraElement'; element: Element };
+  | { kind: 'extraElement'; element: Element }
+  /**
+   * Buff the RUN, not the character. Tablets only.
+   *
+   * The one template that deliberately produces no `Effect` at all - `affixEffect`
+   * returns null for it, so a tablet's modifiers are structurally incapable of reaching
+   * `deriveStats`. That is a stronger guarantee than keeping tablets in a separate type
+   * gave: it holds even if a tablet somehow ends up in the loadout, because there is no
+   * code path from this template to a stat.
+   *
+   * The magnitude is a fraction added to the run's danger, so 0.35 is "+35% harder".
+   * Which axis it lands on is the affix's identity; only the size comes from a tier.
+   */
+  | { kind: 'monsterBuff'; axis: MonsterAxis }
+  /**
+   * A tablet's implicit: what the run pays out in.
+   *
+   * The other half of the same idea, and it produces no `Effect` either. Which axis it
+   * pays is the BASE's identity rather than the affix's, so this template carries no
+   * field at all - `tabletReward` reads `pays` off the base and the magnitude off the
+   * roll. That keeps "a Gilded Tablet pays gold" in one place instead of two that could
+   * disagree.
+   */
+  | { kind: 'tabletReward' };
+
+/**
+ * What a tablet modifier makes worse.
+ *
+ * Four axes rather than one number, because they are not interchangeable inside a run
+ * where damage accumulates and never resets:
+ *
+ *   hp      lengthens every fight, and pushes at the time limit
+ *   damage  shortens how long you survive one
+ *   count   more enemies per wave - raises clear time AND incoming together
+ *   waves   more fights against the same pool of health, so pure exposure
+ *
+ * `waves` is the one that only exists because HP carries across. In a run that healed
+ * between fights it would be a time cost and nothing more.
+ */
+export const MONSTER_AXES = ['hp', 'damage', 'count', 'waves'] as const;
+export type MonsterAxis = (typeof MONSTER_AXES)[number];
 
 export interface AffixTier {
   /** Lowest item level that may roll this tier. */
@@ -276,19 +335,25 @@ export interface AffixDefinition {
   nameFragment: string;
   effect: AffixEffectTemplate;
   /**
-   * Where this affix may roll. Absent means anywhere.
+   * Where this affix may roll. Absent means anywhere a CHARACTER can wear it.
    *
-   * Three values rather than two, because "gear only" is as load-bearing as
-   * "weapons only". Without it a weapon rolls everything gear does plus its own
-   * exclusives, so gear is strictly a weapon with fewer options - and the four gear
-   * slots become a place to put leftovers.
+   * More than two values, because "gear only" is as load-bearing as "weapons only".
+   * Without it a weapon rolls everything gear does plus its own exclusives, so gear is
+   * strictly a weapon with fewer options - and the four gear slots become a place to
+   * put leftovers.
    *
    * The division is offence-and-resource against defence-and-economy. A weapon
    * cannot roll max HP or gold find; gear cannot roll skill levels. So the two are
    * different objects rather than the same object with different numbers, and
    * `+2 to Physical Skill Levels` never appears on a wand as a dead row.
+   *
+   * `'tablet'` is the one value that partitions rather than divides. "Absent means
+   * anywhere" would otherwise let every gear affix roll on a tablet, so `eligibleAffixes`
+   * treats it as a closed set in both directions: a tablet rolls only tablet affixes, and
+   * nothing else ever rolls one. `validateRegistry` asserts both halves - the partition
+   * is what makes a tablet safe to store as an ItemInstance.
    */
-  rollsOn?: 'gear' | SkillKind;
+  rollsOn?: 'gear' | 'tablet' | SkillKind;
   /** Ascending by strength. Index 0 is the weakest and always available. */
   tiers: AffixTier[];
 }
@@ -386,7 +451,30 @@ export interface ItemBase {
    * `slot` flag to keep in agreement with it.
    */
   skillId?: string;
+  /**
+   * Which reward this base pays, for tablets. Absent on everything else.
+   *
+   * Presence of this field is what makes a base a TABLET, following the same rule
+   * `skillId` set for weapons: one field, so there is no second flag that could
+   * disagree about what kind of thing this is.
+   *
+   * It names the axis the implicit multiplies. Which axis is the base's identity -
+   * choosing a Gilded Tablet over a Hoarding one is the same decision as choosing a
+   * Whetstone over a Purse, and for the same reason: the implicit is the guaranteed
+   * half, and the explicits are the lottery.
+   */
+  pays?: TabletPays;
 }
+
+/**
+ * What a tablet's implicit pays out in.
+ *
+ * One axis per base, never several. A tablet that raised every reward at once would
+ * make the bases interchangeable, and picking one up would stop being a decision about
+ * what you are short of.
+ */
+export const TABLET_PAYS = ['quantity', 'rarity', 'gold'] as const;
+export type TabletPays = (typeof TABLET_PAYS)[number];
 
 // --- Skills ---------------------------------------------------------------
 

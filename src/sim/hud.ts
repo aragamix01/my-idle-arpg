@@ -30,7 +30,8 @@ import {
   type Stats,
   type UpgradeKey,
 } from './types';
-import { tabletName, tabletTotals, type TabletPays } from './content/tablets';
+import { tabletDanger, tabletReward, totalDanger, wavesForTier } from './content/tablets';
+import type { TabletPays } from './content/schema';
 import type { CurrencyPurse, Element, ItemInstance } from './content';
 
 export interface UpgradeView {
@@ -62,32 +63,30 @@ export function statsFromWire(stats: WireStats): Stats {
 }
 
 /**
- * One tablet, as the stash needs to read it.
+ * What a tablet's RUN looks like, before it is spent.
  *
- * A view rather than the `TabletInstance` itself, because three of these fields are
- * derived from things the UI cannot see: `depth` and the affinity come from the account
- * seed and the tier curve, and both have to be readable BEFORE the tablet is spent. A
- * tablet is consumed on entry and consumed on a loss, so a run whose element you only
- * learn by entering it is a coin flip rather than a decision - the same reason the
- * dungeon's affinity is on the button.
+ * A companion to the tablet rather than a replacement for it. The tablet itself now
+ * crosses the wire in `tablets` as an ordinary `ItemInstance`, so the panel renders its
+ * name and modifiers with the same components every other item uses. What cannot be
+ * derived client-side is here: the depth the tier fights at, how many waves, what the
+ * run resists, and what the implicit adds up to once the explicits amplify it.
  *
- * `mods` stays as ids. The registry is pure content and the UI already imports it the
- * same way it imports the affix registry, so resolving them here would only mean two
- * places that decide how a modifier reads.
+ * The affinity is the load-bearing one. It comes from the ACCOUNT SEED, which is
+ * server-side, and a tablet is consumed on entry AND on a loss - so a run whose element
+ * you only learn by entering it is a coin flip rather than a decision.
  */
 export interface TabletView {
   uid: string;
+  /** Also the tablet's itemLevel. Repeated here because this is the run, not the item. */
   tier: number;
-  /** "Teeming Gilded Tablet". */
-  name: string;
-  /** Ids into TABLET_MODS, in roll order. */
-  mods: string[];
   /** Ladder floor this tier actually fights at - the tier alone does not say. */
   depth: number;
-  /** Summed danger, as a fraction. 0.65 is "+65% harder than a bare tier". */
+  /** Waves before the boss, after the `waves` modifiers have had their say. */
+  waves: number;
+  /** Summed danger across every axis. 0.65 is "+65% harder than a bare tier". */
   danger: number;
-  /** Summed reward per axis. A Gilded tablet pays gold and a Hoarding one items. */
-  reward: Record<TabletPays, number>;
+  /** Which reward the implicit pays, and how much once the explicits amplify it. */
+  reward: { pays: TabletPays; amount: number } | null;
   resists: Element;
   weakTo: Element;
 }
@@ -140,11 +139,20 @@ export interface HudSnapshot {
   /**
    * The tablets on the shelf, deepest first.
    *
-   * Sorted here rather than in the stash, so the order does not depend on which surface
-   * is rendering them. Deepest first because the decision a player is making is "what is
-   * the hardest thing I can still beat", and that is at the top of the list.
+   * Ordinary items - the panel renders them with the same grid, the same ItemMods and
+   * the same craft modal gear uses. Sorted here rather than in the surface, so the order
+   * does not depend on which one is rendering them; deepest first because the decision a
+   * player is making is "what is the hardest thing I can still beat".
    */
-  tablets: TabletView[];
+  tablets: ItemInstance[];
+  /**
+   * What each of those tablets means as a RUN, keyed by uid.
+   *
+   * Parallel to `tablets` rather than folded into it, because these are not properties
+   * of the item - they are what the Abyss will do with it, and they need the account
+   * seed to derive.
+   */
+  tabletRuns: Record<string, TabletView>;
   /**
    * The Abyss gate, stated rather than implied by an absent button.
    *
@@ -152,6 +160,28 @@ export interface HudSnapshot {
    * copy for a control that has to explain why it is disabled.
    */
   abyss: { unlocked: boolean; unlockStage: number; cap: number };
+}
+
+/**
+ * What the Abyss will do with this tablet.
+ *
+ * Mirrors `resolveAbyssal`'s reading of it - same tier clamp, same wave count, same
+ * rounding - so the card and the fight cannot disagree about what the player is about
+ * to spend a consumable on.
+ */
+function describeRun(seed: number, tablet: ItemInstance): TabletView {
+  const tier = Math.max(1, Math.round(tablet.itemLevel));
+  const depth = abyssalDepth(tier);
+  const danger = tabletDanger(tablet);
+  return {
+    uid: tablet.uid,
+    tier,
+    depth,
+    waves: Math.ceil(wavesForTier(tier) * (1 + danger.waves)),
+    danger: totalDanger(tablet),
+    reward: tabletReward(tablet),
+    ...dungeonAffinity(seed, depth),
+  };
 }
 
 export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
@@ -193,22 +223,10 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     items: save.items,
     currency: save.currency,
     inventoryCap: INVENTORY_CAP,
-    tablets: [...save.tablets]
-      .sort((a, b) => b.tier - a.tier)
-      .map((tablet) => {
-        const depth = abyssalDepth(tablet.tier);
-        const { danger, reward } = tabletTotals(tablet);
-        return {
-          uid: tablet.uid,
-          tier: tablet.tier,
-          name: tabletName(tablet),
-          mods: tablet.mods,
-          depth,
-          danger,
-          reward,
-          ...dungeonAffinity(save.seed, depth),
-        };
-      }),
+    tablets: [...save.tablets].sort((a, b) => b.itemLevel - a.itemLevel),
+    tabletRuns: Object.fromEntries(
+      save.tablets.map((tablet) => [tablet.uid, describeRun(save.seed, tablet)]),
+    ),
     abyss: {
       unlocked: save.bestStage >= ABYSS_UNLOCK_STAGE,
       unlockStage: ABYSS_UNLOCK_STAGE,

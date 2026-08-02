@@ -78,12 +78,12 @@ import {
   rollTablet,
   rollTabletDrop,
   rollAbyssalTablets,
-  type TabletInstance,
-  rollTabletMods,
-  tabletModSlots,
-  tabletTotals,
-  getTabletMod,
-  TABLET_MODS,
+  type ItemInstance,
+  tabletReward,
+  totalDanger,
+  wavesForTier,
+  delveTimeLimit,
+  STAGE_TIME_LIMIT_SECONDS,
   getHudSnapshot,
   migrateSave,
   rerollCost,
@@ -666,7 +666,22 @@ describe('item rolling', () => {
     // it is an item reading "undefined" in the panel.
     for (const affix of [...AFFIXES, ...IMPLICIT_AFFIXES]) {
       for (let tier = 0; tier < affix.tiers.length; tier++) {
-        const effect = affixEffect({ affixId: affix.id, tier, value: affix.tiers[tier].value });
+        const rolled = { affixId: affix.id, tier, value: affix.tiers[tier].value };
+
+        // A tablet's modifiers act on the RUN and produce no Effect by construction, so
+        // they are checked through the display path instead. They still have to READ -
+        // this is exactly the hole that made every tablet render as six unknown
+        // modifiers when they first became items.
+        if (affix.effect.kind === 'monsterBuff' || affix.effect.kind === 'tabletReward') {
+          expect(affixEffect(rolled), `${affix.id} must not reach deriveStats`).toBeNull();
+          for (const base of BASES.filter((b) => b.pays)) {
+            const line = describeRolledAffix(rolled, true, base.id).text;
+            expect(line, `${affix.id}: ${line}`).not.toMatch(/undefined|NaN|unknown/);
+          }
+          continue;
+        }
+
+        const effect = affixEffect(rolled);
         expect(effect, `${affix.id}`).not.toBeNull();
         if (!effect) continue;
         const line = describeEffect(effect);
@@ -1718,53 +1733,87 @@ describe('currency', () => {
 });
 
 describe('tablets', () => {
-  it('rolls a tier-appropriate tablet, with distinct mods', () => {
-    // Distinct for the same reason an item never rolls one affix twice: the danger
-    // sum multiplies against a curve that is already exponential, so two Teemings
-    // would turn a trade into a stacking problem.
-    for (let tier = 1; tier <= MAX_TABLET_TIER; tier++) {
-      const mods = rollTabletMods(tier, createRng(4).fork(tier));
-      expect(mods).toHaveLength(tabletModSlots(tier));
-      expect(new Set(mods).size).toBe(mods.length);
-      for (const id of mods) {
-        expect(getTabletMod(id)?.minTier ?? 99).toBeLessThanOrEqual(tier);
-      }
-    }
-  });
+  /** Every affix in the game that is meant for a tablet, and nothing else. */
+  const tabletPool = () => AFFIXES.filter((a) => a.rollsOn === 'tablet');
 
-  it('never rolls a mod gated above its tier', () => {
-    // The gate is the only thing making a deep tablet different in kind rather than
-    // only in degree, and it is invisible if it leaks.
-    const deepOnly = TABLET_MODS.filter((mod) => mod.minTier > 1).map((mod) => mod.id);
-    expect(deepOnly.length).toBeGreaterThan(0);
+  it('keeps the two pools apart, in both directions', () => {
+    /*
+      THE assertion the whole shape rests on.
+
+      A tablet is stored as an ItemInstance now, which is only safe because the pools are
+      partitioned. Without it `rerollAffixes` hands a tablet increased crit chance and a
+      Whetstone rolls "monsters have 40% more health" - the exact failure that made the
+      first cut give tablets their own type.
+    */
+    expect(tabletPool().length).toBeGreaterThan(0);
 
     for (let uid = 1; uid <= 400; uid++) {
-      for (const id of rollTabletMods(1, createRng(9).fork(uid))) {
-        expect(deepOnly).not.toContain(id);
+      const tablet = rollTablet(7, uid, 8);
+      for (const rolled of tablet.affixes) {
+        expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).toBe('tablet');
+      }
+      // And a tablet modifier never reaches the character sheet, because there is no
+      // Effect for one - not a rule, a missing code path.
+      expect(itemEffects(tablet)).toHaveLength(0);
+
+      const gear = rollItem(7, uid, 120);
+      for (const rolled of gear.affixes) {
+        expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).not.toBe('tablet');
       }
     }
   });
 
-  it('every mod is a trade, never a gift or a punishment', () => {
-    // Asserted on the DATA rather than through validateRegistry, so the failure names
-    // the mod rather than a list of strings.
-    for (const mod of TABLET_MODS) {
-      expect(mod.danger, `${mod.id} adds no danger`).toBeGreaterThan(0);
-      expect(mod.reward, `${mod.id} pays nothing`).toBeGreaterThan(0);
+  it('rolls rows by rarity and gates modifiers by tier', () => {
+    for (let tier = 1; tier <= MAX_TABLET_TIER; tier++) {
+      for (let uid = 1; uid <= 40; uid++) {
+        const tablet = rollTablet(4, uid * 31 + tier, tier);
+        expect(tablet.itemLevel).toBe(tier);
+        expect(tablet.rarity).not.toBe('unique');
+
+        const rows = affixRows(tablet);
+        expect(tablet.affixes).toHaveLength(rows.prefix + rows.suffix);
+        // Distinct for the same reason an item never rolls one affix twice: the danger
+        // sums against a curve that is already exponential.
+        expect(new Set(tablet.affixes.map((a) => a.affixId)).size).toBe(tablet.affixes.length);
+
+        for (const rolled of tablet.affixes) {
+          const affix = getAffix(rolled.affixId)!;
+          expect(affix.tiers[rolled.tier].minStage).toBeLessThanOrEqual(tier);
+        }
+      }
     }
   });
 
-  it('totals what its mods add up to, and tolerates one that no longer exists', () => {
-    const tablet = { uid: '1', tier: 12, mods: ['teeming', 'retired-mod'], crafts: 0 };
-    const totals = tabletTotals(tablet);
-    const teeming = getTabletMod('teeming')!;
+  it('every modifier is pure downside, and the implicit is what pays', () => {
+    // The coupling. An explicit that paid for itself would make the mods
+    // interchangeable, which is what the previous cut got wrong.
+    for (const affix of tabletPool()) {
+      expect(affix.effect.kind, affix.id).toBe('monsterBuff');
+      for (const tier of affix.tiers) {
+        expect(tier.value, `${affix.id} adds no danger`).toBeGreaterThan(0);
+      }
+    }
+  });
 
-    expect(totals.danger).toBeCloseTo(teeming.danger, 9);
-    // Reward is split by axis, not summed. Teeming pays currency, so nothing else moves -
-    // which is the property that stops every mod being interchangeable.
-    expect(totals.reward.currency).toBeCloseTo(teeming.reward, 9);
-    expect(totals.reward.gold).toBe(0);
-    expect(totals.reward.items).toBe(0);
+  it('scales the implicit by the danger, and tolerates a retired modifier', () => {
+    const base = rollTablet(5, 1, 10);
+    const bare = { ...base, affixes: [] };
+    const loaded = {
+      ...base,
+      affixes: [{ affixId: 'tablet-bloated', tier: 3, value: 0.45 }],
+    };
+    // A modifier id that no longer exists resolves to nothing rather than breaking the
+    // tablet - the same tolerance itemEffects gives a retired affix.
+    const stale = { ...base, affixes: [{ affixId: 'gone', tier: 0, value: 0.5 }] };
+
+    const bareReward = tabletReward(bare)!;
+    expect(tabletReward(loaded)!.amount).toBeCloseTo(bareReward.amount * 1.45, 9);
+    expect(tabletReward(stale)!.amount).toBeCloseTo(bareReward.amount, 9);
+    expect(totalDanger(stale)).toBe(0);
+
+    // The axis comes from the base and never from the modifiers, so a tablet pays what
+    // its base says whatever is rolled on it.
+    expect(tabletReward(loaded)!.pays).toBe(bareReward.pays);
   });
 
   /** A character who has just reached the unlock floor, geared roughly for it. */
@@ -1785,11 +1834,11 @@ describe('tablets', () => {
     };
   };
 
-  const plainTablet = (tier: number): TabletInstance => ({
-    uid: 't1',
-    tier,
-    mods: [],
-    crafts: 0,
+  /** A tablet of this tier carrying nothing at all - the tier curve, unmodified. */
+  const plainTablet = (tier: number): ItemInstance => ({
+    ...rollTablet(31, 900 + tier, tier),
+    rarity: 'common',
+    affixes: [],
   });
 
   it('a T1 is a fair fight at the unlock floor and a T15 is not', () => {
@@ -1832,15 +1881,62 @@ describe('tablets', () => {
     expect(a.seconds).toBeCloseTo(b.seconds, 9);
   });
 
-  it('modifiers make it harder, and every one of them is a trade', () => {
+  it('modifiers make it harder, and pay for it through the implicit', () => {
     // T1, because it is the only tier this character clears - comparing two runs that
-    // both time out would compare the 75-second cap against itself and pass on nothing.
+    // both time out would compare the cap against itself and pass on nothing.
     const save = atUnlock();
-    const plain = resolveAbyssal(save, plainTablet(1));
-    const modded = resolveAbyssal(save, { ...plainTablet(1), mods: ['teeming', 'gilded'] });
+    const plain = plainTablet(1);
+    const modded: ItemInstance = {
+      ...plain,
+      affixes: [
+        { affixId: 'tablet-bloated', tier: 0, value: 0.15 },
+        { affixId: 'tablet-of-fury', tier: 0, value: 0.07 },
+      ],
+    };
 
-    expect(plain.cleared).toBe(true);
-    expect(modded.seconds).toBeGreaterThan(plain.seconds);
+    expect(resolveAbyssal(save, plain).cleared).toBe(true);
+    expect(resolveAbyssal(save, modded).seconds).toBeGreaterThan(
+      resolveAbyssal(save, plain).seconds,
+    );
+    // And strictly better paid. Danger with no matching reward would be a punishment
+    // nobody would ever apply.
+    expect(tabletReward(modded)!.amount).toBeGreaterThan(tabletReward(plain)!.amount);
+  });
+
+  it('runs waves before the boss, and never heals between them', () => {
+    /*
+      "Limited HP inside; at zero you leave with nothing."
+
+      One pool for the whole run. The assertion that matters is the SECOND one: a tablet
+      whose waves each survive individually but whose total does not must still fail, or
+      the `waves` modifier is a time cost rather than a danger.
+    */
+    const save = atUnlock();
+    const short = plainTablet(1);
+    const long: ItemInstance = {
+      ...short,
+      affixes: [{ affixId: 'tablet-endless', tier: 3, value: 0.5 }],
+    };
+
+    const shortRun = resolveAbyssal(save, short);
+    expect(shortRun.trashPhaseSeconds).toBeGreaterThan(0);
+    expect(shortRun.bossPhaseSeconds).toBeGreaterThan(0);
+
+    const longRun = resolveAbyssal(save, long);
+    expect(longRun.trashPhaseSeconds).toBeGreaterThan(shortRun.trashPhaseSeconds);
+    // More waves against a pool that never refills is strictly more damage taken.
+    expect(longRun.damageTakenFraction).toBeGreaterThan(shortRun.damageTakenFraction);
+  });
+
+  it('gives a longer run a longer clock, and no more', () => {
+    // A deep tablet must fail on difficulty, not on arithmetic - but a per-wave budget
+    // generous enough to be comfortable would retire the timeout for exactly the runs
+    // where it should bite hardest.
+    expect(delveTimeLimit(0)).toBe(STAGE_TIME_LIMIT_SECONDS);
+    expect(delveTimeLimit(8)).toBeGreaterThan(delveTimeLimit(4));
+    // Proportional, so the clock is as binding on a long run as on a short one.
+    const perWave = (delveTimeLimit(8) - delveTimeLimit(0)) / 8;
+    expect((delveTimeLimit(4) - delveTimeLimit(0)) / 4).toBeCloseTo(perWave, 9);
   });
 
   it('the element you bring decides an Abyssal run', () => {
@@ -1850,7 +1946,7 @@ describe('tablets', () => {
     // decoration; if neither does, it is an immunity wearing a different word.
     const save = atUnlock();
     const tablet = plainTablet(2);
-    const depth = abyssalDepth(tablet.tier);
+    const depth = abyssalDepth(tablet.itemLevel);
     const { resists, weakTo } = dungeonAffinity(save.seed, depth);
 
     const shares = (element: typeof resists) => ({
@@ -1896,8 +1992,8 @@ describe('tablets', () => {
         const found = rollAbyssalTablets(6, uid, tier);
         returned += found.length;
         for (const tablet of found) {
-          expect(tablet.tier).toBeGreaterThanOrEqual(tier);
-          expect(tablet.tier).toBeLessThanOrEqual(MAX_TABLET_TIER);
+          expect(tablet.itemLevel).toBeGreaterThanOrEqual(tier);
+          expect(tablet.itemLevel).toBeLessThanOrEqual(MAX_TABLET_TIER);
         }
       }
       expect(returned / runs, `tier ${tier} sustains itself`).toBeLessThan(1);
@@ -1916,7 +2012,7 @@ describe('tablets', () => {
 
   it('sometimes pays the next tier, and never past the last', () => {
     const climbed = Array.from({ length: 200 }, (_, i) => rollAbyssalTablets(7, i + 1, 3)).filter(
-      (found) => found.some((t) => t.tier === 4),
+      (found) => found.some((t) => t.itemLevel === 4),
     ).length;
     expect(climbed).toBeGreaterThan(0);
     expect(climbed).toBeLessThan(200);
@@ -1924,7 +2020,7 @@ describe('tablets', () => {
     // At the ceiling there is nowhere to climb, so every run pays its own tier only.
     for (let uid = 1; uid <= 60; uid++) {
       for (const tablet of rollAbyssalTablets(7, uid, MAX_TABLET_TIER)) {
-        expect(tablet.tier).toBe(MAX_TABLET_TIER);
+        expect(tablet.itemLevel).toBe(MAX_TABLET_TIER);
       }
     }
   });
@@ -1971,16 +2067,21 @@ describe('tablets', () => {
     const hud = getHudSnapshot({ ...save, tablets: held }, T0);
 
     // Deepest first, so the hardest thing a player might still beat is at the top.
-    expect(hud.tablets.map((t) => t.tier)).toEqual([9, 3]);
+    expect(hud.tablets.map((t) => t.itemLevel)).toEqual([9, 3]);
 
-    for (const view of hud.tablets) {
-      const depth = abyssalDepth(view.tier);
+    for (const tablet of held) {
+      const view = hud.tabletRuns[tablet.uid];
+      const depth = abyssalDepth(tablet.itemLevel);
+      expect(view.tier).toBe(tablet.itemLevel);
       expect(view.depth).toBe(depth);
       // The same affinity the fight will actually roll, not a second derivation of it.
       expect({ resists: view.resists, weakTo: view.weakTo }).toEqual(
         dungeonAffinity(save.seed, depth),
       );
-      expect(view.danger).toBeCloseTo(tabletTotals(held.find((t) => t.uid === view.uid)!).danger, 9);
+      expect(view.danger).toBeCloseTo(totalDanger(tablet), 9);
+      // And the same wave count resolveAbyssal will use - the card must not advertise a
+      // shorter run than the one it sells.
+      expect(view.waves).toBeGreaterThanOrEqual(wavesForTier(tablet.itemLevel));
     }
   });
 

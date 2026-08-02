@@ -30,11 +30,11 @@ import {
   DISSEMBLE_YIELD,
   getCurrency,
   isWeaponBase,
-  tabletName,
-  tabletTotals,
+  tabletReward,
   WAVE_RARITY_WEIGHTS,
   type CurrencyId,
   type CurrencyPurse,
+  type TabletPays,
 } from './content';
 import { computeOffline } from './offline';
 import {
@@ -331,7 +331,7 @@ export function applyCommand(
           next.nextItemId = tabletUid + 1;
           const tablet = rollTablet(next.seed, tabletUid, 1);
           next.tablets = [...next.tablets, tablet];
-          events.push({ type: 'tabletFound', tier: tablet.tier, name: tabletName(tablet) });
+          events.push({ type: 'tabletFound', tier: tablet.itemLevel, name: itemName(tablet) });
         }
       } else {
         events.push({
@@ -621,29 +621,40 @@ export function applyCommand(
       // carries: running one at the edge of your power is a decision, not a formality.
       next.tablets = next.tablets.filter((t) => t.uid !== command.uid);
 
+      const tier = Math.max(1, Math.round(tablet.itemLevel));
       const outcome = resolveAbyssal(next, tablet);
       if (!outcome.cleared) {
         events.push({
           type: 'abyssalFailed',
-          tier: tablet.tier,
+          tier,
           reason: outcome.failure === 'timeout' ? 'timeout' : 'died',
         });
         break;
       }
 
-      const { reward } = tabletTotals(tablet);
-      const depth = abyssalDepth(tablet.tier);
+      /*
+        What this tablet pays, and how much.
+
+        ONE axis, from the base, amplified by every explicit on it. That coupling is the
+        mechanic: an explicit is pure downside on its own, so the only reason to apply
+        one is that the implicit pays for it. The previous cut gave each modifier its own
+        reward, which made them interchangeable - every mod was "some danger, some
+        reward" and there was no reason to prefer any of them.
+      */
+      const reward = tabletReward(tablet);
+      const paid = (axis: TabletPays) => (reward?.pays === axis ? reward.amount : 0);
+      const depth = abyssalDepth(tier);
 
       events.push({
         type: 'abyssalCleared',
-        tier: tablet.tier,
+        tier,
         seconds: outcome.seconds,
-        gold: toSave(earn(next, outcome.goldEarned)),
+        gold: toSave(earn(next, outcome.goldEarned.mul(1 + paid('gold')))),
       });
 
       // Items, at the DEPTH the tier fights at rather than at the player's own stage -
       // the whole point of indexing on the tablet is that a T7 pays a T7's item level.
-      const items = Math.max(1, Math.round(ABYSSAL_ITEMS_PER_CLEAR * (1 + reward.items)));
+      const items = Math.max(1, Math.round(ABYSSAL_ITEMS_PER_CLEAR * (1 + paid('quantity'))));
       let lost = 0;
       for (let i = 0; i < items; i++) {
         const uid = next.nextItemId;
@@ -652,7 +663,11 @@ export function applyCommand(
           lost++;
           continue;
         }
-        const item = rollDungeonItem(next.seed, uid, depth);
+        // Rarity raises the item LEVEL rather than reweighting the rarity table. A deeper
+        // roll is a better item on every axis at once - better tiers, more of them - and
+        // it cannot quietly multiply the unique rate the way a reweighting would, which
+        // is the same trap WAVE_RARITY_WEIGHTS exists to avoid.
+        const item = rollDungeonItem(next.seed, uid, Math.round(depth * (1 + paid('rarity'))));
         next.items.push(item);
         events.push({
           type: 'itemDropped',
@@ -665,7 +680,7 @@ export function applyCommand(
 
       const currencyUid = next.nextItemId;
       next.nextItemId = currencyUid + 1;
-      const units = Math.max(1, Math.round(ABYSSAL_CURRENCY_PER_CLEAR * (1 + reward.currency)));
+      const units = Math.max(1, Math.round(ABYSSAL_CURRENCY_PER_CLEAR * (1 + paid('quantity'))));
       for (let i = 0; i < units; i++) {
         const purse = rollDungeonCurrency(next.seed, currencyUid + i);
         next.currency = credit(next.currency, purse);
@@ -679,15 +694,14 @@ export function applyCommand(
         }
       }
 
-      // Tablets last, and ALWAYS at least one of the tier just cleared. A run that paid
-      // none would strand the player with no way back into the mode, and the only
-      // recovery would be climbing the ladder for another T1.
+      // Tablets last, and expected BELOW one - see rollAbyssalTablets. A tablet that
+      // paid for its own replacement would not be a consumable at all.
       const tabletUid = next.nextItemId;
-      for (const found of rollAbyssalTablets(next.seed, tabletUid, tablet.tier)) {
+      for (const found of rollAbyssalTablets(next.seed, tabletUid, tier)) {
         next.nextItemId += 1;
         if (next.tablets.length >= TABLET_CAP) continue;
         next.tablets = [...next.tablets, found];
-        events.push({ type: 'tabletFound', tier: found.tier, name: tabletName(found) });
+        events.push({ type: 'tabletFound', tier: found.itemLevel, name: itemName(found) });
       }
       break;
     }

@@ -139,12 +139,15 @@ export function Game() {
 
       setAbyssOpen(false);
       attemptSeq.current += 1;
+      // A tablet's itemLevel IS its tier - see content/tablets.ts. The replay wants the
+      // depth for the fight and the tier for the banner, and they are different numbers.
+      const tier = Math.max(1, Math.round(tablet.itemLevel));
       setAttempt({
         id: attemptSeq.current,
-        stage: abyssalDepth(tablet.tier),
+        stage: abyssalDepth(tier),
         outcome: resolveAbyssal(current, tablet),
         kind: 'abyssal',
-        tier: tablet.tier,
+        tier,
         tabletUid: uid,
       });
     },
@@ -441,6 +444,7 @@ export function Game() {
         <BottomSheet title="The Abyss" onClose={() => setAbyssOpen(false)}>
           <TabletStash
             tablets={hud.tablets}
+            runs={hud.tabletRuns}
             unlocked={hud.abyss.unlocked}
             unlockStage={hud.abyss.unlockStage}
             cap={hud.abyss.cap}
@@ -706,9 +710,12 @@ function abyssLabel(hud: HudSnapshot): string {
   const held = `${hud.tablets.length} tablet${hud.tablets.length === 1 ? '' : 's'}`;
   if (!hud.abyss.unlocked) return `The Abyss, ${held} — opens at floor ${hud.abyss.unlockStage}`;
   if (hud.tablets.length === 0) {
-    return `The Abyss, no tablets — they drop from stage bosses past floor ${hud.abyss.unlockStage}`;
+    return `The Abyss, no tablets — they drop from monsters past floor ${hud.abyss.unlockStage}`;
   }
-  const deepest = hud.tablets[0];
+  // `tablets` is sorted deepest first, so the head is the hardest thing on the shelf -
+  // which is the one a player is deciding about.
+  const deepest = hud.tabletRuns[hud.tablets[0].uid];
+  if (!deepest) return `The Abyss, ${held}`;
   return `The Abyss, ${held} — deepest is tier ${deepest.tier}, resists ${elementName(deepest.resists)}`;
 }
 
