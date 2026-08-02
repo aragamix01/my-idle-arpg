@@ -34,6 +34,7 @@ import {
   WAVE_RARITY_WEIGHTS,
   type CurrencyId,
   type CurrencyPurse,
+  type ItemInstance,
   type TabletPays,
 } from './content';
 import { computeOffline } from './offline';
@@ -49,7 +50,7 @@ import {
   rollStageBossDrops,
   rollWaveDropCount,
   rollTablet,
-  rollTabletDrop,
+  rollWaveTablets,
   rollAbyssalTablets,
 } from './items';
 import { equipSlots, findItem, keyDropMultiplier } from './stats';
@@ -323,13 +324,17 @@ export function applyCommand(
 
         if (lost > 0) events.push({ type: 'inventoryFull', lost });
 
-        // The ladder is the Abyss's faucet. Rolled off its own stream and granted last,
-        // so adding tablets could not shift a single item or fragment that was already
+        // The wave is the Abyss's faucet. Rolled off its own stream and granted last, so
+        // moving it here could not shift a single item or fragment that was already
         // going to fall.
-        if (rollTabletDrop(next.seed, firstUid, stage) && next.tablets.length < TABLET_CAP) {
+        for (const tier of rollWaveTablets(next.seed, firstUid, stage)) {
           const tabletUid = next.nextItemId;
           next.nextItemId = tabletUid + 1;
-          const tablet = rollTablet(next.seed, tabletUid, 1);
+          // The uid still advances past a tablet the shelf has no room for, exactly like
+          // an item lost to a full inventory: reusing the uid later would make the
+          // replacement roll identically to the one that was dropped.
+          if (next.tablets.length >= TABLET_CAP) continue;
+          const tablet = rollTablet(next.seed, tabletUid, tier);
           next.tablets = [...next.tablets, tablet];
           events.push({ type: 'tabletFound', tier: tablet.itemLevel, name: itemName(tablet) });
         }
@@ -453,10 +458,16 @@ export function applyCommand(
       const held = next.currency[command.currencyId] ?? 0;
       if (held < 1) return err(`you have no ${currency.name}`);
 
-      const index = next.items.findIndex((item) => item.uid === command.uid);
+      // Both shelves. A tablet IS an item and takes the same currency; it just lives in
+      // its own array so it never competes with gear for INVENTORY_CAP or shows up in
+      // an equip slot. Searching one array was what made "most crafting currency works
+      // on a tablet" unbuilt rather than unwritten.
+      const onTablet = !next.items.some((item) => item.uid === command.uid);
+      const shelf = onTablet ? next.tablets : next.items;
+      const index = shelf.findIndex((item) => item.uid === command.uid);
       if (index === -1) return err(`not owned: ${command.uid}`);
 
-      const item = next.items[index];
+      const item = shelf[index];
       // The exact string the craft modal greys the option out with. One rule
       // set, so the UI cannot promise something the server then refuses.
       const illegal = currencyLegality(item, currency, next.loadout.includes(item.uid));
@@ -471,16 +482,21 @@ export function applyCommand(
         uid: item.uid,
       });
 
+      const write = (shelved: ItemInstance[]) => {
+        if (onTablet) next.tablets = shelved;
+        else next.items = shelved;
+      };
+
       if (result.item === null) {
         // A gamble that failed. Nothing to unequip - legality already refused
         // this on an equipped item.
-        next.items = next.items.filter((_, i) => i !== index);
+        write(shelf.filter((_, i) => i !== index));
         events.push({ type: 'itemDestroyed', uid: item.uid });
         break;
       }
 
       const crafted = result.item;
-      next.items = next.items.map((current, i) => (i === index ? crafted : current));
+      write(shelf.map((current, i) => (i === index ? crafted : current)));
       if (result.transmuted) {
         events.push({ type: 'itemTransmuted', uid: crafted.uid, name: itemName(crafted) });
       }

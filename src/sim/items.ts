@@ -44,6 +44,9 @@ import {
   WAVE_DROP_CHANCE,
   WAVE_DROP_MAX,
   TABLET_DROP_CHANCE,
+  TABLETS_PER_WAVE_MAX,
+  TABLET_TIER_STAGES,
+  LADDER_MAX_TABLET_TIER,
   ABYSSAL_TABLET_RETURN_CHANCE,
   ABYSSAL_TIER_UP_CHANCE,
   WEAPON_DROP_SHARE,
@@ -350,14 +353,40 @@ export function rollTablet(accountSeed: number, uid: number, tier: number): Item
 }
 
 /**
- * Whether a stage boss hands over a T1 tablet.
+ * How many tablets the trash wave dropped, and at what tier.
  *
- * Its own stream, so introducing tablets could not shift which fragments or keys a boss
- * was already going to drop - the same discipline the key roll follows by going last.
+ * Walks the kills the same way `rollWaveDropCount` does, and for the same reason: the
+ * model IS "each kill has a chance", the count is bounded at 220, and a closed-form
+ * approximation of the binomial would make the code less honest about what the animation
+ * is showing to save microseconds nobody would notice.
+ *
+ * Its own stream, so moving the faucet here could not shift which items or fragments a
+ * clear was already going to pay - the same discipline every roll in this file follows.
+ *
+ * ## Tier climbs with depth
+ *
+ * A T1 forever would make the ladder's faucet useless the moment a player owned a T3, and
+ * the Abyss the only route upward - which is the stranding problem in a slower form. One
+ * tier per `TABLET_TIER_STAGES` floors past the unlock, so the ladder keeps paying entry
+ * tablets worth entering with. Capped well under MAX_TABLET_TIER: the top of the range is
+ * the Abyss's to hand out, not the ladder's.
  */
-export function rollTabletDrop(accountSeed: number, firstUid: number, stage: number): boolean {
-  if (stage < ABYSS_UNLOCK_STAGE) return false;
-  return createRng(accountSeed).fork(firstUid * TABLET_STREAM).next() < TABLET_DROP_CHANCE;
+export function rollWaveTablets(accountSeed: number, firstUid: number, stage: number): number[] {
+  if (stage < ABYSS_UNLOCK_STAGE) return [];
+  const rng = createRng(accountSeed).fork(firstUid * TABLET_STREAM);
+  const tier = Math.min(
+    LADDER_MAX_TABLET_TIER,
+    1 + Math.floor((stage - ABYSS_UNLOCK_STAGE) / TABLET_TIER_STAGES),
+  );
+
+  const out: number[] = [];
+  for (let i = 0; i < enemyCount(stage); i++) {
+    if (rng.next() < TABLET_DROP_CHANCE) out.push(tier);
+    // Bounded like the wave loot it rides beside, and it stops DRAWING at the cap so the
+    // stream position does not depend on how lucky the roll was.
+    if (out.length >= TABLETS_PER_WAVE_MAX) break;
+  }
+  return out;
 }
 
 /**
@@ -557,6 +586,25 @@ export function currencyLegality(
     if (action.kind !== 'rerollTiers') return 'uniques cannot be modified';
     if (!hasRollableRange(item)) return 'this unique has nothing left to roll';
     return null;
+  }
+
+  /*
+    Tablets take the working stock and refuse the rest.
+
+    Rerolls and rarity upgrades are the whole point - shaping a tablet is buying danger
+    to buy reward. The two refusals are not arbitrary:
+
+    - a SPIRIT trades a prefix row for a suffix row, and on a tablet both halves are
+      monster buffs, so the trade is between two things that hurt you. It would be a
+      permanent, once-per-item decision with no decision in it.
+    - a GAMBLE turns a common into a unique, and there is no such thing as a unique
+      tablet - TABLET_RARITY_WEIGHTS zeroes it because a unique rolls no rows at all.
+      Allowing it would destroy the tablet on a 90% roll and produce nothing on the
+      other 10%.
+  */
+  if (getBase(item.baseId)?.pays) {
+    if (action.kind === 'spirit') return 'a tablet has no rows worth trading';
+    if (action.kind === 'gamble') return 'there is no such thing as a unique tablet';
   }
 
   switch (action.kind) {

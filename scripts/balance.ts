@@ -46,7 +46,7 @@ import {
   rollStageBossDrops,
   rollWaveDropCount,
   rollTablet,
-  rollTabletDrop,
+  rollWaveTablets,
   TABLET_CAP,
   WAVE_RARITY_WEIGHTS,
   STAGE_TIME_LIMIT_SECONDS,
@@ -204,8 +204,12 @@ function takeDrop(save: SaveState, stage: number): SaveState {
   // agent never holds a tablet, runAbyssals never fires, and the golden would model a
   // player who cannot reach a mode the ladder hands out.
   const tablets = [...save.tablets];
-  if (rollTabletDrop(save.seed, firstUid, stage) && tablets.length < TABLET_CAP) {
-    tablets.push(rollTablet(save.seed, uid, 1));
+  // An ARRAY of tiers, one entry per tablet the wave dropped - and an empty array is
+  // truthy, so testing it directly handed the agent a tablet on every clear past the
+  // unlock floor. The harness caught that as a clear-time collapse rather than as a
+  // faucet bug, which is exactly what it is for.
+  for (const tier of rollWaveTablets(save.seed, firstUid, stage)) {
+    if (tablets.length < TABLET_CAP) tablets.push(rollTablet(save.seed, uid, tier));
     uid++;
   }
 

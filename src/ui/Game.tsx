@@ -24,6 +24,8 @@ import {
   resolveDungeon,
   resolveStage,
   rollItem,
+  rollTablet,
+  rollWaveTablets,
   rollWaveDropCount,
   WAVE_RARITY_WEIGHTS,
   STAGE_TIME_LIMIT_SECONDS,
@@ -828,9 +830,29 @@ function OfflineReceiptModal({
  */
 function waveDropSprites(save: SaveState, stage: number): SpriteId[] {
   const count = rollWaveDropCount(save.seed, save.nextItemId, stage);
-  return Array.from({ length: count }, (_, i) =>
+  const items = Array.from({ length: count }, (_, i) =>
     itemSprite(rollItem(save.seed, save.nextItemId + i, stage, WAVE_RARITY_WEIGHTS)),
   ) as SpriteId[];
+
+  /*
+    Tablets fall out of the wave too, and they have to be on screen.
+
+    They are the rarest thing the ladder pays and they arrive in the middle of a wave
+    rather than at the end of it - a tablet that appeared only as a toast would be the
+    one drop a player never actually sees drop. Rolled from the same pure function the
+    server will use, so what falls is what lands on the shelf.
+
+    Appended rather than interleaved: the layer spawns them in order across the trash
+    phase, and the exact position in the sequence is not something either side agrees
+    about anyway.
+  */
+  const tablets = rollWaveTablets(save.seed, save.nextItemId, stage);
+  return [
+    ...items,
+    ...tablets.map((tier) =>
+      itemSprite(rollTablet(save.seed, save.nextItemId + count, tier)),
+    ),
+  ] as SpriteId[];
 }
 
 function summarise(events: SimEvent[]): string[] {

@@ -732,14 +732,46 @@ export const DUNGEON_CURRENCY_PER_CLEAR = { min: 1, max: 2 } as const;
 // --- The Abyss ------------------------------------------------------------
 
 /**
- * Chance a stage boss past the unlock floor drops a T1 tablet.
+ * Chance a single trash kill past the unlock floor drops a tablet.
  *
- * The ladder is the faucet and the Abyss is the sink. At roughly one in eight the first
- * tablet arrives within a few floors of unlocking, and a player who only ever climbs
- * still accumulates them - which matters, because a mode you can only enter by already
- * being in it is a mode most players never see.
+ * A WAVE drop, not a boss reward. The ladder is the faucet and the Abyss is the sink, and
+ * "rare but not hard to obtain given the kill rate" is the shape: one in a thousand kills
+ * against a couple of hundred enemies a clear is roughly one tablet every four or five
+ * floors, arriving in a trickle rather than on a schedule.
+ *
+ * It was a 12% roll on the stage boss, which is the same rate by a different mechanism -
+ * and the wrong one. A boss reward is a thing you are handed for finishing; a wave drop
+ * is a thing you find, and it falls on screen out of the enemy that dropped it like every
+ * other piece of wave loot.
  */
-export const TABLET_DROP_CHANCE = 0.12;
+export const TABLET_DROP_CHANCE = 0.001;
+
+/** Most a single wave may pay, however lucky. Bounded like the wave loot beside it. */
+export const TABLETS_PER_WAVE_MAX = 2;
+
+/**
+ * Floors per tier the LADDER hands out. T2 at 140, T3 at 200.
+ *
+ * Deliberately far slower than `abyssalDepth`'s twelve. **The Abyss owns the tier
+ * ladder** - "clearing a T5 drops T5s and sometimes a T6" is the progression, and a
+ * ladder that matched that rate would make the mode's own tier-up reward pointless.
+ * What the ladder owes is an ENTRY tablet, forever, so running dry is never a wall.
+ */
+export const TABLET_TIER_STAGES = 60;
+
+/**
+ * Highest tier the ladder itself will ever drop.
+ *
+ * Three, and MEASURED rather than chosen. The first cut let it reach eight, which sounds
+ * modest and is not: a T8 pays gear at `abyssalDepth(8)` - floor 164 - so the ladder was
+ * handing out items from far deeper than the player could reach, on top of an Abyssal
+ * gold multiple of five. The harness read it as a clear-time collapse, 10th-percentile
+ * clears at 4.4-6.9s against a 12s floor across three seeds.
+ *
+ * Well under MAX_TABLET_TIER for the design reason too: if climbing alone reached T15,
+ * the tier ladder would be a second name for the stage ladder.
+ */
+export const LADDER_MAX_TABLET_TIER = 3;
 
 /**
  * What an Abyssal clear pays before the tablet's own modifiers.

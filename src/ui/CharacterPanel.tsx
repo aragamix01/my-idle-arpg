@@ -63,8 +63,9 @@ import {
   statEntries,
 } from './format';
 import { ItemMods } from './ItemMods';
+import { TabletTab } from './TabletTab';
 
-type Tab = 'character' | 'inventory' | 'currency';
+type Tab = 'character' | 'inventory' | 'tablets' | 'currency';
 type SortKey = 'newest' | 'rarity' | 'itemLevel' | 'power';
 
 const SORTS: { key: SortKey; label: string }[] = [
@@ -143,6 +144,21 @@ export function CharacterPanel({
    * you pick in Currency and spend in Inventory.
    */
   const [armed, setArmed] = useState<CurrencyId | null>(null);
+  /**
+   * Which shelf arming a currency should send you back to.
+   *
+   * Two things now take currency, and "arm in Currency, spend in Inventory" stopped
+   * being the whole story - a player crafting a run of tablets would be kicked to their
+   * gear on every single application.
+   *
+   * Written where the tab CHANGES rather than derived in an effect: an effect that calls
+   * setState cascades a second render for a value that was already known at the click.
+   */
+  const [lastShelf, setLastShelf] = useState<'inventory' | 'tablets'>('inventory');
+  const openTab = useCallback((next: Tab) => {
+    setTab(next);
+    if (next === 'inventory' || next === 'tablets') setLastShelf(next);
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -167,13 +183,19 @@ export function CharacterPanel({
         aria-label="Character"
       >
         <header className="flex shrink-0 items-center gap-2 border-b border-neutral-800 px-4 py-3">
-          <TabButton active={tab === 'character'} onClick={() => setTab('character')}>
+          <TabButton active={tab === 'character'} onClick={() => openTab('character')}>
             Character
           </TabButton>
-          <TabButton active={tab === 'inventory'} onClick={() => setTab('inventory')}>
+          <TabButton active={tab === 'inventory'} onClick={() => openTab('inventory')}>
             Inventory ({hud.items.length}/{hud.inventoryCap})
           </TabButton>
-          <TabButton active={tab === 'currency'} onClick={() => setTab('currency')}>
+          {/* Its own tab rather than a filter on Inventory: a tablet is never equipped,
+              never dissembled and never sorted by power, so it would spend its life
+              being filtered out of a grid built for gear. */}
+          <TabButton active={tab === 'tablets'} onClick={() => openTab('tablets')}>
+            Tablets ({hud.tablets.length})
+          </TabButton>
+          <TabButton active={tab === 'currency'} onClick={() => openTab('currency')}>
             Currency
           </TabButton>
           <button
@@ -206,14 +228,27 @@ export function CharacterPanel({
               }}
             />
           )}
+          {tab === 'tablets' && (
+            <TabletTab
+              hud={hud}
+              busy={busy}
+              armed={armed}
+              onApplyCurrency={(currencyId, uid) => {
+                onApplyCurrency(currencyId, uid);
+                setArmed(null);
+              }}
+            />
+          )}
           {tab === 'currency' && (
             <CurrencyStash
               purse={hud.currency}
               armed={armed}
               busy={busy}
               onArm={(currencyId) => {
+                // Back to whichever shelf the player was last on, so arming a currency
+                // with the Tablets tab open does not silently move them to gear.
                 setArmed(currencyId);
-                if (currencyId) setTab('inventory');
+                if (currencyId) openTab(lastShelf);
               }}
               onCombine={onCombine}
             />

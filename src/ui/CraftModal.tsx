@@ -48,9 +48,19 @@ interface Props {
   gold: Big;
   equipped: boolean;
   busy: boolean;
-  /** Live character figures, so the effect of an equipped item's roll is visible. */
-  dps: Big;
-  effectiveHp: Big;
+  /**
+   * Live character figures, so the effect of an equipped item's roll is visible.
+   * Absent for anything that cannot be worn - a tablet has no DPS to show.
+   */
+  dps?: Big;
+  effectiveHp?: Big;
+  /**
+   * Whether gold can reroll this. False for a tablet, and not arbitrarily: rerollCost
+   * scales on item level, and a tablet's item level is its TIER of 1-15 - so a T15 would
+   * cost roughly what a stage-15 item costs, which is free at the point anyone is
+   * running the Abyss. Currency is the only price a tablet pays.
+   */
+  rerollable?: boolean;
   onApply: (currencyId: CurrencyId) => void;
   onReroll: () => void;
   onClose: () => void;
@@ -64,6 +74,7 @@ export function CraftModal({
   busy,
   dps,
   effectiveHp,
+  rerollable = true,
   onApply,
   onReroll,
   onClose,
@@ -122,7 +133,7 @@ export function CraftModal({
             <ItemMods item={item} />
           </div>
 
-          {equipped && (
+          {equipped && dps && effectiveHp && (
             <dl className="mt-2 flex gap-4 border-t border-neutral-800 pt-2 text-[11px]">
               <div className="flex gap-1.5">
                 <dt className="text-neutral-500">DPS</dt>
@@ -140,26 +151,30 @@ export function CraftModal({
 
         <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
           {/* Gold sits in the same list as currency deliberately: it is one
-              option among several now, not the only way to change an item. */}
-          <li>
-            <OptionRow
-              sprite="item.coin_purse"
-              name="Gold Reroll"
-              description="Rerolls every modifier except the implicit. There is no way to keep one."
-              // A unique has no gold price at all, and a formatted Infinity reads as a
-              // bug rather than an absence. The refusal below already says why.
-              trailing={goldCost ? `${formatBig(goldCost)}g` : '—'}
-              reason={
-                goldCost === null
-                  ? 'uniques cannot be modified'
-                  : gold.lt(goldCost)
-                    ? `need ${formatBig(goldCost)} gold`
-                    : null
-              }
-              busy={busy}
-              onClick={onReroll}
-            />
-          </li>
+              option among several now, not the only way to change an item.
+              Omitted entirely rather than greyed out where it does not apply - a
+              refusal teaches a rule, and "tablets have no gold price" is not one. */}
+          {rerollable && (
+            <li>
+              <OptionRow
+                sprite="item.coin_purse"
+                name="Gold Reroll"
+                description="Rerolls every modifier except the implicit. There is no way to keep one."
+                // A unique has no gold price at all, and a formatted Infinity reads as a
+                // bug rather than an absence. The refusal below already says why.
+                trailing={goldCost ? `${formatBig(goldCost)}g` : '—'}
+                reason={
+                  goldCost === null
+                    ? 'uniques cannot be modified'
+                    : gold.lt(goldCost)
+                      ? `need ${formatBig(goldCost)} gold`
+                      : null
+                }
+                busy={busy}
+                onClick={onReroll}
+              />
+            </li>
+          )}
 
           {owned.length === 0 && (
             <li className="px-2 py-6 text-center text-xs text-neutral-500">

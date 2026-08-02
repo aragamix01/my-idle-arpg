@@ -76,7 +76,7 @@ import {
   abyssalDepth,
   resolveAbyssal,
   rollTablet,
-  rollTabletDrop,
+  rollWaveTablets,
   rollAbyssalTablets,
   type ItemInstance,
   tabletReward,
@@ -84,6 +84,8 @@ import {
   wavesForTier,
   delveTimeLimit,
   STAGE_TIME_LIMIT_SECONDS,
+  LADDER_MAX_TABLET_TIER,
+  TABLET_TIER_STAGES,
   getHudSnapshot,
   migrateSave,
   rerollCost,
@@ -1965,19 +1967,42 @@ describe('tablets', () => {
     expect(intoWeakness / intoResisted).toBeGreaterThan(3);
   });
 
-  it('the ladder is the faucet, and only past the unlock floor', () => {
+  it('the wave is the faucet, and only past the unlock floor', () => {
     // A mode you can only enter by already being in it is a mode most players never
     // see, so the ladder has to hand out the first one.
-    expect(rollTabletDrop(5, 1, ABYSS_UNLOCK_STAGE - 1)).toBe(false);
+    expect(rollWaveTablets(5, 1, ABYSS_UNLOCK_STAGE - 1)).toEqual([]);
 
+    const clears = 600;
     let dropped = 0;
-    for (let uid = 1; uid <= 600; uid++) {
-      if (rollTabletDrop(5, uid, ABYSS_UNLOCK_STAGE)) dropped++;
+    for (let uid = 1; uid <= clears; uid++) {
+      dropped += rollWaveTablets(5, uid, ABYSS_UNLOCK_STAGE).length;
     }
-    expect(dropped).toBeGreaterThan(0);
-    // Sanity on the rate rather than an exact count: a faucet that opened on every
-    // boss would make the tablet meaningless, one that never opened would be a wall.
-    expect(dropped / 600).toBeLessThan(0.3);
+    // "Rare but not hard to obtain given the kill rate" - a couple of hundred kills a
+    // clear at one in a thousand. Bounds rather than an exact rate: a faucet that opened
+    // every clear would make the tablet meaningless, one that never opened is a wall.
+    expect(dropped / clears).toBeGreaterThan(0.05);
+    expect(dropped / clears).toBeLessThan(0.6);
+  });
+
+  it('pays a deeper tier the deeper you are, up to a ceiling the Abyss owns', () => {
+    // A T1 forever would make the ladder's faucet useless the moment a player owns a T3,
+    // and leave the Abyss as the only route upward - the stranding problem in slow
+    // motion. But it must not reach the top either, or the tier ladder is a second name
+    // for the stage ladder and there is no reason to run the mode for its own tablets.
+    const tierAt = (stage: number) => {
+      for (let uid = 1; uid <= 4000; uid++) {
+        const found = rollWaveTablets(3, uid, stage);
+        if (found.length > 0) return found[0];
+      }
+      throw new Error(`nothing dropped at stage ${stage}`);
+    };
+
+    expect(tierAt(ABYSS_UNLOCK_STAGE)).toBe(1);
+    expect(tierAt(ABYSS_UNLOCK_STAGE + TABLET_TIER_STAGES)).toBe(2);
+    expect(tierAt(300)).toBe(LADDER_MAX_TABLET_TIER);
+    // The ceiling is the load-bearing half. A ladder that reached the top would make the
+    // Abyss's own tier-up reward pointless, and it reads as a clear-time collapse.
+    expect(LADDER_MAX_TABLET_TIER).toBeLessThan(MAX_TABLET_TIER);
   });
 
   it('a tablet is a consumable - a run returns less than it costs', () => {
@@ -2005,7 +2030,7 @@ describe('tablets', () => {
     // stage clears from another, because the ladder never stops being the faucet.
     let dropped = 0;
     for (let uid = 1; uid <= 300; uid++) {
-      if (rollTabletDrop(12, uid, ABYSS_UNLOCK_STAGE + 40)) dropped++;
+      dropped += rollWaveTablets(12, uid, ABYSS_UNLOCK_STAGE + 40).length;
     }
     expect(dropped).toBeGreaterThan(0);
   });
@@ -2023,6 +2048,50 @@ describe('tablets', () => {
         expect(tablet.itemLevel).toBe(MAX_TABLET_TIER);
       }
     }
+  });
+
+  it('takes crafting currency, on its own shelf, and only from the tablet pool', () => {
+    /*
+      "Most crafting currency works on a tablet" - the requirement the whole shape change
+      was for. It works because `applyCurrency` now searches BOTH arrays: a tablet is an
+      item, it just lives apart so it never competes for INVENTORY_CAP or turns up in an
+      equip slot.
+    */
+    const tablet = rollTablet(9, 400, 6);
+    const save: SaveState = {
+      ...atUnlock(),
+      tablets: [tablet],
+      currency: { 'sacred-idol': 1, 'rare-ore': 1, 'bishop-spirit': 1, 'angel-droplet': 1 },
+    };
+
+    const rerolled = applyCommand(save, { type: 'applyCurrency', currencyId: 'sacred-idol', uid: tablet.uid }, T0);
+    expect(rerolled.ok).toBe(true);
+    if (!rerolled.ok) return;
+    // Crafted in place on the tablet shelf, and gear is untouched.
+    expect(rerolled.value.state.items).toEqual(save.items);
+    const crafted = rerolled.value.state.tablets[0];
+    expect(crafted.uid).toBe(tablet.uid);
+    expect(crafted.crafts).toBe(tablet.crafts + 1);
+    // Still only tablet modifiers. A reroll reaching the gear pool is the exact failure
+    // that made the first cut give tablets their own type.
+    for (const rolled of crafted.affixes) {
+      expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).toBe('tablet');
+    }
+    // The suffixes are byte-identical - a targeted reroll is the point of the idols.
+    const suffixes = (item: ItemInstance) =>
+      item.affixes.filter((a) => getAffix(a.affixId)?.kind === 'suffix');
+    expect(suffixes(crafted)).toEqual(suffixes(tablet));
+
+    // Rarity buys rows on a tablet exactly as it does on gear, so the ore is legal.
+    const common: ItemInstance = { ...tablet, rarity: 'common' };
+    expect(currencyLegality(common, getCurrency('rare-ore')!, false)).not.toBeNull();
+    expect(currencyLegality({ ...common, rarity: 'magic' }, getCurrency('rare-ore')!, false)).toBeNull();
+
+    // And the two refusals, each for a stated reason rather than a missing option.
+    expect(currencyLegality(tablet, getCurrency('bishop-spirit')!, false)).toMatch(/rows/);
+    expect(currencyLegality({ ...tablet, rarity: 'common' }, getCurrency('angel-droplet')!, false)).toMatch(
+      /unique tablet/,
+    );
   });
 
   it('spends the tablet on a win and on a loss alike', () => {
