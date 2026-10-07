@@ -33,6 +33,7 @@ import {
   damageShares,
   deriveStats,
   effectiveHp,
+  shieldShare,
   elementalScale,
   equippedGroups,
   goldOnKillBonus,
@@ -156,8 +157,9 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
 
   const ehp = effectiveHp(stats);
   // A loadout can carry toughness conditional on boss fights, so the boss phase
-  // is measured against its own effective HP, expressed as a scale on the pool.
-  const bossIncomingScale = ehp.div(effectiveHp(bossStats));
+  // is measured against its own effective HP, expressed as a scale on the pool. Armour
+  // differs too: a boss hits harder, and armour cuts a big hit by less.
+  const bossIncomingScale = ehp.div(effectiveHp(bossStats, 'boss'));
 
   const trashIncoming = enemyDps(stage).mul(contactCount(stage));
   const bossIncoming = bossDps(stage).mul(bossIncomingScale);
@@ -287,6 +289,19 @@ function resolveDelve(
   // stage, so it is the same every time and can be shown before the tablet is spent.
   const resist = dungeonResistances(save.seed, stage, profile.affinity);
   const ehp = effectiveHp(stats);
+  /*
+    The pool splits into shield and life, and only the shield refills.
+
+    Energy shield is recharged between waves and again before the boss; life is not.
+    Each wave therefore costs life only for what got past a full shield. With no energy
+    shield the split is all life and every number below is exactly what it was before
+    the shield existed.
+
+    Both halves are in the same effective-HP units as `ehp`, so the incoming damage
+    figures below can be compared with them directly.
+  */
+  const shieldPool = ehp.mul(shieldShare(stats));
+  const lifePool = ehp.sub(shieldPool);
 
   /*
     --- The waves -------------------------------------------------------------
@@ -310,7 +325,9 @@ function resolveDelve(
     .mul(1 + danger.damage);
 
   const trashPhaseSeconds = perWaveSeconds * waves;
-  const damageDuringTrash = waveIncoming.mul(trashPhaseSeconds);
+  const perWaveDamage = waveIncoming.mul(perWaveSeconds);
+  const lifeLossPerWave = bigMax(0, perWaveDamage.sub(shieldPool));
+  const damageDuringTrash = lifeLossPerWave.mul(waves);
 
   // --- The boss ----------------------------------------------------------
   const hp = bossHp(stage).mul(profile.hpMult).mul(1 + danger.hp);
@@ -320,35 +337,39 @@ function resolveDelve(
   const bossIncoming = bossDps(stage)
     .mul(profile.dpsMult)
     .mul(1 + danger.damage)
-    .mul(ehp.div(effectiveHp(bossStats)));
-  const damageDuringBoss = bossIncoming.mul(bossPhaseSeconds);
+    .mul(ehp.div(effectiveHp(bossStats, 'boss')));
+  // The shield is full again when the boss arrives, so it soaks the opening of the duel.
+  const damageDuringBoss = bigMax(0, bossIncoming.mul(bossPhaseSeconds).sub(shieldPool));
 
   const totalDamage = damageDuringTrash.add(damageDuringBoss);
   const totalSeconds = trashPhaseSeconds + bossPhaseSeconds;
   const limit = delveTimeLimit(waves);
 
+  // Fractions of LIFE, not of the whole pool: life is what ends the run, so a fraction
+  // that reaches 1 has to mean dead. With no shield the two are the same thing.
   const outcome = {
     trashPhaseSeconds,
     bossPhaseSeconds,
-    damageTakenFraction: totalDamage.div(ehp).toNumber(),
-    trashDamageFraction: damageDuringTrash.div(ehp).toNumber(),
-    bossDamageFraction: damageDuringBoss.div(ehp).toNumber(),
+    damageTakenFraction: totalDamage.div(lifePool).toNumber(),
+    trashDamageFraction: damageDuringTrash.div(lifePool).toNumber(),
+    bossDamageFraction: damageDuringBoss.div(lifePool).toNumber(),
   };
 
-  const diedInWaves = damageDuringTrash.gte(ehp);
-  const died = totalDamage.gte(ehp);
+  const diedInWaves = damageDuringTrash.gte(lifePool);
+  const died = totalDamage.gte(lifePool);
 
   if (died || totalSeconds > limit) {
     // No partial credit, whether you fell in the third wave or on the boss. A delve pays
     // on the clear or not at all - that is what makes spending the key, or the tablet, a
     // decision rather than a formality.
     const survived = diedInWaves
-      ? Math.min(trashPhaseSeconds, ehp.div(bigMax(waveIncoming, 1e-9)).toNumber())
+      ? survivedWaves(lifePool, shieldPool, lifeLossPerWave, waveIncoming, perWaveSeconds, trashPhaseSeconds)
       : died
         ? trashPhaseSeconds +
           Math.min(
             bossPhaseSeconds,
-            ehp.sub(damageDuringTrash).div(bigMax(bossIncoming, 1e-9)).toNumber(),
+            // Whatever life is left, plus the refilled shield in front of it.
+            lifePool.sub(damageDuringTrash).add(shieldPool).div(bigMax(bossIncoming, 1e-9)).toNumber(),
           )
         : totalSeconds;
     const capped = Math.min(survived, limit);
@@ -377,6 +398,29 @@ function resolveDelve(
       // exposure for a boss-sized reward and adding waves is strictly a punishment.
       .add(goldPerTrashKill(save, stage).mul(count).mul(waves).mul(profile.goldMult)),
   };
+}
+
+/**
+ * How long a run that dies in the waves lasted, in seconds.
+ *
+ * Whole waves first - each costs `lifeLossPerWave` once the refilled shield has soaked
+ * its share - then the fatal wave, which has the shield and the remaining life to chew
+ * through. Still a formula: no loop, and with no shield it is exactly the old
+ * `life / incoming`.
+ */
+function survivedWaves(
+  lifePool: Big,
+  shieldPool: Big,
+  lifeLossPerWave: Big,
+  waveIncoming: Big,
+  perWaveSeconds: number,
+  trashPhaseSeconds: number,
+): number {
+  if (lifeLossPerWave.lte(0) || perWaveSeconds <= 0) return trashPhaseSeconds;
+  const wholeWaves = Math.floor(lifePool.div(lifeLossPerWave).toNumber());
+  const left = lifePool.sub(lifeLossPerWave.mul(wholeWaves)).add(shieldPool);
+  const intoFatal = Math.min(perWaveSeconds, left.div(bigMax(waveIncoming, 1e-9)).toNumber());
+  return Math.min(trashPhaseSeconds, wholeWaves * perWaveSeconds + intoFatal);
 }
 
 /**

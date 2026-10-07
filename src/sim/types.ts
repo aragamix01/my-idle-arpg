@@ -62,6 +62,20 @@ export const STAT_KEYS = [
    * affinity produces - stays negative and is not something penetration can deepen.
    */
   'penetration',
+  /*
+    The three defence layers, Phase 7d. Each reduces to a factor on effective HP, so the
+    closed form survives - see effectiveHp in stats.ts for what each one does and why
+    each is a different shape rather than a renamed Max HP.
+
+    All three have a base of ZERO, like penetration, so `increased` is meaningless on
+    them and validateRegistry refuses it.
+  */
+  /** A fraction of Max HP granted as a second pool, which refills between delve waves. */
+  'energyShield',
+  /** A rating. Cuts each hit, more against small hits than big ones. */
+  'armour',
+  /** A rating. A chance to avoid a hit outright, capped. */
+  'evasion',
 ] as const;
 
 export type StatKey = (typeof STAT_KEYS)[number];
@@ -133,7 +147,32 @@ export const BASE_STATS: Stats = {
    * it rejects a flat layer on a stat whose base is already a multiplier.
    */
   penetration: 0,
+  /** Zero, so a save with no defence items derives exactly what it did before 7d. */
+  energyShield: 0,
+  armour: 0,
+  evasion: 0,
 };
+
+/*
+  Defence constants, Phase 7d. Here rather than in stats.ts because items.ts prices a
+  rating against them, and items.ts cannot import stats.ts - stats.ts imports it.
+*/
+/** Evasion rating at which half of all hits are avoided. */
+export const EVASION_K = 100;
+/** Evasion can never make a character untouchable. */
+export const EVASION_CAP = 0.75;
+/** Armour rating at which an ordinary hit is halved. */
+export const ARMOUR_K = 100;
+export const ARMOUR_CAP = 0.9;
+/**
+ * How much bigger a boss's hit is than a trash hit, for armour's purposes.
+ *
+ * This is the whole difference between armour and evasion. Evasion ignores how hard a
+ * hit lands; armour does not, so the same rating that soaks a wave barely dents a boss.
+ * A wave-clearing build wants armour and a boss-killing one wants evasion - the same
+ * area-versus-single-target axis the skills are built on, now on the defence side too.
+ */
+export const BOSS_HIT_SCALE = 4;
 
 /** The stats an equipped skill supplies the base for, instead of BASE_STATS. */
 export const SKILL_BASE_STATS = ['damage', 'attackSpeed', 'critChance', 'area'] as const;

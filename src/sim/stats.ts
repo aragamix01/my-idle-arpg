@@ -30,7 +30,12 @@ import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
   ACCESSORY_SLOTS,
   ACCESSORY_SLOT_KINDS,
+  ARMOUR_CAP,
+  ARMOUR_K,
   BASE_STATS,
+  BOSS_HIT_SCALE,
+  EVASION_CAP,
+  EVASION_K,
   ITEM_SLOTS,
   MAGNITUDE_STAT_KEYS,
   MAX_ITEM_SLOTS,
@@ -503,6 +508,15 @@ function applyLimits(
     stats.penetration = 0;
     if (capped) capped.penetration = 'penetration cannot be negative';
   }
+  // The defence layers floor at zero for the same reason. The ceilings are not here:
+  // they are on what each one ACHIEVES (EVASION_CAP, ARMOUR_CAP in effectiveHp), so a
+  // huge rating is wasted rather than wrong.
+  for (const key of ['energyShield', 'armour', 'evasion'] as const) {
+    if (stats[key] < 0) {
+      stats[key] = 0;
+      if (capped) capped[key] = 'cannot be negative';
+    }
+  }
 
   // Attack speed is capped by what the resource can sustain, and the CAP IS WRITTEN
   // INTO THE STAT rather than applied later in the damage formula.
@@ -705,9 +719,60 @@ export function isResourceBound(stats: Stats, skill: Skill): boolean {
   return sustainedRate(stats, skill) <= stats.attackSpeed * (1 + 1e-9);
 }
 
-/** Effective HP: what the incoming damage pool is actually measured against. */
-export function effectiveHp(stats: Stats): Big {
-  return stats.maxHp.mul(stats.toughness);
+/*
+  The defence layers, Phase 7d.
+
+  Every one of them reduces to a factor on effective HP, which is what keeps combat
+  closed-form: incoming damage is an expected value over a whole phase, so "avoid 20% of
+  hits" and "take 20% less from each" are both a scale on the pool. They differ in SHAPE,
+  not in that.
+
+  Ratings are measured against constants, NOT against the stage. Flat rolls in this game
+  do not grow with depth - a roll sits inside the multiplicative envelope of the upgrade
+  tracks, which is what keeps it relevant - so a rating measured against an exponential
+  enemy hit would be worth nothing by floor 100 and be dead content from then on.
+*/
+
+
+/** Fraction of hits avoided. */
+export function evadeChance(stats: Stats): number {
+  if (stats.evasion <= 0) return 0;
+  return Math.min(EVASION_CAP, stats.evasion / (stats.evasion + EVASION_K));
+}
+
+/** Fraction of each hit armour removes, against trash or against a boss. */
+export function armourCut(stats: Stats, against: 'trash' | 'boss' = 'trash'): number {
+  if (stats.armour <= 0) return 0;
+  const hit = against === 'boss' ? BOSS_HIT_SCALE : 1;
+  return Math.min(ARMOUR_CAP, stats.armour / (stats.armour + ARMOUR_K * hit));
+}
+
+/**
+ * The share of the pool that is energy shield rather than life.
+ *
+ * Energy shield is a fraction of Max HP stacked on top of it, so a character with 0.25
+ * holds a pool 1.25 times their life, of which one fifth is shield. On the ladder that is
+ * all it is - more pool. In a delve it is the part that refills between waves.
+ */
+export function shieldShare(stats: Stats): number {
+  return stats.energyShield / (1 + stats.energyShield);
+}
+
+/**
+ * Effective HP: what the incoming damage pool is actually measured against.
+ *
+ *   (life + shield) x toughness / ((1 - evade) x (1 - armourCut))
+ *
+ * `against` only changes armour - see BOSS_HIT_SCALE. Everything that reads one number
+ * for "how tanky am I" reads the trash figure, which is what a run spends most of its
+ * time taking.
+ */
+export function effectiveHp(stats: Stats, against: 'trash' | 'boss' = 'trash'): Big {
+  const avoided = (1 - evadeChance(stats)) * (1 - armourCut(stats, against));
+  return stats.maxHp
+    .mul(1 + stats.energyShield)
+    .mul(stats.toughness)
+    .div(avoided);
 }
 
 /**

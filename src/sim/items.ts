@@ -62,7 +62,7 @@ import {
   WEAPON_DROP_SHARE,
 } from './curves';
 import { createRng, type Rng } from './rng';
-import { ABYSS_UNLOCK_STAGE, BASE_STATS, MAX_TABLET_TIER } from './types';
+import { ABYSS_UNLOCK_STAGE, ARMOUR_K, BASE_STATS, EVASION_K, MAX_TABLET_TIER } from './types';
 
 /** Arbitrary large odd multiplier, so reroll streams never collide with drops. */
 const REROLL_STREAM = 0x9e3779b1;
@@ -985,6 +985,12 @@ export function itemPower(item: ItemInstance): number {
     // resistance it cancels - so it is worth roughly its own value in damage and is
     // counted directly, like `increased`.
     if (effect.stat === 'penetration') return power + effect.value;
+    // The defence layers have a zero base too. Energy shield is already a fraction of
+    // life; a rating is worth roughly its fraction of the constant it is measured
+    // against, which is what it adds to effective HP while it is small.
+    if (effect.stat === 'energyShield') return power + effect.value;
+    if (effect.stat === 'armour') return power + effect.value / ARMOUR_K;
+    if (effect.stat === 'evasion') return power + effect.value / EVASION_K;
     // The base is a Big for damage and max HP, and a plain number for the rest. Read
     // through Number() because this is a heuristic on the SIZE of a flat roll against
     // its base - both are small here, and a Decimal would buy nothing.

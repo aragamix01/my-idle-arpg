@@ -10,7 +10,7 @@
  * needs a matching step in src/sim/migrate.ts.
  */
 
-import { AFFIXES, IMPLICIT_AFFIXES } from './affixes';
+import { AFFIXES, ALL_PREFIXES, ALL_SUFFIXES, IMPLICIT_AFFIXES } from './affixes';
 import { eligibleAffixes } from '../items';
 import { BASE_AFFIXES, BASES, getBase } from './bases';
 import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
@@ -37,7 +37,8 @@ import { ABYSS_UNLOCK_STAGE, BASE_STATS, MAX_TABLET_TIER } from '../types';
 /** 10: Abyssal tablets - a tier you hold, with modifiers, in its own save array. */
 /** 11: a tablet is an item - rarity for rows, an implicit that pays, explicits that buff monsters. */
 /** 12: accessories - two rings and an amulet, from the Abyss only. */
-export const CONTENT_VERSION = 12;
+/** 13: defence layers - energy shield, armour and evasion, each with an affix. */
+export const CONTENT_VERSION = 13;
 
 export * from './schema';
 export * from './affixes';
@@ -93,6 +94,17 @@ function canCoRoll(a: AffixDefinition, b: AffixDefinition): boolean {
  */
 export function validateRegistry(): { ok: true } | { ok: false; errors: string[] } {
   const errors: string[] = [];
+
+  // An affix's `kind` must match the pool it sits in. The roller picks by POOL and
+  // everything that counts rows reads `kind`, so a prefix filed among the suffixes
+  // rolls into a suffix slot and is then counted as a prefix - an item with more rows
+  // than its rarity allows, which is exactly how Phase 7d's first cut shipped one.
+  for (const affix of ALL_PREFIXES) {
+    if (affix.kind !== 'prefix') errors.push(`${affix.id}: in the prefix pool but kind is ${affix.kind}`);
+  }
+  for (const affix of ALL_SUFFIXES) {
+    if (affix.kind !== 'suffix') errors.push(`${affix.id}: in the suffix pool but kind is ${affix.kind}`);
+  }
 
   const seenAffix = new Set<string>();
   // Implicits go through the identical checks - they share the definition

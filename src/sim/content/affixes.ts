@@ -262,6 +262,45 @@ export const PREFIXES: AffixDefinition[] = [
     tiers: tiers([0.019, 0.029, 0.04, 0.052]),
   },
   ...ELEMENTS.map(extraElementPrefix),
+  /*
+    The three defence layers, Phase 7d. Each is a different SHAPE of defence rather than
+    another name for Max HP - see effectiveHp in stats.ts - and each is flat-only, because
+    all three have a base of zero.
+
+    Split across both halves - these two prefixes here, Of Mist in SUFFIXES - for the
+    reason in the header:
+    a layer that could only roll on one half would cap defence's usable rows on the
+    other, which is how the symmetry invariant has broken every time it broke.
+
+    Sized so one top roll is worth about what one top Of Vigour is, on its own. They are
+    worth MORE in combination - each is its own factor on effective HP rather than a term
+    in a shared sum - and that combination is exactly what the power-budget search
+    measures. The values below are what it settled on, not what the first guess was.
+  */
+  {
+    /**
+     * Armour: cuts each hit, and cuts a boss's bigger hit by less. The wave-clearer's
+     * defence - see BOSS_HIT_SCALE.
+     */
+    id: 'plated',
+    rollsOn: 'gear',
+    kind: 'prefix',
+    nameFragment: 'Plated',
+    effect: { kind: 'statMod', stat: 'armour', op: 'flat' },
+    tiers: tiers([0.8, 1.2, 1.7, 2.2]),
+  },
+  {
+    /**
+     * Energy shield: a fraction of Max HP stacked on top of it. More pool on the
+     * ladder; in a delve, the part of the pool that refills between waves.
+     */
+    id: 'runed',
+    rollsOn: 'gear',
+    kind: 'prefix',
+    nameFragment: 'Runed',
+    effect: { kind: 'statMod', stat: 'energyShield', op: 'flat' },
+    tiers: tiers([0.008, 0.012, 0.017, 0.022]),
+  },
 ];
 
 export const SUFFIXES: AffixDefinition[] = [
@@ -349,6 +388,16 @@ export const SUFFIXES: AffixDefinition[] = [
     effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
     // Must not collide with Vital at any tier.
     tiers: tiers([0.016, 0.025, 0.034, 0.045]),
+  },
+  // The suffix half of the Phase 7d defence layers - see Plated and Runed in PREFIXES.
+  {
+    /** Evasion: a chance to avoid a hit outright, however hard it would have landed. */
+    id: 'of-mist',
+    rollsOn: 'gear',
+    kind: 'suffix',
+    nameFragment: 'of Mist',
+    effect: { kind: 'statMod', stat: 'evasion', op: 'flat' },
+    tiers: tiers([0.8, 1.2, 1.7, 2.2]),
   },
   {
     /**
