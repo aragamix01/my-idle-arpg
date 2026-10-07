@@ -32,19 +32,23 @@ import {
   statsFromWire,
   UPGRADE_TRACKS,
   type Big,
+  type CurrencyId,
   type HudSnapshot,
   type SaveState,
   type UpgradeKey,
   type SimEvent,
   type UpgradeView,
 } from '@/sim';
-import type { AttemptRequest } from '@/render/GameCanvas';
+import type { AttemptRequest, FightReadout } from '@/render/GameCanvas';
 import type { SpriteId } from '@/render/sprites';
 import { AtlasSprite } from './atlasSprite';
-import { CharacterPanel } from './CharacterPanel';
+import { CharacterTab, InventoryTab } from './CharacterScreens';
+import { AbyssCard, CharacterSummary, CurrencyMini, EquipmentTiles, LootFeed, Orb } from './CombatPanels';
+import { CurrencyStash } from './CurrencyStash';
 import { compact, ELEMENT_STYLE, elementName } from './format';
 import { HUD_TICK_MS, useGameStore } from './store';
 import { TabletStash } from './TabletStash';
+import { TabletTab } from './TabletTab';
 
 /**
  * A replay in flight, plus which tablet paid for it.
@@ -65,13 +69,58 @@ const GameCanvas = dynamic(() => import('@/render/GameCanvas').then((m) => m.Gam
 });
 
 export function Game() {
-  const { state, hud, events, pending, error, desynced, bootstrap, send, refreshHud } =
+  const { state, hud, events, feed, pending, error, desynced, bootstrap, send, refreshHud } =
     useGameStore();
   const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [abyssOpen, setAbyssOpen] = useState(false);
+  const [screen, setScreen] = useState<Screen>('combat');
+  /*
+    The idle loop, Phase 7c. Both are per-device preferences, so they live in the
+    browser rather than the save. Read in the initialiser, which is safe here: the
+    first render of this component is the loading screen, so nothing that depends on
+    these is ever part of the server-rendered HTML that hydration compares against.
+  */
+  const [autoAdvance, setAutoAdvance] = useState(() => readPref(AUTO_KEY, 'off') === 'on');
+  const [speed, setSpeed] = useState<Speed>(() => {
+    const stored = Number(readPref(SPEED_KEY, '1'));
+    return SPEEDS.includes(stored as Speed) ? (stored as Speed) : 1;
+  });
+  const [readout, setReadout] = useState<FightReadout | null>(null);
+  /**
+   * Coarsened before it reaches state. The canvas reports eight times a second, and a
+   * re-render for a health bar that moved by a thousandth is a re-render of the whole
+   * shell for nothing.
+   */
+  const onReadout = useCallback((next: FightReadout) => {
+    setReadout((current) =>
+      current &&
+      current.active === next.active &&
+      current.phase === next.phase &&
+      Math.round(current.playerHp * 100) === Math.round(next.playerHp * 100) &&
+      Math.round(current.remaining) === Math.round(next.remaining)
+        ? current
+        : next,
+    );
+  }, []);
+  /**
+   * The currency the stash armed, if any.
+   *
+   * Held by the shell because arming is a cross-SCREEN gesture: you pick in Craft and
+   * spend in the Bag or on a tablet.
+   */
+  const [armed, setArmed] = useState<CurrencyId | null>(null);
+  /**
+   * Which shelf arming a currency sends you back to - two things take currency, and a
+   * player crafting a run of tablets should not be kicked to their gear every time.
+   *
+   * Written where the screen CHANGES rather than derived in an effect: an effect that
+   * calls setState cascades a second render for a value already known at the click.
+   */
+  const [lastShelf, setLastShelf] = useState<'bag' | 'abyss'>('bag');
+  const openScreen = useCallback((next: Screen) => {
+    setScreen(next);
+    if (next === 'bag' || next === 'abyss') setLastShelf(next);
+  }, []);
   const attemptSeq = useRef(0);
   const [receipt, setReceipt] = useState<OfflineReceipt | null>(null);
   /**
@@ -139,7 +188,6 @@ export function Game() {
       const tablet = current.tablets.find((t) => t.uid === uid);
       if (!tablet) return;
 
-      setAbyssOpen(false);
       attemptSeq.current += 1;
       // A tablet's itemLevel IS its tier - see content/tablets.ts. The replay wants the
       // depth for the fight and the tier for the banner, and they are different numbers.
@@ -168,6 +216,23 @@ export function Game() {
     }
     void send({ type: finished?.kind === 'dungeon' ? 'attemptDungeon' : 'attemptStage' });
   }, [attempt, send]);
+
+  /*
+    Auto-advance: when a replay has been committed and nothing else is in flight, the
+    next stage attempt starts by itself.
+
+    Stages only. A dungeon spends a key and the Abyss spends a tablet, and spending a
+    consumable is never something the game does on the player's behalf. A failed stage
+    is retried rather than skipped - the sim leaves currentStage where it was, so the
+    next attempt is the same floor again, which is what "keep trying" means.
+
+    The pause is there so the result line is readable before the next wave covers it.
+  */
+  useEffect(() => {
+    if (!autoAdvance || attempt !== null || pending || !state) return;
+    const id = setTimeout(startAttempt, AUTO_PAUSE_MS);
+    return () => clearTimeout(id);
+  }, [autoAdvance, attempt, pending, state, startAttempt]);
 
   useEffect(() => {
     void bootstrap();
@@ -202,6 +267,17 @@ export function Game() {
     void send({ type: 'claimOffline' }).then(() => setReceipt(captured));
   }, [hud, send]);
 
+  // Escape steps back to the fight from any other screen - the one way out that works the
+  // same on every screen and does not depend on finding a button.
+  useEffect(() => {
+    if (screen === 'combat') return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !document.querySelector('[aria-modal="true"]')) setScreen('combat');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [screen]);
+
   // The throttled HUD channel. Gold accrues continuously; ten updates a second
   // is plenty for numbers a human reads, and costs nothing next to a 60Hz
   // React re-render over the same data.
@@ -223,7 +299,7 @@ export function Game() {
   const stats = statsFromWire(hud.stats);
 
   const upgradeGrid = (
-    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {hud.upgrades.map((upgrade) => (
         <UpgradeButton
           key={upgrade.key}
@@ -237,15 +313,9 @@ export function Game() {
     </div>
   );
 
-  /*
-    Rendered twice - once in the desktop bar, once in the sheet - so the id has to
-    be per-instance. With a shared one the DOM held two `#buy-amount` elements, the
-    `for` attribute bound to whichever came first, and on a phone that was the
-    hidden desktop copy: the label pointed at a control nobody could see.
-  */
   const buyPicker = (id: string) => (
-    <div className="flex items-center gap-2 text-xs">
-      <label htmlFor={id} className="text-neutral-400">
+    <div className="flex items-center gap-2 normal-case">
+      <label htmlFor={id} className="px-label">
         Buy
       </label>
       <select
@@ -254,7 +324,7 @@ export function Game() {
         onChange={(e) =>
           setBuyAmount(e.target.value === 'max' ? 'max' : (Number(e.target.value) as BuyAmount))
         }
-        className="rounded border border-neutral-700 bg-neutral-900 px-3 py-1.5 font-mono text-neutral-100"
+        className="px-slot min-h-9 px-2 font-mono text-lg text-neutral-100"
       >
         {BUY_AMOUNTS.map((amount) => (
           <option key={String(amount)} value={String(amount)}>
@@ -265,131 +335,163 @@ export function Game() {
     </div>
   );
 
-  /*
-    Three fixed rows: status, arena, controls. Nothing overlaps anything.
+  const busy = pending || attempt !== null;
+  const applyArmed = (currencyId: CurrencyId, uid: string) => {
+    void send({ type: 'applyCurrency', currencyId, uid });
+    // Disarm after one use. Leaving it armed turns the next inspecting click into an
+    // accidental craft.
+    setArmed(null);
+  };
 
-    The canvas used to be `absolute inset-0` with the whole UI floating over it,
-    which is why the phone screenshot has spiders crawling through the upgrade
-    text and the action row hidden behind Safari's chrome. The fight now owns a
-    bounded row and every surface below it is opaque.
+  /*
+    The fight is ALWAYS mounted, and every other screen is drawn over it.
+
+    Unmounting the canvas on a screen change would kill a replay half way - and the
+    command is only sent when the replay ends, so the attempt would simply be lost. Hiding
+    it with display:none is no better: Pixi sizes itself to its host, and a host with no
+    size hands the cosmetic layer a zero-width arena. Covering it costs one hidden canvas,
+    which is what an idle game that keeps fighting while you shop is supposed to do.
   */
-  return (
-    <main className="flex h-[100dvh] flex-col overflow-hidden bg-neutral-950 text-neutral-100">
-      <header
-        className="shrink-0 border-b border-neutral-800 bg-neutral-950/95 px-3 pb-2"
-        style={{ paddingTop: 'max(0.5rem, env(safe-area-inset-top))' }}
-      >
-        <div className="flex items-center gap-2">
-          {/*
-            One horizontally scrollable rail rather than a wrapping grid. Six
-            chips cannot fit a phone width, and wrapping them pushed the arena
-            down by a whole row at exactly the moment a number got longer.
-          */}
-          <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <Stat label="gold" value={formatBig(gold)} />
-            <Stat label="gold/s" value={formatBig(fromSave(hud.goldPerSecond))} />
-            <Stat label="stage" value={String(hud.currentStage)} />
-            <Stat label="best" value={String(hud.bestStage)} />
-            <Stat label="dmg" value={formatBig(stats.damage)} />
-            <Stat label="kills/s" value={compact(rate)} />
+  const combat = (
+    <div className="flex h-full gap-3 lg:p-3">
+      <div className="hidden w-[300px] shrink-0 lg:flex">
+        <CharacterSummary
+          hud={hud}
+          onOpenBag={() => openScreen('bag')}
+          onOpenCharacter={() => openScreen('character')}
+        />
+      </div>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-0 lg:gap-3">
+        <section className="px-frame flex items-center gap-4 px-4 py-2.5 max-lg:border-x-0 max-lg:border-t-0">
+          <div className="flex shrink-0 flex-col leading-tight">
+            <span className="px-label">Next floor</span>
+            <span className="font-label text-lg text-neutral-100 px-shadow">Floor {hud.currentStage}</span>
+          </div>
+          <dl className="ml-auto flex gap-4 text-right">
+            <HeaderStat label="Best" value={String(hud.bestStage)} />
+            <HeaderStat label="Gold/s" value={formatBig(fromSave(hud.goldPerSecond))} />
+            <HeaderStat label="Kills/s" value={compact(rate)} />
+          </dl>
+        </section>
+
+        {/* `min-h-0` is what lets the fight shrink rather than push the controls off
+            screen - a flex child defaults to its content size. */}
+        <section className="relative min-h-0 flex-1 border-y-4 border-ink shadow-[inset_0_0_0_2px_#4a3a26] lg:border-4" aria-label="Fight">
+          <GameCanvas
+            killsPerSecond={rate}
+            // A formatter rather than a number. Damage is a Big and the cosmetic layer
+            // is deliberately kept on bounded values - handing it the raw stat would put
+            // `Infinity` in the floating combat text the moment the ladder ran deep.
+            hitLabel={(jitter) => formatBig(stats.damage.mul(jitter))}
+            attacksPerSecond={stats.attackSpeed}
+            stage={Math.max(1, hud.bestStage || 1)}
+            stageTimeLimit={STAGE_TIME_LIMIT_SECONDS}
+            attempt={attempt}
+            speed={speed}
+            onAttemptComplete={finishAttempt}
+            onReadout={onReadout}
+          />
+
+          {/* The idle controls sit ON the fight, where the thing they change is. */}
+          <div className="absolute inset-x-2 top-9 flex items-start justify-between gap-2">
+            <button
+              type="button"
+              aria-pressed={autoAdvance}
+              onClick={() => {
+                const next = !autoAdvance;
+                setAutoAdvance(next);
+                writePref(AUTO_KEY, next ? 'on' : 'off');
+              }}
+              title="Start the next stage automatically when a fight ends"
+              className="px-btn min-h-10 text-[10px]"
+            >
+              <span
+                className={`h-3 w-3 border-2 border-ink ${autoAdvance ? 'bg-emerald-400' : 'bg-neutral-800'}`}
+                aria-hidden
+              />
+              Auto
+            </button>
+            <div className="flex gap-1" role="group" aria-label="Fight speed">
+              {SPEEDS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={speed === option}
+                  onClick={() => {
+                    setSpeed(option);
+                    writePref(SPEED_KEY, String(option));
+                  }}
+                  className="px-btn min-h-10 min-w-10 px-2 font-mono text-lg normal-case"
+                >
+                  x{option}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* In the flow, not absolutely positioned - it used to sit on top of
-              the stage chip on a narrow screen. */}
-          <button
-            type="button"
-            onClick={() => setPanelOpen(true)}
-            aria-label="Character"
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-500/50 bg-neutral-900 px-2.5 py-2 text-sm font-medium text-amber-100 active:bg-neutral-800 sm:px-3"
-          >
-            <AtlasSprite id="player.knight" scale={2} />
-            <span className="hidden sm:inline">Character</span>
-            {hud.items.length > 0 && (
-              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">
-                {hud.items.length}
-              </span>
-            )}
-          </button>
-        </div>
-      </header>
-
-      {/* The arena. `min-h-0` is what lets it shrink rather than pushing the
-          controls off screen - a flex child defaults to its content size. */}
-      <div className="relative min-h-0 flex-1">
-        <GameCanvas
-          killsPerSecond={rate}
-          // A formatter rather than a number. Damage is a Big and the cosmetic layer
-          // is deliberately kept on bounded values - handing it the raw stat would put
-          // `Infinity` in the floating combat text the moment the ladder ran deep.
-          // The renderer owns the jitter; the UI owns how a magnitude reads.
-          hitLabel={(jitter) => formatBig(stats.damage.mul(jitter))}
-          attacksPerSecond={stats.attackSpeed}
-          stage={Math.max(1, hud.bestStage || 1)}
-          stageTimeLimit={STAGE_TIME_LIMIT_SECONDS}
-          attempt={attempt}
-          onAttemptComplete={finishAttempt}
-        />
-
-        {/* Toasts float INSIDE the arena, bottom-anchored, so they never
-            displace a control. They are the one thing allowed to overlap the
-            canvas, because they are about what just happened on it. */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-1 p-2">
-          {error && (
-            <p className="rounded bg-neutral-950/90 px-2 py-1 text-xs text-amber-400">
-              {error}
-              {desynced && ' — resynced'}
-            </p>
-          )}
-          {summarise(events)
-            .slice(-2)
-            .map((line, i) => (
-              <p key={i} className="rounded bg-neutral-950/90 px-2 py-1 text-xs text-neutral-300">
-                {line}
+          {/* Toasts float INSIDE the fight, bottom-anchored, so they never displace a
+              control. They are about what just happened on it. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-1 p-2">
+            {error && (
+              <p className="bg-ink/90 px-2 py-1 text-xs text-amber-400">
+                {error}
+                {desynced && ' — resynced'}
               </p>
-            ))}
-        </div>
-      </div>
+            )}
+            {summarise(events)
+              .slice(-2)
+              .map((line, i) => (
+                <p key={i} className="bg-ink/85 px-2 py-1 text-xs text-neutral-300">
+                  {line}
+                </p>
+              ))}
+          </div>
+        </section>
 
-      {/* Desktop has the vertical room to keep the tracks on screen; a phone
-          does not, and the same grid renders in the sheet below. */}
-      <div className="hidden shrink-0 flex-col gap-2 border-t border-neutral-800 px-3 py-2 lg:flex">
-        {buyPicker('buy-amount-inline')}
-        {upgradeGrid}
-      </div>
-
-      <footer
-        className="shrink-0 border-t border-neutral-800 bg-neutral-950 px-3 pt-2"
-        style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
-      >
-        <div className="flex gap-2">
-          {/* The primary action takes the width it deserves: it is the thing a
-              player taps hundreds of times, and it belongs under the thumb. */}
+        <section className="px-frame flex items-center gap-2 p-2.5 max-lg:border-x-0" aria-label="Actions">
+          {/*
+            Life, live. The fraction comes from the replay - the same split of damage the
+            sim resolved - and the number is that fraction of Max HP. Full while idle,
+            because farming costs no health; it only moves when a fight is on.
+          */}
+          <Orb
+            fraction={readout?.playerHp ?? 1}
+            label={formatBig(stats.maxHp.mul(readout?.playerHp ?? 1))}
+            // The shield rides on top of life, so it is quoted under it rather than given
+            // an orb of its own that would sit full for every fight that never reaches it.
+            sub={stats.energyShield > 0 ? `+${formatBig(stats.maxHp.mul(stats.energyShield))} ES` : undefined}
+            tone="life"
+            size={64}
+          />
+          {/* The primary action takes the width it deserves: it is the thing a player
+              taps hundreds of times, and it belongs under the thumb. */}
           <button
             type="button"
-            disabled={pending || attempt !== null}
+            disabled={busy}
             onClick={startAttempt}
-            className="min-h-12 flex-1 rounded-lg bg-neutral-100 px-4 text-sm font-semibold text-neutral-900 active:bg-neutral-300 disabled:opacity-40"
+            className="px-btn px-btn-gold min-h-12 flex-1 text-xs"
           >
-            {/* A dungeon replay disables this button too, so it must not
-                claim a stage fight is under way while a duel is on screen. */}
+            {/* A dungeon replay disables this button too, so it must not claim a stage
+                fight is under way while a duel is on screen. */}
             {attempt ? replayLabel(attempt) : `Attempt stage ${hud.currentStage}`}
           </button>
 
           <button
             type="button"
-            disabled={pending || attempt !== null || keys < 1 || hud.bestStage < 1}
+            disabled={busy || keys < 1 || hud.bestStage < 1}
             onClick={startDungeon}
             aria-label={dungeonLabel(keys, hud.dungeon)}
             title={dungeonLabel(keys, hud.dungeon)}
-            className="flex min-h-12 items-center gap-1.5 rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 text-sm text-amber-100 disabled:opacity-40"
+            className="px-btn min-h-12"
           >
             <AtlasSprite id="currency.dungeon_key" scale={1.5} />
-            <span className="font-mono text-xs">{keys}</span>
-            {/* The affinity is on the BUTTON, not behind a tooltip, because a key is
-                spent whether the run is won or lost. Two coloured letters is the most
-                this row can carry, and it is enough to say "bring cold, not fire". */}
+            <span className="font-mono text-lg normal-case">{keys}</span>
+            {/* The affinity is on the BUTTON, not behind a tooltip, because a key is spent
+                whether the run is won or lost. Two coloured letters is enough to say
+                "bring cold, not fire". */}
             {hud.dungeon && (
-              <span className="font-mono text-[10px] leading-none">
+              <span className="font-mono text-base leading-none">
                 <span className={ELEMENT_STYLE[hud.dungeon.weakTo]}>
                   {hud.dungeon.weakTo[0].toUpperCase()}
                 </span>
@@ -402,78 +504,349 @@ export function Game() {
           </button>
 
           {/*
-            The Abyss opens the shelf rather than starting a run, because which tablet
-            to spend IS the decision - tier, modifiers and affinity all differ per
-            tablet, and there is no sensible default to pick on the player's behalf.
-
-            Enabled even when locked and even at zero tablets: the surface behind it is
-            where both of those are explained, and a disabled button explains nothing.
+            The Abyss opens its screen rather than starting a run, because which tablet to
+            spend IS the decision. Enabled even when locked and even at zero tablets: the
+            screen behind it is where both of those are explained.
           */}
           <button
             type="button"
-            disabled={pending || attempt !== null}
-            onClick={() => setAbyssOpen(true)}
+            disabled={busy}
+            onClick={() => openScreen('abyss')}
             aria-label={abyssLabel(hud)}
             title={abyssLabel(hud)}
-            className="flex min-h-12 items-center gap-1.5 rounded-lg border border-violet-500/60 bg-violet-500/10 px-3 text-sm text-violet-100 disabled:opacity-40"
+            className="px-btn px-btn-void min-h-12"
           >
-            <span aria-hidden>▼</span>
-            <span className="font-mono text-xs">{hud.tablets.length}</span>
+            <TabletGlyph />
+            <span className="font-mono text-lg normal-case">{hud.tablets.length}</span>
           </button>
+        </section>
 
-          <button
-            type="button"
-            onClick={() => setSheetOpen(true)}
-            className="flex min-h-12 items-center rounded-lg border border-neutral-700 px-3 text-sm lg:hidden"
-          >
-            Upgrades
-          </button>
+        {/* A phone has no right column, so the last few lines of the feed sit here. */}
+        <section className="max-h-36 overflow-hidden border-t-2 border-ink bg-neutral-950 px-3 lg:hidden" aria-label="Recent loot">
+          <LootFeed feed={feed} limit={3} />
+        </section>
+      </div>
+
+      <aside className="hidden w-[320px] shrink-0 flex-col gap-3 lg:flex">
+        <section className="px-frame flex min-h-0 flex-1 flex-col">
+          <div className="px-head">
+            <span>Loot</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 scrollbar-none">
+            <LootFeed feed={feed} />
+          </div>
+        </section>
+        <CurrencyMini purse={hud.currency} onOpen={() => openScreen('craft')} />
+        <AbyssCard hud={hud} busy={busy} onOpen={() => openScreen('abyss')} />
+      </aside>
+    </div>
+  );
+
+  const screenBody = (() => {
+    switch (screen) {
+      case 'character':
+        return (
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
+            <Panel title="Equipment">
+              <div className="flex flex-col items-center gap-4 p-4">
+                <div className="px-slot grid h-28 w-28 place-items-center shadow-[inset_0_0_0_2px_#4a3a26]">
+                  <AtlasSprite id="player.knight" scale={6} />
+                </div>
+                <EquipmentTiles hud={hud} onPick={() => openScreen('bag')} size="lg" />
+                <p className="text-center text-sm text-neutral-500">
+                  Tap a slot to manage it in the Bag.
+                </p>
+              </div>
+            </Panel>
+            <Panel title="Stats">
+              <div className="p-4">
+                <CharacterTab state={state} hud={hud} />
+              </div>
+            </Panel>
+          </div>
+        );
+      case 'bag':
+        return (
+          <Panel title={`Bag · ${hud.items.length}/${hud.inventoryCap}`}>
+            <div className="p-3 sm:p-4">
+              <InventoryTab
+                state={state}
+                hud={hud}
+                busy={pending}
+                armed={armed}
+                onEquip={(slot, itemId) => void send({ type: 'equipItem', slot, itemId })}
+                onEquipWeapon={(itemId) => void send({ type: 'equipWeapon', itemId })}
+                onEquipAccessory={(slot, itemId) => void send({ type: 'equipAccessory', slot, itemId })}
+                onReroll={(uid) => void send({ type: 'rerollItem', uid })}
+                onDissemble={(uids) => void send({ type: 'dissembleItems', uids })}
+                onApplyCurrency={applyArmed}
+              />
+            </div>
+          </Panel>
+        );
+      case 'craft':
+        return (
+          <Panel title="Currency stash">
+            <div className="p-3 sm:p-4">
+              <CurrencyStash
+                purse={hud.currency}
+                armed={armed}
+                busy={pending}
+                onArm={(currencyId) => {
+                  // Back to whichever shelf the player was last on, so arming a currency
+                  // while crafting tablets does not silently move them to gear.
+                  setArmed(currencyId);
+                  if (currencyId) openScreen(lastShelf);
+                }}
+                onCombine={(currencyId) => void send({ type: 'combineFragments', currencyId })}
+              />
+            </div>
+          </Panel>
+        );
+      case 'abyss':
+        return (
+          <div className="grid gap-3 lg:grid-cols-2">
+            <Panel title="Descend" tone="void">
+              <div className="p-3 sm:p-4">
+                <TabletStash
+                  tablets={hud.tablets}
+                  runs={hud.tabletRuns}
+                  unlocked={hud.abyss.unlocked}
+                  unlockStage={hud.abyss.unlockStage}
+                  cap={hud.abyss.cap}
+                  busy={busy}
+                  onDescend={(uid) => {
+                    // Back to the fight, which is where the run plays out.
+                    openScreen('combat');
+                    startAbyssal(uid);
+                  }}
+                />
+              </div>
+            </Panel>
+            <Panel title="Tablets" tone="void">
+              <div className="p-3 sm:p-4">
+                <TabletTab hud={hud} busy={pending} armed={armed} onApplyCurrency={applyArmed} />
+              </div>
+            </Panel>
+          </div>
+        );
+      case 'upgrades':
+        return (
+          <Panel title="Upgrades" trailing={buyPicker('buy-amount')}>
+            <div className="p-3 sm:p-4">{upgradeGrid}</div>
+          </Panel>
+        );
+      default:
+        return null;
+    }
+  })();
+
+  return (
+    <main className="flex h-[100dvh] flex-col overflow-hidden bg-abyss text-neutral-200">
+      <header
+        className="shrink-0 border-b-4 border-ink bg-[#120e0b] shadow-[inset_0_-2px_0_#4a3a26]"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
+        <div className="flex h-14 items-center gap-3 px-3 lg:h-16 lg:gap-5 lg:px-4">
+          <div className="flex items-center gap-2">
+            <SigilGlyph />
+            <span className="font-label text-base font-bold tracking-widest text-gold px-shadow lg:text-xl">
+              Idle ARPG
+            </span>
+          </div>
+
+          <nav className="ml-3 hidden gap-1.5 lg:flex" aria-label="Screens">
+            {SCREENS.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => openScreen(entry.id)}
+                aria-current={screen === entry.id ? 'page' : undefined}
+                className={`px-btn ${entry.id === 'abyss' ? 'px-btn-blood' : ''}`}
+              >
+                {entry.label}
+                {entry.id === 'bag' && (
+                  <span className="font-mono text-base normal-case text-neutral-400">
+                    {hud.items.length}/{hud.inventoryCap}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-3 lg:gap-5">
+            <span className="flex items-center gap-1.5" title="Gold">
+              <CoinGlyph />
+              <span className="font-mono text-xl text-gold-bright lg:text-2xl">{formatBig(gold)}</span>
+            </span>
+            <span className="hidden items-center gap-1.5 sm:flex" title="Dungeon keys">
+              <AtlasSprite id="currency.dungeon_key" scale={1} />
+              <span className="font-mono text-xl">{keys}</span>
+            </span>
+          </div>
         </div>
+      </header>
 
-        {/* The Claim button used to live here. Offline gold is credited on arrival
-            now, so there is nothing left to claim - see the receipt effect above. */}
-      </footer>
+      <div className="relative min-h-0 flex-1">
+        {combat}
+        {screen !== 'combat' && (
+          <div className="absolute inset-0 z-20 overflow-y-auto bg-abyss p-0 sm:p-3" role="region" aria-label={screenTitle(screen)}>
+            {screenBody}
+          </div>
+        )}
+      </div>
+
+      {/* A phone gets one screen at a time and a tab bar under the thumb. */}
+      <nav
+        className="flex shrink-0 border-t-4 border-ink bg-[#120e0b] shadow-[inset_0_2px_0_#4a3a26] lg:hidden"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+        aria-label="Screens"
+      >
+        {SCREENS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            onClick={() => openScreen(entry.id)}
+            aria-current={screen === entry.id ? 'page' : undefined}
+            // The full name, so a screen reader and the test suite address the same control
+            // on both layouts - the short word is only there to fit a phone's width.
+            aria-label={entry.label}
+            className={`flex min-h-[60px] flex-1 flex-col items-center justify-center gap-1 font-label text-[9px] uppercase ${
+              screen === entry.id ? 'bg-neutral-800 text-gold-bright' : 'text-neutral-500'
+            }`}
+          >
+            <NavGlyph id={entry.id} />
+            {entry.short}
+          </button>
+        ))}
+      </nav>
 
       {receipt && <OfflineReceiptModal receipt={receipt} onClose={() => setReceipt(null)} />}
-
-      {sheetOpen && (
-        <BottomSheet title="Upgrades" trailing={buyPicker('buy-amount-sheet')} onClose={() => setSheetOpen(false)}>
-          {upgradeGrid}
-        </BottomSheet>
-      )}
-
-      {abyssOpen && (
-        <BottomSheet title="The Abyss" onClose={() => setAbyssOpen(false)}>
-          <TabletStash
-            tablets={hud.tablets}
-            runs={hud.tabletRuns}
-            unlocked={hud.abyss.unlocked}
-            unlockStage={hud.abyss.unlockStage}
-            cap={hud.abyss.cap}
-            busy={pending || attempt !== null}
-            onDescend={startAbyssal}
-          />
-        </BottomSheet>
-      )}
-
-      {panelOpen && (
-        <CharacterPanel
-          state={state}
-          hud={hud}
-          busy={pending}
-          onEquip={(slot, itemId) => void send({ type: 'equipItem', slot, itemId })}
-          onEquipWeapon={(itemId) => void send({ type: 'equipWeapon', itemId })}
-          onEquipAccessory={(slot, itemId) =>
-            void send({ type: 'equipAccessory', slot, itemId })
-          }
-          onReroll={(uid) => void send({ type: 'rerollItem', uid })}
-          onDissemble={(uids) => void send({ type: 'dissembleItems', uids })}
-          onApplyCurrency={(currencyId, uid) => void send({ type: 'applyCurrency', currencyId, uid })}
-          onCombine={(currencyId) => void send({ type: 'combineFragments', currencyId })}
-          onClose={() => setPanelOpen(false)}
-        />
-      )}
     </main>
+  );
+}
+
+type Screen = 'combat' | 'character' | 'bag' | 'craft' | 'abyss' | 'upgrades';
+
+const SPEEDS = [1, 2, 4] as const;
+type Speed = (typeof SPEEDS)[number];
+const AUTO_KEY = 'arpg.auto.v1';
+const SPEED_KEY = 'arpg.speed.v1';
+/** Real milliseconds between one committed fight and the next auto-started one. */
+const AUTO_PAUSE_MS = 700;
+
+/** A per-device preference. Storage can be blocked or absent; the default wins then. */
+function readPref(key: string, fallback: string): string {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writePref(key: string, value: string): void {
+  try {
+    globalThis.localStorage?.setItem(key, value);
+  } catch {
+    // Not remembered on this device. The setting still applies for this visit.
+  }
+}
+
+const SCREENS: { id: Screen; label: string; short: string }[] = [
+  { id: 'combat', label: 'Combat', short: 'Fight' },
+  { id: 'character', label: 'Character', short: 'Hero' },
+  { id: 'bag', label: 'Bag', short: 'Bag' },
+  { id: 'craft', label: 'Craft', short: 'Craft' },
+  { id: 'abyss', label: 'Abyss', short: 'Abyss' },
+  { id: 'upgrades', label: 'Upgrades', short: 'Upgrade' },
+];
+
+function screenTitle(screen: Screen): string {
+  return SCREENS.find((entry) => entry.id === screen)?.label ?? 'Combat';
+}
+
+function Panel({
+  title,
+  trailing,
+  tone = 'stone',
+  children,
+}: {
+  title: string;
+  trailing?: React.ReactNode;
+  tone?: 'stone' | 'void';
+  children: React.ReactNode;
+}) {
+  return (
+    <section className={`${tone === 'void' ? 'px-frame-void' : 'px-frame'} min-w-0`}>
+      <div className={`px-head ${tone === 'void' ? 'bg-[#1c1220] text-void-bright' : ''}`}>
+        <h2>{title}</h2>
+        {trailing}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function HeaderStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col leading-tight">
+      <dt className="px-label">{label}</dt>
+      <dd className="font-mono text-xl text-neutral-100">{value}</dd>
+    </div>
+  );
+}
+
+/*
+  Glyphs. Inline stroke-free pixel SVGs, `currentColor` where a glyph should follow the
+  text it sits beside. Emoji are not used anywhere: they ignore the text colour and are a
+  different shape on every platform.
+*/
+function SigilGlyph() {
+  return (
+    <svg viewBox="0 0 8 8" className="h-7 w-7" shapeRendering="crispEdges" aria-hidden>
+      <rect x="3" y="0" width="2" height="8" fill="#b0221c" />
+      <rect x="1" y="2" width="6" height="2" fill="#b0221c" />
+      <rect x="3" y="0" width="1" height="8" fill="#e04434" />
+      <rect x="3" y="6" width="2" height="2" fill="#5e1a16" />
+    </svg>
+  );
+}
+
+function CoinGlyph() {
+  return (
+    <svg viewBox="0 0 6 6" className="h-5 w-5" shapeRendering="crispEdges" aria-hidden>
+      <rect x="1" y="0" width="4" height="6" fill="#d4a24c" />
+      <rect x="0" y="1" width="6" height="4" fill="#d4a24c" />
+      <rect x="2" y="1" width="1" height="3" fill="#f6d27a" />
+    </svg>
+  );
+}
+
+function TabletGlyph() {
+  return (
+    <svg viewBox="0 0 8 8" className="h-5 w-5" shapeRendering="crispEdges" aria-hidden>
+      <rect x="1" y="0" width="6" height="8" fill="#3a1a2e" />
+      <rect x="2" y="2" width="4" height="4" fill="#9a3aa8" />
+      <rect x="3" y="3" width="2" height="2" fill="#e08af0" />
+    </svg>
+  );
+}
+
+function NavGlyph({ id }: { id: Screen }) {
+  const rects: Record<Screen, [number, number, number, number][]> = {
+    combat: [[6, 0, 2, 1], [5, 1, 2, 1], [4, 2, 2, 1], [3, 3, 2, 1], [1, 3, 1, 2], [2, 4, 2, 1], [0, 6, 2, 2]],
+    character: [[1, 1, 6, 2], [1, 4, 6, 2], [1, 3, 1, 1], [6, 3, 1, 1], [1, 6, 2, 1], [5, 6, 2, 1]],
+    bag: [[2, 0, 4, 2], [1, 2, 6, 6]],
+    craft: [[4, 0, 1, 2], [2, 2, 4, 2], [1, 4, 6, 3]],
+    abyss: [[1, 0, 6, 2], [1, 6, 6, 2], [1, 2, 2, 4], [5, 2, 2, 4], [3, 3, 2, 2]],
+    upgrades: [[3, 0, 2, 1], [2, 1, 4, 1], [1, 2, 6, 1], [3, 3, 2, 5]],
+  };
+  return (
+    <svg viewBox="0 0 8 8" className="h-5 w-5" shapeRendering="crispEdges" aria-hidden fill="currentColor">
+      {rects[id].map(([x, y, w, h], i) => (
+        <rect key={i} x={x} y={y} width={w} height={h} />
+      ))}
+    </svg>
   );
 }
 
@@ -561,17 +934,17 @@ function UpgradeButton({
         // min-h-14 is a thumb target, not a decoration: these were 3-line cards
         // whose tap area happened to be large. Now they are two lines and the
         // height is stated rather than inherited from the text.
-        'flex min-h-14 flex-col items-start justify-center gap-0.5 rounded-lg border px-3 py-2 text-left transition',
+        'flex min-h-16 flex-col items-start justify-center gap-0.5 border-2 border-ink px-3 py-2 text-left shadow-[inset_2px_2px_0_#54422b,inset_-2px_-2px_0_#120e0b]',
         upgrade.maxed
-          ? 'border-neutral-800 bg-neutral-900 text-neutral-500'
+          ? 'bg-neutral-900 text-neutral-500'
           : plan.affordable
-            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-100 active:bg-emerald-500/30'
-            : 'border-neutral-800 bg-neutral-900 text-neutral-400',
+            ? 'bg-[#3a2c14] text-gold-bright hover:bg-[#4a3818] active:bg-[#2a2010]'
+            : 'bg-neutral-900 text-neutral-400',
         blocked ? 'cursor-not-allowed' : 'cursor-pointer',
       ].join(' ')}
     >
       <span className="flex w-full items-baseline gap-1.5">
-        <span className="truncate text-sm font-medium">{upgrade.label}</span>
+        <span className="truncate font-label text-xs uppercase">{upgrade.label}</span>
         {/* The effect line is what a player reads once and never again, so it
             drops off the narrow layout rather than wrapping the card taller. */}
         <span className="ml-auto shrink-0 font-mono text-[11px] text-neutral-500">
@@ -582,94 +955,10 @@ function UpgradeButton({
       <span className="hidden text-[11px] text-neutral-400 sm:block">
         {effectText(upgrade.key)}
       </span>
-      <span className="font-mono text-[11px]">
+      <span className="font-mono text-base">
         {upgrade.maxed ? 'MAX' : `${plan.cost ? formatBig(plan.cost) : '—'}g`}
       </span>
     </button>
-  );
-}
-
-/**
- * A pull-up sheet for controls that do not fit a phone screen.
- *
- * A sheet rather than a modal: it is anchored to the bottom edge, so the
- * controls inside land under a thumb rather than in the middle of the screen
- * where the upgrade grid used to sit. The backdrop closes it, and so does
- * Escape, because a sheet that can only be dismissed by an X is a trap on a
- * device with no visible cursor.
- */
-function BottomSheet({
-  title,
-  trailing,
-  onClose,
-  children,
-}: {
-  title: string;
-  trailing?: React.ReactNode;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-40 flex flex-col justify-end bg-black/60"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        className="max-h-[80dvh] overflow-y-auto rounded-t-2xl border-t border-neutral-700 bg-neutral-950 shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
-      >
-        {/* Sticky, so the buy multiplier stays reachable while the list scrolls -
-            picking 'Max' and then hunting back up for the track is the exact
-            trip this avoids. */}
-        <div className="sticky top-0 flex items-center gap-3 border-b border-neutral-800 bg-neutral-950 px-3 py-3">
-          <span className="h-1 w-10 shrink-0 rounded-full bg-neutral-700" aria-hidden />
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <div className="ml-auto flex items-center gap-3">
-            {trailing}
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="rounded px-2 py-1 text-neutral-400 active:bg-neutral-800"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-        <div className="p-3">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * One figure in the status rail.
- *
- * Stacked rather than inline: `gold 302.67k` on one line is wide, and six wide
- * chips are what forced the header to wrap into two ragged rows on a phone.
- * Label above value halves the width and reads faster at a glance.
- */
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="shrink-0 rounded bg-neutral-900 px-2 py-1">
-      <div className="text-[10px] uppercase leading-tight tracking-wide text-neutral-500">
-        {label}
-      </div>
-      <div className="font-mono text-sm leading-tight">{value}</div>
-    </div>
   );
 }
 
@@ -783,18 +1072,18 @@ function OfflineReceiptModal({
       role="presentation"
     >
       <div
-        className="w-full max-w-xs rounded-lg border border-neutral-700 bg-neutral-950 p-5 shadow-2xl"
+        className="px-frame w-full max-w-xs p-5"
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label="Welcome back"
       >
-        <p className="text-xs uppercase tracking-wide text-neutral-500">Welcome back</p>
+        <p className="font-label text-sm uppercase tracking-wide text-gold">Welcome back</p>
         <p className="mt-1 text-sm text-neutral-300">
           You were away {describeDuration(receipt.seconds)}
         </p>
 
-        <p className="mt-4 font-mono text-2xl text-emerald-300">+{formatBig(receipt.gold)}</p>
+        <p className="mt-4 font-mono text-4xl text-gold-bright">+{formatBig(receipt.gold)}</p>
         <p className="text-[11px] text-neutral-500">
           gold, farmed at stage {receipt.stage}
         </p>
@@ -811,7 +1100,7 @@ function OfflineReceiptModal({
           type="button"
           onClick={onClose}
           autoFocus
-          className="mt-4 min-h-11 w-full rounded-lg bg-neutral-100 text-sm font-semibold text-neutral-900 active:bg-neutral-300"
+          className="px-btn px-btn-gold mt-4 w-full"
         >
           Continue
         </button>

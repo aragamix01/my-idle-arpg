@@ -11,6 +11,7 @@
 
 import { create } from 'zustand';
 import type { GameStateResponse } from '@/contract';
+import { feedFrom, loadFeed, saveFeed, type FeedEntry } from './feed';
 import { applyCommand, getHudSnapshot, type Command, type HudSnapshot, type SaveState, type SimEvent } from '@/sim';
 
 /** HUD refresh rate. Sixty would be wasted work on numbers nobody can read that fast. */
@@ -42,6 +43,8 @@ interface GameStore {
   error: string | null;
   /** True when the server rejected an optimistic prediction and we resynced. */
   desynced: boolean;
+  /** Drops and results, newest first. See feed.ts. */
+  feed: FeedEntry[];
 
   bootstrap: () => Promise<void>;
   send: (command: Command) => Promise<void>;
@@ -69,12 +72,13 @@ export const useGameStore = create<GameStore>()((set, get) => ({
   pending: false,
   error: null,
   desynced: false,
+  feed: [],
 
   bootstrap: async () => {
     set({ pending: true });
     try {
       const response = (await fetch('/api/state').then((r) => r.json())) as GameStateResponse;
-      set({ ...adopt(response), pending: false });
+      set({ ...adopt(response), pending: false, feed: loadFeed() });
     } catch (error) {
       set({ pending: false, error: error instanceof Error ? error.message : 'failed to load' });
     }
@@ -118,7 +122,11 @@ export const useGameStore = create<GameStore>()((set, get) => ({
         return;
       }
 
-      set({ ...adopt(payload), pending: false, desynced: false });
+      // Fed from the SERVER's events, never the optimistic prediction's. Both carry the
+      // same drops, and appending both would list every item twice.
+      const feed = feedFrom(payload.events, payload.state, get().feed);
+      saveFeed(feed);
+      set({ ...adopt(payload), pending: false, desynced: false, feed });
     } catch (error) {
       set({ pending: false, error: error instanceof Error ? error.message : 'request failed' });
     }

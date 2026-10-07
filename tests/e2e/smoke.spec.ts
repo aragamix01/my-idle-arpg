@@ -45,6 +45,22 @@ async function dismissReceipt(page: Page) {
   }
 }
 
+/**
+ * Switch to a screen through the nav, and return that screen.
+ *
+ * Phase 7a replaced the Character modal with screens drawn over the fight, so what used
+ * to be a dialog is now a region named for its screen. Two navs exist - a top bar and a
+ * phone tab bar - and only one is displayed at a time, so the role query finds the one
+ * the viewport is actually showing.
+ */
+async function openScreen(page: Page, label: 'Combat' | 'Character' | 'Bag' | 'Craft' | 'Abyss' | 'Upgrades') {
+  await page
+    .getByRole('navigation', { name: 'Screens' })
+    .getByRole('button', { name: new RegExp(`^${label}`) })
+    .click();
+  return page.getByRole('region', { name: label, exact: true });
+}
+
 /** Next's dev overlay and asset 404s are noisy; only real page errors matter. */
 function collectErrors(messages: ConsoleMessage[]): string[] {
   return messages
@@ -84,15 +100,15 @@ test('the render loop actually advances', async ({ page }) => {
   await page.waitForFunction(() => '__stageVisual' in globalThis, undefined, { timeout: 15_000 });
 
   // A mounted canvas proves nothing - a dead ticker looks identical from the
-  // DOM. Sample the cosmetic layer twice and require movement.
+  // DOM. Sample the cosmetic layer's own clock twice and require it to advance.
+  // The hero used to roam, so its position was the signal; in the side view it
+  // holds its ground, and a still hero is the layer working, not stalling.
   const moved = await page.evaluate(async () => {
-    const visual = (globalThis as { __stageVisual?: { player: { x: number; y: number } } })
-      .__stageVisual;
+    const visual = (globalThis as { __stageVisual?: { clock: number } }).__stageVisual;
     if (!visual) return 'no visual handle';
-    const first = { ...visual.player };
+    const first = visual.clock;
     await new Promise((resolve) => setTimeout(resolve, 500));
-    const second = { ...visual.player };
-    return first.x !== second.x || first.y !== second.y ? 'moved' : 'static';
+    return visual.clock > first ? 'moved' : 'static';
   });
 
   expect(moved).toBe('moved');
@@ -220,6 +236,7 @@ test('an attempt plays through wave, entrance, boss, then commits', async ({ pag
 
 test('every upgrade track is rendered', async ({ page }) => {
   await page.goto('/');
+  await openScreen(page, 'Upgrades');
 
   // Guards the loop over UPGRADE_KEYS. A track added to curves.ts with no
   // EFFECT_NOUNS entry would render "undefined" rather than fail loudly.
@@ -286,6 +303,7 @@ test('idle gold accrues even when the browser clock is wrong', async ({ page }) 
 
 test('the buy multiplier applies to every track', async ({ page }) => {
   await page.goto('/');
+  await openScreen(page, 'Upgrades');
 
   const damage = page.getByRole('button', { name: /^Damage/ });
   const health = page.getByRole('button', { name: /^Health/ });
@@ -299,8 +317,10 @@ test('the buy multiplier applies to every track', async ({ page }) => {
   await page.getByLabel('Buy').selectOption('1');
   await expect(damage).not.toHaveText(/\+10/);
 
+  await openScreen(page, 'Combat');
   await page.getByRole('button', { name: /Attempt stage/ }).click();
   await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
+  await openScreen(page, 'Upgrades');
 
   // Max buys as many levels as the gold covers, which after one clear is
   // several - the point being it is more than the single level 1x would buy.
@@ -338,28 +358,26 @@ test('fits a phone without scrolling, and every control stays reachable', async 
     expect(box!.height, `${name} is too small to tap`).toBeGreaterThanOrEqual(40);
   }
 
-  // The tracks live in a pull-up sheet on a phone rather than eating the screen.
-  await expect(page.getByRole('dialog', { name: 'Upgrades' })).toHaveCount(0);
-  await page.getByRole('button', { name: /^Upgrades$/ }).click();
+  // The tracks live on their own screen, one tab away, rather than eating the fight.
+  await expect(page.getByRole('region', { name: 'Upgrades', exact: true })).toHaveCount(0);
+  const screen = await openScreen(page, 'Upgrades');
+  await expect(screen).toBeVisible();
+  await expect(screen.getByLabel('Buy')).toBeVisible();
 
-  const sheet = page.getByRole('dialog', { name: 'Upgrades' });
-  await expect(sheet).toBeVisible();
-  await expect(sheet.getByLabel('Buy')).toBeVisible();
-
-  const damage = sheet.getByRole('button', { name: /^Damage/ });
+  const damage = screen.getByRole('button', { name: /^Damage/ });
   const box = await damage.boundingBox();
   expect(box!.y + box!.height).toBeLessThanOrEqual(812);
 
-  // And it closes, or the sheet is a trap on a device with no Escape key.
-  await sheet.getByRole('button', { name: 'Close' }).click();
-  await expect(sheet).toHaveCount(0);
+  // And the tab bar is still there to leave by, or the screen is a trap on a device
+  // with no Escape key.
+  await openScreen(page, 'Combat');
+  await expect(screen).toHaveCount(0);
 });
 
 test('the character panel shows every stat and the empty inventory', async ({ page }) => {
   await page.goto('/');
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
+  const panel = await openScreen(page, 'Character');
   await expect(panel).toBeVisible();
 
   // Every label in STAT_LABELS must appear. A stat added to STAT_KEYS without
@@ -390,16 +408,17 @@ test('the character panel shows every stat and the empty inventory', async ({ pa
   await panel.getByRole('button', { name: /Damage/ }).first().click();
   await expect(panel.getByText('base', { exact: true })).toBeVisible();
 
-  await panel.getByRole('button', { name: /^Inventory/ }).click();
-  await expect(panel.getByText(/No items yet/)).toBeVisible();
-  // Four slots, all empty on a fresh account.
-  await expect(panel.getByText('empty', { exact: true })).toHaveCount(4);
-
   await expect(panel.getByText('undefined')).toHaveCount(0);
   await expect(panel.getByText('NaN')).toHaveCount(0);
 
+  const bag = await openScreen(page, 'Bag');
+  await expect(bag.getByText(/No items yet/)).toBeVisible();
+  // Four slots, all empty on a fresh account.
+  await expect(bag.getByText('empty', { exact: true })).toHaveCount(4);
+
+  // Escape steps back to the fight from any screen.
   await page.keyboard.press('Escape');
-  await expect(panel).toBeHidden();
+  await expect(bag).toBeHidden();
 });
 
 test('the inventory grid selects, filters and sorts', async ({ page }) => {
@@ -415,9 +434,7 @@ test('the inventory grid selects, filters and sorts', async ({ page }) => {
     });
   }
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
-  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  const panel = await openScreen(page, 'Bag');
 
   const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
   const total = await tiles.count();
@@ -490,9 +507,7 @@ test('a weapon says what its skill costs to use', async ({ page }) => {
 
   const baseName = WEAPON_BASES.find((b) => b.id === baseId)!.name;
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
-  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  const panel = await openScreen(page, 'Bag');
   await panel.locator(`[aria-label="Item grid"] button[title*="${baseName}"]`).first().click();
 
   // The cost, and the regen it demands. Neither alone is actionable: deriveStats
@@ -530,16 +545,13 @@ test('the craft modal explains what it refuses, and applies what it allows', asy
   await page.reload();
   await dismissReceipt(page);
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
-
   // The stash lists every currency, including ones held at zero - an empty
   // slot is how a player learns what exists.
-  await panel.getByRole('button', { name: 'Currency', exact: true }).click();
-  await expect(panel.getByRole('list', { name: 'Currency' }).getByText('Magic Ore')).toBeVisible();
-  await expect(panel.getByRole('list', { name: 'Spirits' }).getByText('Dune Spirit')).toBeVisible();
+  const stash = await openScreen(page, 'Craft');
+  await expect(stash.getByRole('list', { name: 'Currency' }).getByText('Magic Ore')).toBeVisible();
+  await expect(stash.getByRole('list', { name: 'Spirits' }).getByText('Dune Spirit')).toBeVisible();
 
-  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  const panel = await openScreen(page, 'Bag');
   const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
   await tiles.first().click();
 
@@ -583,9 +595,7 @@ test('the craft modal shows the mods and stays open across rolls', async ({ page
   await page.reload();
   await dismissReceipt(page);
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
-  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  const panel = await openScreen(page, 'Bag');
 
   const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
   await tiles.first().click();
@@ -652,9 +662,7 @@ test('dissembling a common yields a fragment without a confirmation', async ({ p
   await page.reload();
   await dismissReceipt(page);
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
-  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  const panel = await openScreen(page, 'Bag');
 
   // Filter to commons rather than trusting the first tile. Rarity is rolled,
   // and an earlier version of this test passed alone and failed in the suite
@@ -676,8 +684,8 @@ test('dissembling a common yields a fragment without a confirmation', async ({ p
   // The fragment it melted down to is in the stash. Asserted on the count
   // rather than the combine button's label, which switches from "N/10" to
   // "Combine (N)" once ten have accumulated.
-  await panel.getByRole('button', { name: 'Currency', exact: true }).click();
-  const shards = panel.getByRole('list', { name: 'Fragments' });
+  const stash = await openScreen(page, 'Craft');
+  const shards = stash.getByRole('list', { name: 'Fragments' });
   await expect(shards.getByText('Magic Ore Shard')).toBeVisible();
   await expect(shards.getByText(/^x[1-9]\d*$/).first()).toBeVisible();
 });
@@ -710,12 +718,9 @@ test('fragments combine into ore, and the ore upgrades a common', async ({ page 
   await page.reload();
   await dismissReceipt(page);
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
-  await panel.getByRole('button', { name: 'Currency', exact: true }).click();
-
-  const stash = panel.getByRole('list', { name: 'Currency' });
-  const fragments = panel.getByRole('list', { name: 'Fragments' });
+  const craft = await openScreen(page, 'Craft');
+  const stash = craft.getByRole('list', { name: 'Currency' });
+  const fragments = craft.getByRole('list', { name: 'Fragments' });
 
   await expect(stash.getByText('Magic Ore')).toBeVisible();
   await expect(stash.getByText('x0')).not.toHaveCount(0);
@@ -724,8 +729,9 @@ test('fragments combine into ore, and the ore upgrades a common', async ({ page 
   await fragments.getByRole('button', { name: /^Combine/ }).first().click();
   await expect(stash.getByText('Magic Ore').locator('..')).toContainText('x1');
 
-  // Arm it, which switches to the inventory, then click a common.
+  // Arm it, which switches to the Bag, then click a common.
   await stash.getByRole('button', { name: /Magic Ore/ }).click();
+  const panel = page.getByRole('region', { name: 'Bag', exact: true });
   await expect(panel.getByText(/Magic Ore armed/)).toBeVisible();
 
   await panel.getByRole('button', { name: 'Common', exact: true }).click();
@@ -834,7 +840,7 @@ test('the Abyss says why it is shut', async ({ page }) => {
   await expect(abyss).toHaveAccessibleName(/opens at floor 80/);
 
   await abyss.click();
-  const sheet = page.getByRole('dialog', { name: 'The Abyss' });
+  const sheet = page.getByRole('region', { name: 'Abyss', exact: true });
   await expect(sheet).toBeVisible();
   await expect(sheet).toContainText(/The Abyss opens at floor 80/);
   // And where the first one comes from, which is the other half of a shut door.
@@ -862,9 +868,7 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
   await page.reload();
   await dismissReceipt(page);
 
-  await page.getByRole('button', { name: /^Character/ }).click();
-  const panel = page.getByRole('dialog', { name: 'Character' });
-  await panel.getByRole('button', { name: /^Inventory/ }).click();
+  const panel = await openScreen(page, 'Bag');
 
   const tiles = panel.getByRole('list', { name: 'Item grid' }).getByRole('button');
   const total = await tiles.count();
@@ -940,13 +944,14 @@ test('multi-select dissembles exactly what was picked', async ({ page }) => {
 test('progress survives a reload', async ({ page }) => {
   await page.goto('/');
 
-  const upgrade = page.getByRole('button', { name: /^Damage/ });
-  await expect(upgrade).toBeVisible();
-  const before = await upgrade.textContent();
-
   // Stage 1 is beatable from a fresh save, so this pays for the first upgrade.
   await page.getByRole('button', { name: /Attempt stage/ }).click();
   await expect(page.getByText(/cleared stage 1/)).toBeVisible({ timeout: REPLAY_TIMEOUT });
+
+  await openScreen(page, 'Upgrades');
+  const upgrade = page.getByRole('button', { name: /^Damage/ });
+  await expect(upgrade).toBeVisible();
+  const before = await upgrade.textContent();
 
   await upgrade.click();
   await expect(upgrade).not.toHaveText(before ?? '');
@@ -955,5 +960,6 @@ test('progress survives a reload', async ({ page }) => {
   // The real assertion: the server persisted it, not just the local store.
   await page.reload();
   await dismissReceipt(page);
+  await openScreen(page, 'Upgrades');
   await expect(page.getByRole('button', { name: /^Damage/ })).toHaveText(after ?? '');
 });

@@ -6,7 +6,8 @@ the queue and shipped as 5a-1 and 5a-2, and it is why weapons-and-skills now sit
 front of the uniques - a skill supplies the base that every modifier multiplies, so
 uniques authored first would be authored twice.
 
-Order:  1 -> 5a-1 -> 5a-2 -> 6a -> 6b -> 2 -> 5a-3 -> 3 -> 4 -> 5b -> 5c
+Order:  1 -> 5a-1 -> 5a-2 -> 6a -> 6b -> 2 -> 5a-3 -> 3 -> 4 -> 5b -> 7 -> 5c
+        (7 absorbs 5c's panel: the upgrade screen is built in 7a)
 
 Status: [done] shipped and verified  [next] in progress or up next  [todo] not started
 
@@ -417,6 +418,113 @@ are.
 - Each track now declares which layer it feeds, so the panel can say "7% more
   damage" for a compounding track and "+0.25 targets" for a flat one - it already
   does, but the panel is otherwise unchanged from before layers existed
+
+
+## [next] Phase 7 - The UI rebuild
+> Spoken decisions, 2026-10-07, from the design canvas
+> (https://claude.ai/artifact/5B6deigS1XJL8vsMfouxBB):
+> - **Dark fantasy, pixel.** Path of Exile / Diablo, not the Vampire Survivors look
+> - **The fight is a SIDE VIEW**, rewritten: hero on the left, monsters walk in from the
+>   right, the boss walks in last. The top-down swarm goes
+> - **What the canvas invented becomes real**: auto-advance, x1/x2/x4 speed, a loot feed,
+>   a live life orb, energy shield, armour, evasion
+> - **Upgrades get their own screen** - the canvas left them out
+
+The canvas is a mockup and is WRONG about the game in places. Real data wins:
+
+- Gear is a weapon + the derived gear slots (4, charms like Whetstone) + 2 rings + 1
+  amulet. The canvas's helm/chest/gloves/boots do not exist
+- The resource is stamina or mana, named by the weapon - the canvas's "rage" is stamina
+- Stats are the ones `statEntries` lists. Armour/evasion/energy shield arrive in 7d or
+  not at all - nothing shows a number the sim does not produce
+
+### 7a - Shell and theme
+- Pixel fonts through next/font: Silkscreen for labels and buttons, Pixelify Sans for
+  body, VT323 for numbers (`font-mono`)
+- The palette is a REMAP of Tailwind's neutral scale to warm stone, and radius to 0. Every
+  existing surface turns dark-fantasy at once; components then move to the frame/button
+  primitives in globals.css as they are touched, not in one sweep
+- Screens, not one modal: Combat, Character, Bag, Craft, Abyss, Upgrades. Desktop has a
+  top nav and a three-column Combat screen (character / fight / loot); a phone has a
+  bottom tab bar and one screen at a time
+- The Character modal dissolves into those screens. The armed currency lifts to the
+  shell, because arming is now a cross-SCREEN gesture (arm in Craft, spend in Bag)
+
+### 7b - The side-view fight
+- `StageVisual` keeps its contract with Game (attempt in, onAttemptComplete out) and its
+  test harness; the geometry changes from an orbit in a field to a lane on a floor
+- Brick wall and floor from the existing tile sheet. Enemies queue from the right and
+  step up to the hero; area decides how many the swing reaches
+- Health bars over enemies, floating numbers, the boss walks in last
+
+### 7c - The idle loop
+- Auto-advance: when a replay ends, the next attempt starts by itself. A failure stays on
+  the stage (retries) rather than advancing. Client-side - attempts already are
+- Speed x1/x2/x4 scales the replay's playback rate. Display only: the outcome is resolved
+  before the replay starts, so speed cannot change what happens
+- Loot feed: drops from command events, newest first, kept in the browser between visits
+
+### What shipped in 7a-7c, and where it moved off the plan above
+- Fonts and the neutral remap as planned. VT323 sits small next to Pixelify at the same
+  size, so `.font-mono` carries `font-size-adjust` rather than every size class changing
+- The Character modal is gone: `CharacterScreens.tsx` exports its tabs, and the shell
+  draws each screen as a `region` over the fight. The fight is NEVER unmounted - doing
+  so mid-replay loses the attempt, and display:none hands Pixi a zero-size arena
+- Phone tab labels are short (Fight, Hero, ..., Upgrade) but carry the full screen name
+  as their accessible name, so tests and screen readers address one control on both
+  layouts
+- Side view: everything in the cosmetic layer is a FOOT position on one floor line, and
+  sprites anchor at their base. The boss walks in from the right instead of falling; the
+  survivors leave to the right. A stage wave is topped up to 28 queued off-screen so it
+  marches in; idle keeps ~14 on the floor
+- Speed is extra cosmetic STEPS per frame, not a bigger dt - a bigger step let homing
+  drops overshoot the hero
+- Auto-advance waits 700ms after a commit so the result line is readable. Stages only;
+  never spends a key or a tablet. A failure retries the same floor
+- The life orb is the replay's `playerHp` x Max HP, pushed out of the ticker at 8Hz and
+  coarsened before it reaches React. Full while idle - farming costs no health
+- Loot feed: from the SERVER's events only (the optimistic prediction carries the same
+  drops and would double them), 40 entries, localStorage
+
+### 7d - Defence: energy shield, armour, evasion
+> Spoken decisions, 2026-10-07: **three real layers**, and **hold today's pace** - the new
+> stats arrive through affixes and existing values are trimmed so the ladder stays where it
+> is, measured over four seeds.
+
+- **Energy shield** is a second pool on top of life. On the ladder it is simply more pool.
+  In the Abyss it REFILLS between waves and life does not - so it has a niche rather than
+  being a renamed Max HP
+- **Armour** cuts each hit: `armour / (armour + k x hit(stage))`. Strong against small hits,
+  fading as hits grow with depth unless it is kept up - a defence you maintain, where Max
+  HP is one you bank
+- **Evasion** is a chance to avoid a hit, `evasion / (evasion + k x accuracy(stage))`,
+  capped at 75%. In expected values it scales incoming damage by `1 - chance`
+- **Toughness stays** as the gold upgrade track. It is the `more` layer that keeps defence
+  exponential against exponential enemy damage - the same reason the README gives for every
+  uncapped track
+- All three reduce to the closed form: incoming x (1 - evade) x (1 - armourCut), against a
+  pool of (life + shield) x toughness. No per-hit loop
+- Offence/defence symmetry must hold on rows: the new affixes split across prefix AND
+  suffix, or defence loses rows to offence again - the fault that has broken three times
+
+#### 7d status, 2026-10-07: implemented, pacing PARKED (do not merge as-is)
+- Shipped in code: the three stats (types/stats/combat), Plated + Runed (prefix, gear) and
+  Of Mist (suffix, gear), CONTENT_VERSION 13, tests/defence.test.ts
+- Armour is NOT `k x hit(stage)` as written above: it uses constants, ARMOUR_K against
+  trash and ARMOUR_K x BOSS_HIT_SCALE against a boss. Evasion is `evasion / (evasion +
+  EVASION_K)`, no stage term
+- Bug found and fixed: Plated/Runed sat in SUFFIXES, so items rolled 3 prefixes.
+  validateRegistry now checks every prefix/suffix kind
+- Budget probe after tier halving: drop offence 2.354 / defence 2.594 (asym 0.097),
+  crafted 2.730 / 2.955 - inside the bands
+- **Pace fails "hold today's pace".** Days to stage 300, old vs new:
+  seeds 0-7 median ~4.65d vs ~6.35d (6 of 8 slower); seed 8 1.7d vs 3.0d; seed 9 9.5d
+  vs 11.3d. Suspected cause: pool dilution (gear prefixes 14 -> 16, suffixes 11 -> 12).
+  Unconfirmed - the control run (new mechanics, new affixes filtered out) was stopped
+- Next when resumed: run that control; if dilution, add an optional roll weight to
+  AffixDefinition (lower for the defence affixes) and re-sweep. Then update the registry
+  snapshot and balance golden, run tsc/eslint/vitest/e2e
+- Registry snapshot and balance golden are NOT updated yet - expect vitest to flag them
 
 
 ## Later, not scheduled

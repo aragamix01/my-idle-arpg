@@ -10,12 +10,14 @@
  * player actually selected.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   damageShares,
   deriveStats,
   DISSEMBLE_YIELD,
   effectiveHp,
+  evadeChance,
+  armourCut,
   elementalScale,
   ELEMENTS,
   enemyCount,
@@ -53,7 +55,6 @@ import {
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
 import { CraftModal } from './CraftModal';
-import { CurrencyStash } from './CurrencyStash';
 import {
   breakdownLines,
   compact,
@@ -65,9 +66,7 @@ import {
   statEntries,
 } from './format';
 import { ItemMods } from './ItemMods';
-import { TabletTab } from './TabletTab';
 
-type Tab = 'character' | 'inventory' | 'tablets' | 'currency';
 type SortKey = 'newest' | 'rarity' | 'itemLevel' | 'power';
 
 const SORTS: { key: SortKey; label: string }[] = [
@@ -129,180 +128,7 @@ function hasFreeSlotFor(item: ItemInstance, hud: HudSnapshot): boolean {
 const RARITY_ORDER: Record<Rarity, number> = { unique: 3, rare: 2, magic: 1, common: 0 };
 const RARITIES: Rarity[] = ['common', 'magic', 'rare', 'unique'];
 
-interface Props {
-  state: SaveState;
-  hud: HudSnapshot;
-  busy: boolean;
-  onEquip: (slot: number, itemId: string | null) => void;
-  onEquipWeapon: (itemId: string | null) => void;
-  onEquipAccessory: (slot: number, itemId: string | null) => void;
-  onReroll: (uid: string) => void;
-  onDissemble: (uids: string[]) => void;
-  onApplyCurrency: (currencyId: CurrencyId, uid: string) => void;
-  onCombine: (currencyId: CurrencyId) => void;
-  onClose: () => void;
-}
-
-export function CharacterPanel({
-  state,
-  hud,
-  busy,
-  onEquip,
-  onEquipWeapon,
-  onEquipAccessory,
-  onReroll,
-  onDissemble,
-  onApplyCurrency,
-  onCombine,
-  onClose,
-}: Props) {
-  const [tab, setTab] = useState<Tab>('character');
-  /**
-   * The currency the stash armed, if any.
-   *
-   * Lives here rather than in the stash because arming is a cross-tab gesture:
-   * you pick in Currency and spend in Inventory.
-   */
-  const [armed, setArmed] = useState<CurrencyId | null>(null);
-  /**
-   * Which shelf arming a currency should send you back to.
-   *
-   * Two things now take currency, and "arm in Currency, spend in Inventory" stopped
-   * being the whole story - a player crafting a run of tablets would be kicked to their
-   * gear on every single application.
-   *
-   * Written where the tab CHANGES rather than derived in an effect: an effect that calls
-   * setState cascades a second render for a value that was already known at the click.
-   */
-  const [lastShelf, setLastShelf] = useState<'inventory' | 'tablets'>('inventory');
-  const openTab = useCallback((next: Tab) => {
-    setTab(next);
-    if (next === 'inventory' || next === 'tablets') setLastShelf(next);
-  }, []);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-neutral-700 bg-neutral-950 shadow-2xl"
-        // Clicks inside must not reach the backdrop's close handler.
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Character"
-      >
-        <header className="flex shrink-0 items-center gap-2 border-b border-neutral-800 px-4 py-3">
-          <TabButton active={tab === 'character'} onClick={() => openTab('character')}>
-            Character
-          </TabButton>
-          <TabButton active={tab === 'inventory'} onClick={() => openTab('inventory')}>
-            Inventory ({hud.items.length}/{hud.inventoryCap})
-          </TabButton>
-          {/* Its own tab rather than a filter on Inventory: a tablet is never equipped,
-              never dissembled and never sorted by power, so it would spend its life
-              being filtered out of a grid built for gear. */}
-          <TabButton active={tab === 'tablets'} onClick={() => openTab('tablets')}>
-            Tablets ({hud.tablets.length})
-          </TabButton>
-          <TabButton active={tab === 'currency'} onClick={() => openTab('currency')}>
-            Currency
-          </TabButton>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="ml-auto rounded px-2 py-1 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
-          >
-            ✕
-          </button>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {tab === 'character' && <CharacterTab state={state} hud={hud} />}
-          {tab === 'inventory' && (
-            <InventoryTab
-              state={state}
-              hud={hud}
-              busy={busy}
-              armed={armed}
-              onEquip={onEquip}
-              onEquipWeapon={onEquipWeapon}
-              onEquipAccessory={onEquipAccessory}
-              onReroll={onReroll}
-              onDissemble={onDissemble}
-              onApplyCurrency={(currencyId, uid) => {
-                onApplyCurrency(currencyId, uid);
-                // Disarm after one use. Leaving it armed turns the next
-                // inspecting click into an accidental craft.
-                setArmed(null);
-              }}
-            />
-          )}
-          {tab === 'tablets' && (
-            <TabletTab
-              hud={hud}
-              busy={busy}
-              armed={armed}
-              onApplyCurrency={(currencyId, uid) => {
-                onApplyCurrency(currencyId, uid);
-                setArmed(null);
-              }}
-            />
-          )}
-          {tab === 'currency' && (
-            <CurrencyStash
-              purse={hud.currency}
-              armed={armed}
-              busy={busy}
-              onArm={(currencyId) => {
-                // Back to whichever shelf the player was last on, so arming a currency
-                // with the Tablets tab open does not silently move them to gear.
-                setArmed(currencyId);
-                if (currencyId) openTab(lastShelf);
-              }}
-              onCombine={onCombine}
-            />
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded px-3 py-1.5 text-sm font-medium ${
-        active ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-400 hover:text-neutral-200'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
+export function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
   // Revived once. The snapshot arrives as JSON, where a Decimal is an object with no
   // prototype left - see WireStats in src/sim/hud.ts.
   const stats = statsFromWire(hud.stats);
@@ -326,6 +152,13 @@ function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
   // HP is what damage is measured against, and wave DPS is why Area matters.
   const derived = [
     { label: 'Effective HP', value: formatBig(effectiveHp(stats)) },
+    // vs a boss separately, because armour is the one layer that tells them apart.
+    { label: 'Effective HP (boss)', value: formatBig(effectiveHp(stats, 'boss')) },
+    { label: 'Evade chance', value: `${(evadeChance(stats) * 100).toFixed(1)}%` },
+    {
+      label: 'Armour cut (wave / boss)',
+      value: `${(armourCut(stats) * 100).toFixed(1)}% / ${(armourCut(stats, 'boss') * 100).toFixed(1)}%`,
+    },
     { label: 'DPS (single)', value: formatBig(statsDps(stats)) },
     {
       label: 'DPS (wave)',
@@ -400,7 +233,7 @@ function CharacterTab({ state, hud }: { state: SaveState; hud: HudSnapshot }) {
   );
 }
 
-function InventoryTab({
+export function InventoryTab({
   state,
   hud,
   busy,

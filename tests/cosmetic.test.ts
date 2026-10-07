@@ -357,3 +357,64 @@ describe('the boss arrives', () => {
     expect(Math.abs(delta)).toBeLessThan(0.35);
   });
 });
+
+/**
+ * The side view, Phase 7b.
+ *
+ * The geometry is the whole change, so it is what gets pinned: a hero who drifts into
+ * the queue, or a boss that arrives from anywhere but the right, would still pass every
+ * timing test above.
+ */
+describe('the side view', () => {
+  it('keeps the hero on the left and the wave in front of them', () => {
+    const visual = idling();
+    run(visual, 3);
+    const alive = visual.enemies.filter((enemy) => enemy.alive);
+    expect(alive.length).toBeGreaterThan(0);
+    expect(visual.player.x).toBeLessThan(OPTIONS.width / 3);
+    for (const enemy of alive) expect(enemy.x).toBeGreaterThan(visual.player.x);
+  });
+
+  it('stands everyone on the floor', () => {
+    const visual = idling();
+    run(visual, 3);
+    const ground = visual.groundY();
+    expect(Math.abs(visual.player.y - ground)).toBeLessThanOrEqual(1);
+    for (const enemy of visual.enemies.filter((e) => e.alive)) {
+      // A little depth either side of the line, never up the wall.
+      expect(Math.abs(enemy.y - ground)).toBeLessThan(20);
+    }
+  });
+
+  it('walks the boss in from the right, and the survivors out the same way', () => {
+    const rushed = { ...OUTCOME, trashPhaseSeconds: 0.05, seconds: 3.05, bossPhaseSeconds: 3 };
+    const visual = idling();
+    visual.startAttempt({ outcome: rushed, stage: 40 });
+
+    let firstBossX: number | null = null;
+    let fleeingMovedRight = true;
+    const before = new Map<object, number>();
+    run(visual, 1.5, () => {
+      if (visual.attempt.phase === 'entrance' && firstBossX === null) firstBossX = visual.boss.x;
+      for (const enemy of visual.enemies) {
+        if (!enemy.fleeing) continue;
+        const last = before.get(enemy);
+        if (last !== undefined && enemy.x < last) fleeingMovedRight = false;
+        before.set(enemy, enemy.x);
+      }
+    });
+
+    expect(firstBossX).not.toBeNull();
+    expect(firstBossX!).toBeGreaterThan(OPTIONS.width);
+    expect(visual.boss.x).toBeLessThan(OPTIONS.width);
+    expect(visual.boss.x).toBeGreaterThan(visual.player.x);
+    expect(fleeingMovedRight).toBe(true);
+  });
+
+  it('queues a stage wave off the right edge so it marches in', () => {
+    const visual = idling();
+    visual.startAttempt({ outcome: OUTCOME, stage: 40 });
+    const offScreen = visual.enemies.filter((enemy) => enemy.alive && enemy.x > OPTIONS.width);
+    expect(offScreen.length).toBeGreaterThan(0);
+  });
+});

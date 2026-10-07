@@ -3,7 +3,12 @@
  *
  * This is the half of the game that does not decide anything. The abstract
  * layer in src/sim/combat.ts already computed the kill rate; this arranges
- * circles so that killing looks like it is happening at exactly that rate.
+ * creatures so that killing looks like it is happening at exactly that rate.
+ *
+ * A SIDE VIEW since Phase 7b: the hero holds the left of a dungeon floor and the
+ * wave walks in from the right, queueing up to be cut down. Every position is a
+ * FOOT position on that floor - the renderer anchors sprites at their base - so
+ * "standing on the ground" is one number rather than a per-sprite size guess.
  *
  * It holds mutable entity arrays that the Pixi renderer reads directly inside
  * its own frame loop. React never sees them - see src/ui/store.ts.
@@ -28,6 +33,13 @@ export interface CosmeticEnemy {
    * deaths - and floating damage numbers - the fight never paid for. They leave instead.
    */
   fleeing: boolean;
+  /**
+   * How far behind the front of the queue this one stops, in pixels.
+   *
+   * A wave that all stopped on the same pixel would read as one creature with a stack
+   * of health bars. A per-enemy offset is what makes it a crowd pressing in.
+   */
+  hold: number;
 }
 
 /**
@@ -199,17 +211,38 @@ const ENTRANCE_SECONDS: Record<AttemptKind, number> = {
   abyssal: 1.3,
 };
 
-/** Where the boss starts its fall, as a fraction of screen height above the top edge. */
-const BOSS_ENTRY_HEIGHT = 0.45;
-/** Where it lands. Matches where the boss used to simply appear. */
-const BOSS_STAND_HEIGHT = 0.32;
+/** The floor line, as a fraction of height. Everything stands on it. */
+const GROUND = 0.76;
+/**
+ * How far the floor recedes, in pixels. Enemies stand at slightly different depths so
+ * a queue reads as a crowd on a floor rather than a conga line on a tightrope.
+ */
+const LANE_DEPTH = 28;
+/** Where the hero holds, as a fraction of width. */
+const HERO_X = 0.22;
+/** How far the hero steps forward to meet a boss, as a fraction of width. */
+const DUEL_STEP = 0.1;
+/** Where the boss stands once it has walked in, as a fraction of width. */
+const BOSS_STAND_X = 0.68;
+/** Where it starts walking from: this far past the right edge, in pixels. */
+const BOSS_ENTRY_MARGIN = 90;
+/** The front of the queue stops this far in front of the hero. */
+const ENGAGE_DISTANCE = 58;
+/** How deep the queue behind the front may spread, in pixels. */
+const QUEUE_SPREAD = 70;
 /** Survivors leave faster than they arrived, or the wave lingers into the duel. */
 const FLEE_SPEED_MULT = 2.4;
 /** Past this far outside the screen a fleeing enemy is gone for good. */
 const FLEE_DESPAWN_MARGIN = 40;
-
-/** Where the player's orbit centres once the duel is on, as a fraction of height. */
-const DUEL_CENTRE_HEIGHT = 0.6;
+/** Idle farming keeps this many on the floor. More is a smear, not a crowd, side on. */
+const IDLE_CROWD = 14;
+/**
+ * A stage wave is topped up to this many when the attempt starts, queued off the right
+ * edge so it marches in across the trash phase rather than all being on screen at once.
+ */
+const WAVE_SIZE = 28;
+/** Height of the hero's chest above the floor - where the blade swings from. */
+const CHEST = 24;
 
 /** Fast at first, settling at the end. What makes the boss land rather than slide. */
 function easeOutCubic(t: number): number {
@@ -217,21 +250,17 @@ function easeOutCubic(t: number): number {
 }
 
 /**
- * Enemies must outpace the player's orbit, or they trail behind in a receding
- * cloud and the screen never fills. Measured at 34 against an orbit of ~113
- * px/s: the swarm never arrived.
- *
- * Orbit tangential speed is roughly amplitude x angular speed, so keep
- * PLAYER_ORBIT_RADIUS x PLAYER_ORBIT_SPEED x width comfortably under this.
+ * Walking pace. Fast enough that a queue refills the front before the next swing, or the
+ * hero spends the wave cutting at empty air while the crowd ambles in.
  */
-const ENEMY_SPEED = 72;
-const PLAYER_ORBIT_SPEED = 0.4;
-const PLAYER_ORBIT_RADIUS = 0.12;
+const ENEMY_SPEED = 90;
 
 /** Half-width of the sword sweep, radians. The blade covers 120 degrees. */
 const SWING_ARC = Math.PI / 3;
 /** How far the blade orbits from the player, in pixels. */
-const SWING_RADIUS = 20;
+const SWING_RADIUS = 26;
+/** How far in front of the hero a swing can land. The queue's front stands inside it. */
+const SWING_REACH = ENGAGE_DISTANCE + 34;
 /**
  * Attack speed compounds without limit, so by late stages the sim's rate is
  * hundreds of swings per second. Past this the animation is a strobe rather
@@ -298,7 +327,11 @@ export class StageVisual {
 
   private options: VisualOptions;
   private killCredit = 0;
-  private orbitAngle = 0;
+  /**
+   * Real seconds this layer has been stepped. Drives the hero's idle bob, and is the
+   * cheapest proof from outside that the ticker is running - the hero no longer roams.
+   */
+  clock = 0;
   private seed: number;
   /** First fill places enemies on screen; every fill after walks them in. */
   private seeded = false;
@@ -306,7 +339,7 @@ export class StageVisual {
   constructor(options: VisualOptions) {
     this.options = options;
     this.seed = 0x1234_5678;
-    this.player = { x: options.width / 2, y: options.height / 2 };
+    this.player = { x: options.width * HERO_X, y: options.height * GROUND };
     for (let i = 0; i < MAX_ENEMIES; i++) {
       this.enemies.push({
         x: 0,
@@ -316,6 +349,7 @@ export class StageVisual {
         sprite: 'enemy.slime',
         facing: 1,
         fleeing: false,
+        hold: 0,
       });
     }
   }
@@ -365,6 +399,22 @@ export class StageVisual {
     // dying the moment the boss phase starts, so they would simply pile up.
     if (kind !== 'stage') {
       for (const enemy of this.enemies) enemy.alive = false;
+      return;
+    }
+
+    // A stage is a wave, and a wave is more than the idle crowd. The rest queue off the
+    // right edge and march in across the trash phase - the rate they die at is still
+    // `effectiveKillRate`, which counts them, so a bigger wave dies faster rather than
+    // making the phase run long.
+    let alive = this.enemies.filter((enemy) => enemy.alive).length;
+    let queued = 0;
+    for (const enemy of this.enemies) {
+      if (alive >= WAVE_SIZE) break;
+      if (!enemy.alive) {
+        this.spawn(enemy, false, queued * 30);
+        queued++;
+        alive++;
+      }
     }
   }
 
@@ -387,12 +437,11 @@ export class StageVisual {
     // this buys is a moment for the player to see what they are now fighting.
     if (a.phase === 'entrance') {
       a.entrance = Math.min(1, a.entrance + dt / ENTRANCE_SECONDS[a.kind]);
-      // Eased, so it falls in and settles rather than sliding at a constant rate.
+      // Eased, so it strides in and plants rather than sliding at a constant rate.
       const landed = easeOutCubic(a.entrance);
-      this.boss.x = this.options.width / 2;
-      this.boss.y =
-        -this.options.height * BOSS_ENTRY_HEIGHT +
-        (this.options.height * (BOSS_STAND_HEIGHT + BOSS_ENTRY_HEIGHT)) * landed;
+      const from = this.options.width + BOSS_ENTRY_MARGIN;
+      this.boss.x = from + (this.options.width * BOSS_STAND_X - from) * landed;
+      this.boss.y = this.groundY();
       if (a.entrance >= 1) {
         a.phase = 'boss';
         // Anything that did not make the edge in time is gone anyway.
@@ -428,8 +477,8 @@ export class StageVisual {
       a.phase = 'entrance';
       a.entrance = 0;
       this.boss.alive = true;
-      this.boss.x = this.options.width / 2;
-      this.boss.y = -this.options.height * BOSS_ENTRY_HEIGHT;
+      this.boss.x = this.options.width + BOSS_ENTRY_MARGIN;
+      this.boss.y = this.groundY();
       for (const enemy of this.enemies) {
         if (enemy.alive) enemy.fleeing = true;
       }
@@ -451,8 +500,8 @@ export class StageVisual {
     if (reachedBoss) {
       // Re-derived every frame rather than pinned once at the entrance, so rotating a
       // phone mid-duel does not leave the boss standing where the old viewport was.
-      this.boss.x = this.options.width / 2;
-      this.boss.y = this.options.height * BOSS_STAND_HEIGHT;
+      this.boss.x = this.options.width * BOSS_STAND_X;
+      this.boss.y = this.groundY();
     } else {
       this.boss.alive = false;
     }
@@ -513,36 +562,26 @@ export class StageVisual {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
-  private spawn(enemy: CosmeticEnemy, placeOnScreen = false) {
-    const { width, height } = this.options;
-    const angle = this.random() * Math.PI * 2;
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
+  /**
+   * Put an enemy on the lane.
+   *
+   * `behind` is how far past the right edge it starts, so a batch spawned together
+   * arrives as a queue rather than as one clump that crosses the screen in step.
+   */
+  private spawn(enemy: CosmeticEnemy, placeOnScreen = false, behind = 0) {
+    const { width } = this.options;
+    const front = this.player.x + ENGAGE_DISTANCE;
 
     if (placeOnScreen) {
-      // Seeding the first wave. Spawning everything off-screen leaves the
-      // player watching an empty field for the first several seconds.
-      let x: number;
-      let y: number;
-      do {
-        x = this.random() * width;
-        y = this.random() * height;
-      } while (Math.hypot(x - this.player.x, y - this.player.y) < 70);
-      enemy.x = x;
-      enemy.y = y;
+      // Seeding the first wave. Spawning everything off-screen leaves the player
+      // watching an empty floor for the first several seconds.
+      enemy.x = front + this.random() * Math.max(40, width - front);
     } else {
-      // Just beyond the edge *in that direction*, not on a circle around the
-      // centre. A circle sized for the corners puts enemies approaching from
-      // top and bottom hundreds of pixels further out than the ones from the
-      // sides, and they trickle in for seconds.
-      const toEdge = Math.min(
-        Math.abs(cos) < 1e-6 ? Infinity : width / 2 / Math.abs(cos),
-        Math.abs(sin) < 1e-6 ? Infinity : height / 2 / Math.abs(sin),
-      );
-      const radius = toEdge + 24 + this.random() * 40;
-      enemy.x = width / 2 + cos * radius;
-      enemy.y = height / 2 + sin * radius;
+      enemy.x = width + 24 + behind + this.random() * 40;
     }
+    // Depth on the floor: a little forward or back of the line, never through the wall.
+    enemy.y = this.groundY() + (this.random() - 0.35) * LANE_DEPTH;
+    enemy.hold = this.random() * QUEUE_SPREAD;
 
     enemy.r = 5 + this.random() * 4;
     enemy.alive = true;
@@ -562,7 +601,7 @@ export class StageVisual {
       const jitter = () => (this.random() - 0.5) * 14;
       this.floaters.push({
         x: enemy.x + jitter(),
-        y: enemy.y + jitter(),
+        y: enemy.y - 34 + jitter(),
         text: this.options.hitLabel(0.8 + this.random() * 0.4),
         life: 0.9,
       });
@@ -596,13 +635,12 @@ export class StageVisual {
     this.dropsSpawned++;
     if (!sprite || this.drops.length >= MAX_DROPS) return;
 
-    const angle = this.random() * Math.PI * 2;
-    const speed = 40 + this.random() * 30;
+    // Up and back toward the hero, the way loot spills out of something cut down.
     this.drops.push({
       x,
-      y,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
+      y: y - 20,
+      vx: -20 - this.random() * 50,
+      vy: -150 - this.random() * 60,
       sprite,
       age: 0,
       alive: true,
@@ -614,11 +652,10 @@ export class StageVisual {
       drop.age += dt;
 
       if (drop.age < DROP_TOSS_SECONDS) {
-        // Tumbling away from the corpse, slowing as it goes.
+        // Arcing out of the corpse under gravity.
         drop.x += drop.vx * dt;
         drop.y += drop.vy * dt;
-        drop.vx *= 0.88;
-        drop.vy *= 0.88;
+        drop.vy += 620 * dt;
         continue;
       }
 
@@ -649,18 +686,14 @@ export class StageVisual {
   }
 
   update(dt: number) {
-    const { width, height, killsPerSecond } = this.options;
+    const { width, killsPerSecond } = this.options;
 
-    // The player pilots itself. Movement is cosmetic by design: outcomes were
-    // already decided, so a kiting orbit is enough to look deliberate.
-    //
-    // The orbit CENTRE closes on the boss as it lands, so the duel reads as a duel
-    // instead of the player circling the middle of an empty floor while the thing it
-    // is supposedly fighting stands at the top of the screen.
-    this.orbitAngle += dt * PLAYER_ORBIT_SPEED;
-    const centreY = height * (0.5 + (DUEL_CENTRE_HEIGHT - 0.5) * this.duelClosing());
-    this.player.x = width / 2 + Math.cos(this.orbitAngle) * width * PLAYER_ORBIT_RADIUS;
-    this.player.y = centreY + Math.sin(this.orbitAngle * 1.3) * height * PLAYER_ORBIT_RADIUS;
+    // The hero holds the left of the floor. It steps forward to meet a boss as the boss
+    // strides in, so the duel closes from both sides rather than one.
+    this.clock += dt;
+    this.player.x = width * (HERO_X + DUEL_STEP * this.duelClosing());
+    // A one-pixel breath. Enough to read as alive on a sprite with no animation frames.
+    this.player.y = this.groundY() - (Math.sin(this.clock * 5) > 0.6 ? 1 : 0);
 
     let living = 0;
     for (const enemy of this.enemies) {
@@ -673,18 +706,10 @@ export class StageVisual {
       // pile of immortal enemies with the boss somewhere behind it. That is what made
       // the boss look slow to arrive - it was there, and you could not find it.
       if (enemy.fleeing) {
-        const dx = enemy.x - this.player.x;
-        const dy = enemy.y - this.player.y;
-        const distance = Math.hypot(dx, dy) || 1;
-        enemy.x += (dx / distance) * ENEMY_SPEED * FLEE_SPEED_MULT * dt;
-        enemy.y += (dy / distance) * ENEMY_SPEED * FLEE_SPEED_MULT * dt;
-        if (Math.abs(dx) > 4) enemy.facing = dx < 0 ? -1 : 1;
-        if (
-          enemy.x < -FLEE_DESPAWN_MARGIN ||
-          enemy.x > width + FLEE_DESPAWN_MARGIN ||
-          enemy.y < -FLEE_DESPAWN_MARGIN ||
-          enemy.y > height + FLEE_DESPAWN_MARGIN
-        ) {
+        // Back the way they came - out to the right, the way the boss is arriving from.
+        enemy.x += ENEMY_SPEED * FLEE_SPEED_MULT * dt;
+        enemy.facing = 1;
+        if (enemy.x > width + FLEE_DESPAWN_MARGIN) {
           enemy.alive = false;
           enemy.fleeing = false;
         }
@@ -692,14 +717,11 @@ export class StageVisual {
       }
 
       living++;
-      const dx = this.player.x - enemy.x;
-      const dy = this.player.y - enemy.y;
-      const distance = Math.hypot(dx, dy) || 1;
-      enemy.x += (dx / distance) * ENEMY_SPEED * dt;
-      enemy.y += (dy / distance) * ENEMY_SPEED * dt;
-      // Only flip on decisive horizontal movement; near-vertical approaches
-      // otherwise jitter left/right every frame.
-      if (Math.abs(dx) > 4) enemy.facing = dx < 0 ? -1 : 1;
+      // Walk left until reaching your place in the queue, then hold it.
+      const stopAt = this.player.x + ENGAGE_DISTANCE + enemy.hold;
+      if (enemy.x > stopAt) enemy.x = Math.max(stopAt, enemy.x - ENEMY_SPEED * dt);
+      // Facing the hero, which is always to the left.
+      enemy.facing = -1;
     }
 
     this.updateAttempt(dt);
@@ -708,11 +730,13 @@ export class StageVisual {
     // trash phase runs out, so nothing respawns. Idle farming is endless and
     // keeps the field full.
     if (!this.attempt.active) {
-      const target = Math.min(MAX_ENEMIES, 90 + Math.floor(killsPerSecond * 4));
+      const target = Math.min(MAX_ENEMIES, IDLE_CROWD + Math.floor(Math.min(killsPerSecond, 10)));
+      let queued = 0;
       for (const enemy of this.enemies) {
         if (living >= target) break;
         if (!enemy.alive) {
-          this.spawn(enemy, !this.seeded);
+          this.spawn(enemy, !this.seeded, queued * 26);
+          queued++;
           living++;
         }
       }
@@ -813,7 +837,7 @@ export class StageVisual {
     const angle = this.swingAngle();
     return {
       x: this.player.x + Math.cos(angle) * SWING_RADIUS,
-      y: this.player.y + Math.sin(angle) * SWING_RADIUS,
+      y: this.player.y - CHEST + Math.sin(angle) * SWING_RADIUS,
       // The sprite's blade points up, so it needs a quarter turn to lie along
       // the radius rather than across it.
       rotation: angle + Math.PI / 2,
@@ -823,7 +847,7 @@ export class StageVisual {
   private livingInSwingArc(): CosmeticEnemy | null {
     if (!this.swing.active) return null;
     const angle = this.swingAngle();
-    const reach = SWING_RADIUS + 26;
+    const reach = SWING_REACH;
 
     let best: CosmeticEnemy | null = null;
     let bestDistance = Infinity;
@@ -862,6 +886,11 @@ export class StageVisual {
       }
     }
     return best;
+  }
+
+  /** The floor line every foot position stands on. */
+  groundY(): number {
+    return this.options.height * GROUND;
   }
 
   resize(width: number, height: number) {

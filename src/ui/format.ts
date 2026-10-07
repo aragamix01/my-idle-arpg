@@ -69,6 +69,11 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   // Percentage points of the target's resistance, not a percentage of it - "10%
   // penetration" against 30% resistance leaves 20%, not 27%.
   penetration: { label: 'Resistance Penetration', format: percent },
+  // A fraction of Max HP, so it reads as a percentage of life rather than a pool size.
+  energyShield: { label: 'Energy Shield', format: (v) => `${percent(v)} of life` },
+  // Ratings. What they achieve is on the derived rows, where it depends on the fight.
+  armour: { label: 'Armour', format: (v) => v.toFixed(0) },
+  evasion: { label: 'Evasion', format: (v) => v.toFixed(0) },
 };
 
 /** Title case for an element, for a line that names one. */
@@ -216,7 +221,8 @@ export function describeEffect(effect: Effect): string {
   const asPercent =
     effect.stat === 'critChance' ||
     effect.stat === 'critMult' ||
-    effect.stat === 'penetration';
+    effect.stat === 'penetration' ||
+    effect.stat === 'energyShield';
   const shown = asPercent ? percent(effect.value) : String(Number(effect.value.toFixed(2)));
   return `${sign}${shown} ${label}${suffix}`;
 }
