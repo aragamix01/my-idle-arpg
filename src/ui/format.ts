@@ -16,6 +16,7 @@ import {
   resourceLabel,
   SKILL_LEVEL_GAIN,
   type AffixDefinition,
+  type ArmourSlot,
   type CurrencyTier,
   type Effect,
   type Element,
@@ -74,6 +75,19 @@ export const STAT_LABELS: Record<StatKey, { label: string; format: (v: number) =
   // Ratings. What they achieve is on the derived rows, where it depends on the fight.
   armour: { label: 'Armour', format: (v) => v.toFixed(0) },
   evasion: { label: 'Evasion', format: (v) => v.toFixed(0) },
+  // The slot-only stats, Phase 8. Fractions, so percentages.
+  bossMitigation: { label: 'Less Damage from Bosses', format: percent },
+  waveRecovery: { label: 'Life Restored per Abyss Wave', format: percent },
+  moveSpeed: { label: 'Movement Speed', format: percent },
+};
+
+/** What each armour slot is called on screen. */
+export const ARMOUR_SLOT_LABEL: Record<ArmourSlot, string> = {
+  helmet: 'Helmet',
+  body: 'Body Armour',
+  gloves: 'Gloves',
+  boots: 'Boots',
+  belt: 'Belt',
 };
 
 /** Title case for an element, for a line that names one. */
@@ -172,12 +186,15 @@ export function describeEffect(effect: Effect): string {
     )}${suffix}`;
   }
 
-  if (effect.kind === 'equipSlots') {
+  if (effect.kind === 'ringSlots') {
     const n = Math.abs(effect.delta);
-    const slots = n === 1 ? 'slot' : 'slots';
-    return effect.delta >= 0
-      ? `+${n} equip ${slots}${suffix}`
-      : `−${n} equip ${slots}${suffix}`;
+    const slots = n === 1 ? 'Ring slot' : 'Ring slots';
+    return effect.delta >= 0 ? `+${n} ${slots}${suffix}` : `−${n} ${slots}${suffix}`;
+  }
+
+  if (effect.kind === 'sealSlots') {
+    const names = effect.slots.map((slot) => ARMOUR_SLOT_LABEL[slot]);
+    return `Seals your ${names.join(' and ')} slots${suffix}`;
   }
 
   const { label } = STAT_LABELS[effect.stat];
@@ -222,7 +239,10 @@ export function describeEffect(effect: Effect): string {
     effect.stat === 'critChance' ||
     effect.stat === 'critMult' ||
     effect.stat === 'penetration' ||
-    effect.stat === 'energyShield';
+    effect.stat === 'energyShield' ||
+    effect.stat === 'bossMitigation' ||
+    effect.stat === 'waveRecovery' ||
+    effect.stat === 'moveSpeed';
   const shown = asPercent ? percent(effect.value) : String(Number(effect.value.toFixed(2)));
   return `${sign}${shown} ${label}${suffix}`;
 }

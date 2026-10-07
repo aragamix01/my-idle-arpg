@@ -55,10 +55,12 @@ import {
   rollTablet,
   rollWaveTablets,
   rollAbyssalTablets,
+  armourSlotOf,
 } from './items';
-import { equipSlots, findItem, keyDropMultiplier } from './stats';
+import { accessorySlots, findItem, keyDropMultiplier } from './stats';
 import {
-  MAX_ITEM_SLOTS,
+  ARMOUR_SLOT_KINDS,
+  ITEM_SLOTS,
   ACCESSORY_SLOTS,
   ACCESSORY_SLOT_KINDS,
   ABYSS_UNLOCK_STAGE,
@@ -94,10 +96,8 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('equipItem'),
-      // Bounded by the ARRAY, not by the live slot count - the schema cannot see a
-      // save. applyCommand refuses a slot past the live count, so the server decides
-      // whether the seventh position is real for this character.
-      slot: z.number().int().min(0).max(MAX_ITEM_SLOTS - 1),
+      /** Index into ARMOUR_SLOT_KINDS: 0 helmet, 1 body, 2 gloves, 3 boots, 4 belt. */
+      slot: z.number().int().min(0).max(ITEM_SLOTS - 1),
       /** Item uid, or null to clear the slot. */
       itemId: z.string().nullable(),
     })
@@ -120,7 +120,7 @@ export const CommandSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('equipAccessory'),
-      /** 0 and 1 are rings, 2 is the amulet - see ACCESSORY_SLOT_KINDS. */
+      /** 0 and 1 are rings, 2 is the amulet, 3 a granted ring - see ACCESSORY_SLOT_KINDS. */
       slot: z.number().int().min(0).max(ACCESSORY_SLOTS - 1),
       /** Item uid, or null to clear the slot. */
       itemId: z.string().nullable(),
@@ -240,7 +240,7 @@ export function newSave(seed: number, nowMs: number): SaveState {
     items: [],
     tablets: [],
     currency: {},
-    loadout: Array<string | null>(MAX_ITEM_SLOTS).fill(null),
+    loadout: Array<string | null>(ITEM_SLOTS).fill(null),
     // A new character starts unarmed, and Unarmed's bases are the old global
     // BASE_STATS - so stage 1 plays exactly as it did before weapons existed.
     weapon: null,
@@ -416,30 +416,24 @@ export function applyCommand(
 
     case 'equipItem': {
       const { slot, itemId } = command;
-      // The live count, decided here rather than by the client. A slot only exists
-      // while whatever granted it is still worn, so this has to be re-checked on the
-      // server for every equip - the client's copy could be a swap out of date.
-      const live = equipSlots(next, { stage: next.currentStage, isBoss: false, enemyHpFraction: 1 });
-      if (slot >= live) return err(`slot ${slot + 1} is locked: you have ${live} slots`);
       if (itemId !== null) {
         const item = findItem(next, itemId);
         if (!item) return err(`not owned: ${itemId}`);
 
         /*
-          A gear slot takes GEAR. Nothing checked this before, and nothing needed to
-          while gear and weapons were the only two kinds - a weapon in a gear slot
-          contributed its affixes and not its skill, which was odd but bounded.
-
-          Accessories make it a hole. Three dedicated slots plus four gear slots would
-          mean seven accessories worn at once, and the power budget is derived on the
-          assumption that there are exactly three.
+          An armour slot takes the ONE kind of piece it is for. Phase 8: the slots are
+          fixed and typed, so a helmet in the boots slot is refused with the reason
+          rather than quietly worn - a piece in the wrong slot would be a second helmet
+          and the power budget assumes one of each.
         */
         const base = getBase(item.baseId);
         if (base?.wear) return err(`equip a ${base.wear} in its own slot`);
         if (base?.skillId) return err('equip a weapon in the weapon slot');
-
-        const existing = next.loadout.indexOf(itemId);
-        if (existing !== -1 && existing !== slot) next.loadout[existing] = null;
+        const kind = armourSlotOf(item);
+        if (!kind) return err('that cannot be worn');
+        if (kind !== ARMOUR_SLOT_KINDS[slot]) {
+          return err(`that is worn on the ${kind}, not the ${ARMOUR_SLOT_KINDS[slot]}`);
+        }
       }
       next.loadout[slot] = itemId;
       break;
@@ -453,10 +447,6 @@ export function applyCommand(
         // Refused rather than silently ignored: equipping a Charm as a weapon would
         // otherwise leave the player unarmed with no indication why.
         if (!isWeaponBase(item.baseId)) return err('that is not a weapon');
-        // A weapon in a gear slot is the same item in two places, and the two would
-        // both contribute its effects.
-        const inLoadout = next.loadout.indexOf(itemId);
-        if (inLoadout !== -1) next.loadout[inLoadout] = null;
       }
       next.weapon = itemId;
       break;
@@ -465,6 +455,10 @@ export function applyCommand(
     case 'equipAccessory': {
       const { slot, itemId } = command;
       if (slot >= ACCESSORY_SLOTS) return err(`no accessory slot ${slot}`);
+      // The fourth ring position exists only while something grants it. Clearing one is
+      // always allowed, so a ring left behind when the grant came off can be taken back.
+      const live = accessorySlots(next, { stage: next.currentStage, isBoss: false, enemyHpFraction: 1 });
+      if (itemId !== null && slot >= live) return err('that ring slot is locked');
 
       if (itemId !== null) {
         const item = findItem(next, itemId);

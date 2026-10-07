@@ -19,6 +19,7 @@ import {
   type ItemInstance,
   type Rarity,
   type RolledAffix,
+  type RollTarget,
   type TabletPays,
 } from './content/schema';
 // ALL_PREFIXES/ALL_SUFFIXES rather than PREFIXES/SUFFIXES: the roll paths hand the
@@ -27,7 +28,7 @@ import {
 import { availableTiers, getAffix, ALL_PREFIXES, ALL_SUFFIXES } from './content/affixes';
 import {
   ACCESSORY_BASES,
-  GEAR_BASES,
+  ARMOUR_BASES,
   TABLET_BASES,
   WEAPON_BASES,
   getBase,
@@ -62,7 +63,14 @@ import {
   WEAPON_DROP_SHARE,
 } from './curves';
 import { createRng, type Rng } from './rng';
-import { ABYSS_UNLOCK_STAGE, ARMOUR_K, BASE_STATS, EVASION_K, MAX_TABLET_TIER } from './types';
+import {
+  ABYSS_UNLOCK_STAGE,
+  ARMOUR_K,
+  BASE_STATS,
+  EVASION_K,
+  MAX_TABLET_TIER,
+  type ArmourSlot,
+} from './types';
 
 /** Arbitrary large odd multiplier, so reroll streams never collide with drops. */
 const REROLL_STREAM = 0x9e3779b1;
@@ -115,41 +123,52 @@ function weightedRarity(rng: Rng, weights: Record<Rarity, number> = RARITY_WEIGH
 }
 
 /**
+ * What a base rolls AS: the target its affixes are listed against. Phase 8.
+ *
+ * Read off the one field that says what kind of base it is - `pays`, `wear`, `armour`,
+ * or the weapon's skill kind. Undefined for a unique, which rolls nothing.
+ */
+export function rollTarget(baseId: string): RollTarget | undefined {
+  const base = getBase(baseId);
+  if (!base) return undefined;
+  if (base.pays) return 'tablet';
+  if (base.wear) return base.wear;
+  if (base.armour) return base.armour;
+  return base.skillId ? getSkill(base.skillId)?.kind : undefined;
+}
+
+/** The armour slot an item is worn in - its base's, or a unique's authored one. */
+export function armourSlotOf(item: ItemInstance): ArmourSlot | undefined {
+  if (item.uniqueId) return getUnique(item.uniqueId)?.slot;
+  return getBase(item.baseId)?.armour;
+}
+
+/**
  * The affixes a given base may roll.
  *
- * An affix with a `weapons` kind rolls only on weapons of that kind - so a wand never
- * rolls `+ to Physical Skill Levels`, and no gear rolls either. An affix without the
- * tag rolls anywhere a character can wear it, which is every affix that existed before
- * weapons did.
+ * Every affix lists its targets outright (see `rollsOn`), so this is a membership test
+ * plus one more gate: on armour, an affix tied to a defence layer rolls only on a base
+ * built around that layer. A Plate Cuirass never rolls evasion.
  *
- * **Tablets are a partition, not another division.** "Untagged rolls anywhere" is exactly
- * what must NOT hold for them: a tablet storing its modifiers as an ItemInstance would
- * otherwise roll increased crit chance, which is the failure that made me give tablets
- * their own type in the first place. So the tablet pool is closed in both directions -
- * a tablet rolls only tablet affixes, and nothing else ever rolls one.
+ * **Tablets are a partition, not another division.** Their affixes list only
+ * `'tablet'`, and a tablet's target is `'tablet'`, so the pool is closed in both
+ * directions by the same membership test - and validateRegistry holds that no affix
+ * mixes `'tablet'` with anything else.
  *
  * `baseId` is optional so the reroll and spirit paths that already know they are
  * working on a real item can pass it, and the handful of callers that do not have it
- * fall back to the unrestricted pool rather than silently rolling nothing.
+ * fall back to every live non-tablet affix rather than silently rolling nothing.
  */
 export function eligibleAffixes(pool: AffixDefinition[], baseId?: string): AffixDefinition[] {
   const base = baseId ? getBase(baseId) : undefined;
-  if (base?.pays) return pool.filter((affix) => affix.rollsOn === 'tablet');
-
-  const skill = base?.skillId ? getSkill(base.skillId) : undefined;
-  // Accessories ADD to the gear pool rather than replacing it, which is the whole
-  // difference between `'accessory'` and `'tablet'`. A ring rolls everything a Whetstone
-  // can plus its own extras; a tablet rolls only its own.
-  const accessory = base?.wear !== undefined;
-
-  return pool.filter((affix) => {
-    // Closed the other way too: a tablet affix is never eligible off a tablet, whether
-    // or not the caller knew what base it was rolling for.
-    if (affix.rollsOn === 'tablet') return false;
-    if (affix.rollsOn === 'accessory') return accessory;
-    if (!affix.rollsOn) return true;
-    return affix.rollsOn === 'gear' ? skill === undefined : affix.rollsOn === skill?.kind;
-  });
+  const target = baseId ? rollTarget(baseId) : undefined;
+  if (!target) {
+    return pool.filter((affix) => affix.rollsOn.length > 0 && !affix.rollsOn.includes('tablet'));
+  }
+  return pool.filter(
+    (affix) =>
+      affix.rollsOn.includes(target) && (!affix.defence || affix.defence === base?.defence),
+  );
 }
 
 /**
@@ -288,11 +307,11 @@ export function rollItem(
     }
   }
 
-  // Weapon-or-gear is decided before the base, and by its own roll rather than by
-  // weapons simply being two entries in one list. A weapon carries most of the
+  // Weapon-or-armour is decided before the base, and by its own roll rather than by
+  // weapons simply being four entries in one list. A weapon carries most of the
   // ladder now, so how often one drops is a tuning dial that has to be settable
   // without adding or removing weapon types to move it.
-  const pool = rng.next() < WEAPON_DROP_SHARE ? WEAPON_BASES : GEAR_BASES;
+  const pool = rng.next() < WEAPON_DROP_SHARE ? WEAPON_BASES : ARMOUR_BASES;
   const base = pool[rng.int(pool.length)];
   return {
     uid: String(uid),
@@ -806,6 +825,11 @@ export function applyCurrencyToItem(
     case 'upgradeRarity': {
       // Existing modifiers survive; only the newly granted rows are rolled.
       // Losing what you had would make the ore a reroll with extra steps.
+      //
+      // The base is passed through, and it was not before Phase 8: without it the new rows
+      // came from every live affix in the game, so an upgraded Silk Robe could gain
+      // penetration and an upgraded tablet a gear roll. Invisible while the relics shared
+      // one pool; glaring once each slot had its own.
       const before = affixRows(item);
       next.rarity = action.to;
       const after = affixRows(next);
@@ -815,12 +839,14 @@ export function applyCurrencyToItem(
           Math.max(0, after.prefix - before.prefix),
           item.itemLevel,
           rng,
+          item.baseId,
         ),
         ...rollAffixes(
           ALL_SUFFIXES.filter((a) => !item.affixes.some((r) => r.affixId === a.id)),
           Math.max(0, after.suffix - before.suffix),
           item.itemLevel,
           rng,
+          item.baseId,
         ),
       ];
       next.affixes = [...item.affixes, ...added];
@@ -898,6 +924,7 @@ export function affixEffect(rolled: RolledAffix): Effect | null {
   // that somehow ends up in the loadout.
   if (template.kind === 'monsterBuff' || template.kind === 'tabletReward') return null;
   if (template.kind === 'goldOnKill') return { kind: 'goldOnKill', multiplier: rolled.value };
+  if (template.kind === 'keyDrop') return { kind: 'keyDrop', multiplier: 1 + rolled.value };
   if (template.kind === 'extraElement') {
     return { kind: 'extraElement', element: template.element, fraction: rolled.value };
   }
@@ -917,7 +944,7 @@ export function itemEffects(item: ItemInstance): Effect[] {
   return rolled.map(affixEffect).filter((e): e is Effect => e !== null);
 }
 
-/** Display name: "Brutal Whetstone of Haste". Uniques use their authored name. */
+/** Display name: "Brutal Gauntlets of Haste". Uniques use their authored name. */
 export function itemName(item: ItemInstance): string {
   if (item.uniqueId) return getUnique(item.uniqueId)?.name ?? 'Unknown Relic';
 
@@ -933,8 +960,8 @@ export function itemName(item: ItemInstance): string {
 }
 
 export function itemSprite(item: ItemInstance): string {
-  if (item.uniqueId) return getUnique(item.uniqueId)?.sprite ?? 'item.whetstone';
-  return getBase(item.baseId)?.sprite ?? 'item.whetstone';
+  if (item.uniqueId) return getUnique(item.uniqueId)?.sprite ?? 'item.iron_helm';
+  return getBase(item.baseId)?.sprite ?? 'item.iron_helm';
 }
 
 /**
@@ -956,6 +983,8 @@ export function itemSprite(item: ItemInstance): string {
  * purpose. A heuristic that rates a penalty as a benefit does not merely mis-rank
  * items, it inverts them.
  */
+const DEFENCE_STATS = new Set<string>(['armour', 'evasion', 'energyShield']);
+
 export function itemPower(item: ItemInstance): number {
   return itemEffects(item).reduce((power, effect) => {
     if (effect.kind === 'goldOnKill') return power + effect.multiplier;
@@ -968,7 +997,11 @@ export function itemPower(item: ItemInstance): number {
     // rare's six rolls. Counted at 1.0 per slot so the heuristic ranks a slot-granting
     // unique above any single affix without pretending to price it exactly - the real
     // comparison is the power-budget search, which equips the thing and measures.
-    if (effect.kind === 'equipSlots') return power + effect.delta;
+    if (effect.kind === 'ringSlots') return power + effect.delta;
+    // A sealed slot is a whole item's worth of LOSS, but only of what was in it - and the
+    // item that seals is the one deciding what is lost. Half a slot each, signed, so the
+    // heuristic sees the trade without pretending to price it.
+    if (effect.kind === 'sealSlots') return power - 0.5 * effect.slots.length;
     // Worth what it multiplies, which this function cannot see - it prices one item
     // in isolation and amplification is a property of the whole loadout. Counted at
     // its excess so the heuristic ranks it as significant without pretending to know
@@ -979,6 +1012,9 @@ export function itemPower(item: ItemInstance): number {
     // the same convention `increased` uses - both are already fractions of the pool.
     if (effect.kind === 'extraElement') return power + effect.fraction;
     if (effect.op === 'more') return power + (effect.value - 1);
+    // A percentage of a defence rating multiplies the piece's implicit, which is a few
+    // points - so +20% of it is worth a tenth of +20% of a stat with a real base.
+    if (effect.op === 'increased' && DEFENCE_STATS.has(effect.stat)) return power + effect.value * 0.1;
     if (effect.op === 'increased') return power + effect.value;
     // Penetration's base is ZERO, so the normalisation below would divide by 1e-9 and
     // score a 5% roll at fifty million. It is already a fraction of a whole - the
@@ -991,6 +1027,10 @@ export function itemPower(item: ItemInstance): number {
     if (effect.stat === 'energyShield') return power + effect.value;
     if (effect.stat === 'armour') return power + effect.value / ARMOUR_K;
     if (effect.stat === 'evasion') return power + effect.value / EVASION_K;
+    // The slot-only stats are fractions already. Wave recovery only pays in the Abyss,
+    // so it is counted at half.
+    if (effect.stat === 'bossMitigation' || effect.stat === 'moveSpeed') return power + effect.value;
+    if (effect.stat === 'waveRecovery') return power + effect.value * 0.5;
     // The base is a Big for damage and max HP, and a plain number for the rest. Read
     // through Number() because this is a heuristic on the SIZE of a flat roll against
     // its base - both are small here, and a Decimal would buy nothing.

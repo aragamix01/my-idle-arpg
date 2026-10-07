@@ -54,7 +54,7 @@ function run(visual: StageVisual, seconds: number, onStep?: () => void) {
 }
 
 describe('wave loot on screen', () => {
-  const drops: SpriteId[] = ['item.axe', 'item.whetstone', 'item.coin_purse', 'item.bloodstone'];
+  const drops: SpriteId[] = ['item.axe', 'item.iron_helm', 'item.bottomless_pouch', 'item.silk_robe'];
 
   it('drops what it was given, and no more', () => {
     const visual = idling();

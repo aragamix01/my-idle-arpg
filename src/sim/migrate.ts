@@ -10,9 +10,17 @@
  */
 
 import { fromSave, toSave } from './big';
-import { CONTENT_VERSION, getAffix, getUnique, rollUniqueValues, type RolledAffix } from './content';
-import { rollStream, rollTablet } from './items';
-import { ACCESSORY_SLOTS, ITEM_SLOTS, MAX_ITEM_SLOTS, type SaveState } from './types';
+import {
+  CONTENT_VERSION,
+  DISSEMBLE_YIELD,
+  getAffix,
+  getUnique,
+  rollUniqueValues,
+  type CurrencyPurse,
+  type RolledAffix,
+} from './content';
+import { armourSlotOf, rollStream, rollTablet } from './items';
+import { ACCESSORY_SLOTS, ARMOUR_SLOT_KINDS, ITEM_SLOTS, type SaveState } from './types';
 
 /** First version whose saves use rolled item instances. */
 export const ITEMS_VERSION = 2;
@@ -32,7 +40,7 @@ export const WEAPONS_VERSION = 6;
 /** First version where gold is a decimal string rather than a double. */
 export const BIG_GOLD_VERSION = 7;
 
-/** First version whose loadout array is MAX_ITEM_SLOTS long and slots are derived. */
+/** First version whose loadout array was seven long and slots were derived. Undone by 14. */
 export const DERIVED_SLOTS_VERSION = 8;
 
 /** First version with elements, resistance and penetration. */
@@ -43,6 +51,24 @@ export const TABLETS_VERSION = 10;
 
 /** First version where a tablet is an ItemInstance with rarity, an implicit and rows. */
 export const TABLET_ITEMS_VERSION = 11;
+
+/** First version with armour slots in place of the relic gear. */
+export const ARMOUR_VERSION = 14;
+
+/**
+ * The relic bases Phase 8 deleted. Named here and nowhere else - the registry no longer
+ * knows them, which is exactly why the migration has to.
+ */
+const RELIC_BASE_IDS = new Set([
+  'whetstone',
+  'glove',
+  'purse',
+  'sigil',
+  'blade',
+  'lens',
+  'charm',
+  'idol',
+]);
 
 export interface MigrationResult {
   state: SaveState;
@@ -185,18 +211,54 @@ export function migrateSave(state: SaveState): MigrationResult {
     migrated = true;
   }
 
-  if (Array.isArray(next.loadout) && next.loadout.length !== MAX_ITEM_SLOTS) {
-    // v7 -> v8 widens the loadout array to its ceiling, padding with nulls.
-    //
-    // Power-neutral and position-preserving: the first four entries keep their
-    // meaning, and the extra positions are inert until something grants the slots.
-    // Truncating rather than growing is equally safe - a longer array can only come
-    // from a save written by a newer build, and the items are still in `items`.
-    const padded = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
-    for (let i = 0; i < Math.min(MAX_ITEM_SLOTS, next.loadout.length); i++) {
-      padded[i] = next.loadout[i] ?? null;
+  if ((state.contentVersion ?? 0) < ARMOUR_VERSION && next.items.length > 0) {
+    /*
+      v13 -> v14: the relic gear is gone. Spoken decision - delete it outright, not
+      convert it.
+
+      Every relic is SALVAGED rather than vanished: it pays exactly what dissembling it
+      would have, so the player is left holding the material, not an empty slot and a
+      grievance. Uniques are not relics - each was re-homed onto an armour slot with its
+      id and rolls intact, so they stay as they are and simply move to their new slot
+      in the loadout rebuild below.
+    */
+    const salvaged: CurrencyPurse = { ...next.currency };
+    next.items = next.items.filter((item) => {
+      if (item.uniqueId || !RELIC_BASE_IDS.has(item.baseId)) return true;
+      const yielded = DISSEMBLE_YIELD[item.rarity];
+      salvaged[yielded] = (salvaged[yielded] ?? 0) + 1;
+      return false;
+    });
+    next.currency = salvaged;
+    migrated = true;
+  }
+
+  if (
+    Array.isArray(next.loadout) &&
+    (next.loadout.length !== ITEM_SLOTS ||
+      next.loadout.some((uid, i) => {
+        const item = uid ? next.items.find((it) => it.uid === uid) : undefined;
+        return uid !== null && (!item || armourSlotOf(item) !== ARMOUR_SLOT_KINDS[i]);
+      }))
+  ) {
+    /*
+      Rebuilt by SLOT, not by position. The old loadout was positional - any piece in any
+      of seven places - and the new one is one place per kind. Each worn piece goes to its
+      own slot; the first claim on a slot wins and the rest go back to the bag, still
+      owned. A uid pointing at a salvaged relic simply finds nothing.
+
+      Also the guard for a save written by some other build: anything that is not a
+      length-five array of correctly-slotted pieces is rebuilt the same way.
+    */
+    const rebuilt = Array<string | null>(ITEM_SLOTS).fill(null);
+    for (const uid of next.loadout) {
+      if (!uid) continue;
+      const item = next.items.find((it) => it.uid === uid);
+      const slot = item ? armourSlotOf(item) : undefined;
+      const index = slot ? ARMOUR_SLOT_KINDS.indexOf(slot) : -1;
+      if (index !== -1 && rebuilt[index] === null) rebuilt[index] = uid;
     }
-    next.loadout = padded;
+    next.loadout = rebuilt;
     migrated = true;
   }
 
@@ -230,7 +292,8 @@ export function migrateSave(state: SaveState): MigrationResult {
   }
 
   if (!Array.isArray(next.accessories) || next.accessories.length !== ACCESSORY_SLOTS) {
-    // v11 -> v12 adds the accessory array. Purely additive, exactly like `weapon` in v6
+    // v11 -> v12 adds the accessory array, and v14 a fourth position that only Traveller's
+    // Harness opens. Purely additive, exactly like `weapon` in v6
     // and `tablets` in v10: an existing save loads with three empty slots, derives
     // identical stats, and fills them the first time the Abyss pays one. Nothing is
     // rerolled and no gear moves.

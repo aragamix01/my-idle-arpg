@@ -85,6 +85,198 @@ const GATES = [1, 15, 40, 80] as const;
 const tiers = (values: readonly [number, number, number, number]) =>
   values.map((value, i) => ({ minStage: GATES[i], value }));
 
+/*
+  Where things roll, Phase 8. Every affix lists its targets outright - see `rollsOn` in
+  schema.ts - and these are the groups the table below is written in.
+
+  The shape of the whole pool, by slot:
+
+    weapon     offence: damage, speed, crit, area, elements, skill levels, resource
+    gloves     the one offensive armour slot - damage, speed, crit multi, elements,
+               and penetration, which rolls nowhere else
+    helmet     crit chance, resource, skill levels; life and its defence layer
+    body       the defence slot - life, toughness, its layer at % and flat, and the
+               two body-only rolls: boss damage cut and life per Abyss wave
+    boots      life, toughness, its layer, and movement speed (boots only)
+    belt       life, toughness, resource, gold find and key find (belt only)
+    jewellery  everything that is not slot- or defence-type-bound
+
+  Symmetry is now a LOADOUT property rather than an item one. A body armour cannot build
+  offence and gloves barely build defence, and that is the point - the offence/defence
+  invariant is measured over the best whole loadout, which is what the power-budget
+  search does.
+*/
+const WEAPONS = ['physical', 'magical'] as const;
+const JEWELLERY = ['ring', 'amulet'] as const;
+const ARMOUR = ['helmet', 'body', 'gloves', 'boots', 'belt'] as const;
+/** The armour slots with a defence type. Belts are utility and have none. */
+const DEFENDED = ['helmet', 'body', 'gloves', 'boots'] as const;
+/**
+ * Never rolls again; still resolves on items that already carry it.
+ *
+ * Retired rather than deleted because a stored RolledAffix names its definition by id,
+ * and a deleted one would render as an unknown modifier on a ring someone owns.
+ */
+const RETIRED = [] as const;
+
+/*
+  The defence layers on the rolled side. Phase 8.
+
+  Gated to the matching BASE as well as the slot: a Plate Cuirass rolls armour and never
+  evasion, so a piece's rolls agree with its implicit instead of diluting it. That gate
+  is also what fixed 7d's pacing fault - the defence rolls no longer sit in a pool every
+  piece draws from, so they no longer crowd out offence everywhere.
+
+  Percentages are prefixes and flat ratings suffixes, so one piece can carry both and
+  they multiply each other the way flat and increased always do. A percentage of a base
+  of zero would be dead, but an armour piece is never at zero - its implicit is a flat
+  rating - so validateRegistry allows `increased` on exactly these three stats.
+
+  Flat rolls are sized UNDER a small implicit: the base is the guaranteed half, and here
+  it is also the larger half.
+*/
+const PERCENT_DEFENCE_PREFIXES: AffixDefinition[] = [
+  {
+    id: 'reinforced',
+    rollsOn: DEFENDED,
+    defence: 'armour',
+    kind: 'prefix',
+    nameFragment: 'Reinforced',
+    effect: { kind: 'statMod', stat: 'armour', op: 'increased' },
+    tiers: tiers([0.04, 0.06, 0.08, 0.1]),
+  },
+  {
+    id: 'supple',
+    rollsOn: DEFENDED,
+    defence: 'evasion',
+    kind: 'prefix',
+    nameFragment: 'Supple',
+    effect: { kind: 'statMod', stat: 'evasion', op: 'increased' },
+    tiers: tiers([0.04, 0.06, 0.08, 0.1]),
+  },
+  {
+    id: 'lustrous',
+    rollsOn: DEFENDED,
+    defence: 'energyShield',
+    kind: 'prefix',
+    nameFragment: 'Lustrous',
+    effect: { kind: 'statMod', stat: 'energyShield', op: 'increased' },
+    tiers: tiers([0.04, 0.06, 0.08, 0.1]),
+  },
+];
+
+/** Of Mist is the evasion member; it predates the other two and keeps its id. */
+const FLAT_DEFENCE_SUFFIXES: AffixDefinition[] = [
+  {
+    id: 'of-iron',
+    rollsOn: DEFENDED,
+    defence: 'armour',
+    kind: 'suffix',
+    nameFragment: 'of Iron',
+    effect: { kind: 'statMod', stat: 'armour', op: 'flat' },
+    // Tops out under a small implicit, and never on one of its values.
+    tiers: tiers([0.5, 0.8, 1.1, 1.4]),
+  },
+  {
+    id: 'of-the-veil',
+    rollsOn: DEFENDED,
+    defence: 'energyShield',
+    kind: 'suffix',
+    nameFragment: 'of the Veil',
+    effect: { kind: 'statMod', stat: 'energyShield', op: 'flat' },
+    tiers: tiers([0.005, 0.008, 0.011, 0.014]),
+  },
+];
+
+/*
+  Slot-only rolls. Each is something no other piece can carry, which is what makes a
+  slot a slot rather than a shape on the paper doll.
+*/
+const SLOT_PREFIXES: AffixDefinition[] = [
+  {
+    /**
+     * Gloves only. The one armour slot built for offence gets a damage roll of its own,
+     * so a rare pair can fill all three prefix rows with damage the way a weapon can.
+     */
+    id: 'vicious',
+    rollsOn: ['helmet', 'gloves', 'boots', 'belt'],
+    kind: 'prefix',
+    nameFragment: 'Vicious',
+    effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
+    tiers: tiers([0.024, 0.036, 0.048, 0.062]),
+  },
+  {
+    /** Body only. Bosses are where a deep run is lost, and the body is the defence slot. */
+    id: 'stalwart',
+    rollsOn: ['body'],
+    kind: 'prefix',
+    nameFragment: 'Stalwart',
+    effect: { kind: 'statMod', stat: 'bossMitigation', op: 'flat' },
+    tiers: tiers([0.04, 0.06, 0.08, 0.1]),
+  },
+];
+
+const SLOT_SUFFIXES: AffixDefinition[] = [
+  {
+    /** Body only. Life back after each Abyss wave - the answer to the `waves` axis. */
+    id: 'of-renewal',
+    rollsOn: ['body'],
+    kind: 'suffix',
+    nameFragment: 'of Renewal',
+    effect: { kind: 'statMod', stat: 'waveRecovery', op: 'flat' },
+    tiers: tiers([0.03, 0.05, 0.07, 0.09]),
+  },
+  {
+    /** Boots only. Faster between packs: trash and farming, never the boss. */
+    id: 'of-the-wind',
+    rollsOn: ['boots'],
+    kind: 'suffix',
+    nameFragment: 'of the Wind',
+    effect: { kind: 'statMod', stat: 'moveSpeed', op: 'flat' },
+    tiers: tiers([0.04, 0.07, 0.1, 0.13]),
+  },
+  {
+    /**
+     * Belt only. Extra stage-boss key chance - the first rolled source of it; before
+     * this only Warden's Keyring paid in keys.
+     */
+    id: 'of-the-keeper',
+    rollsOn: ['belt'],
+    kind: 'suffix',
+    nameFragment: 'of the Keeper',
+    effect: { kind: 'keyDrop' },
+    tiers: tiers([0.1, 0.18, 0.26, 0.35]),
+  },
+  {
+    /**
+     * Helmet only: a skill level off the weapon, at most +2.
+     *
+     * Its own entry rather than Of Ascendancy on a helmet, because that one is gated on
+     * the Abyss scale - a helmet drops from stage 1 and would never reach it.
+     */
+    id: 'of-command',
+    rollsOn: ['helmet'],
+    kind: 'suffix',
+    nameFragment: 'of Command',
+    effect: { kind: 'statMod', stat: 'physicalSkillLevel', op: 'flat' },
+    tiers: [
+      { minStage: GATES[0], value: 1 },
+      { minStage: GATES[2], value: 2 },
+    ],
+  },
+  {
+    id: 'of-insight',
+    rollsOn: ['helmet'],
+    kind: 'suffix',
+    nameFragment: 'of Insight',
+    effect: { kind: 'statMod', stat: 'magicalSkillLevel', op: 'flat' },
+    tiers: [
+      { minStage: GATES[0], value: 1 },
+      { minStage: GATES[2], value: 2 },
+    ],
+  },
+];
+
 /**
  * The name each element wears as a prefix.
  *
@@ -129,6 +321,7 @@ function extraElementPrefix(element: Element): AffixDefinition {
     kind: 'prefix',
     nameFragment: ELEMENT_FRAGMENT[element],
     effect: { kind: 'extraElement', element },
+    rollsOn: [...WEAPONS, 'gloves', ...JEWELLERY],
     tiers: tiers([0.012, 0.019, 0.025, 0.033]),
   };
 }
@@ -136,6 +329,7 @@ function extraElementPrefix(element: Element): AffixDefinition {
 export const PREFIXES: AffixDefinition[] = [
   {
     id: 'brutal',
+    rollsOn: [...WEAPONS, 'helmet', 'gloves', 'boots', 'belt', ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Brutal',
     effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
@@ -151,6 +345,7 @@ export const PREFIXES: AffixDefinition[] = [
      * src/sim/curves.ts.
      */
     id: 'honed',
+    rollsOn: [...WEAPONS, 'helmet', 'gloves', 'boots', 'belt', ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Honed',
     effect: { kind: 'statMod', stat: 'damage', op: 'flat' },
@@ -158,7 +353,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'vital',
-    rollsOn: 'gear',
+    rollsOn: [...ARMOUR, ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Vital',
     effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
@@ -169,7 +364,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'bulwark',
-    rollsOn: 'gear',
+    rollsOn: [...ARMOUR, ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Bulwark',
     effect: { kind: 'statMod', stat: 'maxHp', op: 'flat' },
@@ -177,7 +372,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'armoured',
-    rollsOn: 'gear',
+    rollsOn: ['body', 'belt', ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Armoured',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
@@ -185,6 +380,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'sweeping',
+    rollsOn: [...WEAPONS, 'gloves', ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Sweeping',
     effect: { kind: 'statMod', stat: 'area', op: 'flat' },
@@ -196,7 +392,7 @@ export const PREFIXES: AffixDefinition[] = [
      * appear on one item. Honed rolls on all five; these two roll on one.
      */
     id: 'savage',
-    rollsOn: 'physical',
+    rollsOn: ['physical'],
     kind: 'prefix',
     nameFragment: 'Savage',
     effect: { kind: 'statMod', stat: 'damage', op: 'flat' },
@@ -204,7 +400,7 @@ export const PREFIXES: AffixDefinition[] = [
   },
   {
     id: 'arcane',
-    rollsOn: 'magical',
+    rollsOn: ['magical'],
     kind: 'prefix',
     nameFragment: 'Arcane',
     effect: { kind: 'statMod', stat: 'damage', op: 'flat' },
@@ -220,7 +416,7 @@ export const PREFIXES: AffixDefinition[] = [
      * and the weapon multiplies it.
      */
     id: 'resolute',
-    rollsOn: 'gear',
+    rollsOn: ['helmet', 'belt', ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Resolute',
     effect: { kind: 'statMod', stat: 'resourceRegen', op: 'flat' },
@@ -229,6 +425,7 @@ export const PREFIXES: AffixDefinition[] = [
   {
     /** The increased counterpart to Sweeping, on a base of 2 targets. */
     id: 'titanic',
+    rollsOn: [...WEAPONS, ...JEWELLERY],
     kind: 'prefix',
     nameFragment: 'Titanic',
     effect: { kind: 'statMod', stat: 'area', op: 'increased' },
@@ -250,7 +447,7 @@ export const PREFIXES: AffixDefinition[] = [
      * silently re-narrow the defensive pool.
      */
     id: 'warded',
-    rollsOn: 'gear',
+    rollsOn: RETIRED,
     kind: 'prefix',
     nameFragment: 'Warded',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
@@ -262,7 +459,11 @@ export const PREFIXES: AffixDefinition[] = [
     tiers: tiers([0.019, 0.029, 0.04, 0.052]),
   },
   ...ELEMENTS.map(extraElementPrefix),
+  ...PERCENT_DEFENCE_PREFIXES,
+  ...SLOT_PREFIXES,
   /*
+    RETIRED in Phase 8 - see RETIRED above. Kept so an item that rolled one still reads.
+
     The three defence layers, Phase 7d. Each is a different SHAPE of defence rather than
     another name for Max HP - see effectiveHp in stats.ts - and each is flat-only, because
     all three have a base of zero.
@@ -283,7 +484,7 @@ export const PREFIXES: AffixDefinition[] = [
      * defence - see BOSS_HIT_SCALE.
      */
     id: 'plated',
-    rollsOn: 'gear',
+    rollsOn: RETIRED,
     kind: 'prefix',
     nameFragment: 'Plated',
     effect: { kind: 'statMod', stat: 'armour', op: 'flat' },
@@ -295,7 +496,7 @@ export const PREFIXES: AffixDefinition[] = [
      * ladder; in a delve, the part of the pool that refills between waves.
      */
     id: 'runed',
-    rollsOn: 'gear',
+    rollsOn: RETIRED,
     kind: 'prefix',
     nameFragment: 'Runed',
     effect: { kind: 'statMod', stat: 'energyShield', op: 'flat' },
@@ -306,6 +507,7 @@ export const PREFIXES: AffixDefinition[] = [
 export const SUFFIXES: AffixDefinition[] = [
   {
     id: 'of-haste',
+    rollsOn: [...WEAPONS, 'gloves', 'boots', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Haste',
     effect: { kind: 'statMod', stat: 'attackSpeed', op: 'increased' },
@@ -314,6 +516,7 @@ export const SUFFIXES: AffixDefinition[] = [
   {
     /** Flat attack speed, on a base of 1.5 swings per second. */
     id: 'of-fury',
+    rollsOn: [...WEAPONS, 'gloves', 'boots', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Fury',
     effect: { kind: 'statMod', stat: 'attackSpeed', op: 'flat' },
@@ -321,6 +524,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-precision',
+    rollsOn: [...WEAPONS, 'helmet', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Precision',
     effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
@@ -333,6 +537,7 @@ export const SUFFIXES: AffixDefinition[] = [
      * clearest example in the pool of the two layers needing each other.
      */
     id: 'of-focus',
+    rollsOn: [...WEAPONS, 'helmet', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Focus',
     effect: { kind: 'statMod', stat: 'critChance', op: 'increased' },
@@ -340,6 +545,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-ruin',
+    rollsOn: [...WEAPONS, 'helmet', 'gloves', 'belt', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Ruin',
     effect: { kind: 'statMod', stat: 'critMult', op: 'flat' },
@@ -353,6 +559,7 @@ export const SUFFIXES: AffixDefinition[] = [
      * over, but an `increased` layer just widens the pool it multiplies.
      */
     id: 'of-cruelty',
+    rollsOn: [...WEAPONS, 'helmet', 'gloves', 'boots', 'belt', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Cruelty',
     effect: { kind: 'statMod', stat: 'critMult', op: 'increased' },
@@ -360,7 +567,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-avarice',
-    rollsOn: 'gear',
+    rollsOn: ['belt', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Avarice',
     effect: { kind: 'statMod', stat: 'goldFind', op: 'increased' },
@@ -373,7 +580,7 @@ export const SUFFIXES: AffixDefinition[] = [
      * header. They are the structural fix, not flavour.
      */
     id: 'of-stone',
-    rollsOn: 'gear',
+    rollsOn: ['body', 'belt', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Stone',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
@@ -382,7 +589,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-vigour',
-    rollsOn: 'gear',
+    rollsOn: [...ARMOUR, ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Vigour',
     effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
@@ -393,12 +600,15 @@ export const SUFFIXES: AffixDefinition[] = [
   {
     /** Evasion: a chance to avoid a hit outright, however hard it would have landed. */
     id: 'of-mist',
-    rollsOn: 'gear',
+    rollsOn: DEFENDED,
+    defence: 'evasion',
     kind: 'suffix',
     nameFragment: 'of Mist',
     effect: { kind: 'statMod', stat: 'evasion', op: 'flat' },
-    tiers: tiers([0.8, 1.2, 1.7, 2.2]),
+    tiers: tiers([0.5, 0.8, 1.1, 1.4]),
   },
+  ...FLAT_DEFENCE_SUFFIXES,
+  ...SLOT_SUFFIXES,
   {
     /**
      * The weapon mods, and the only affixes in the pool locked to a base type.
@@ -426,7 +636,7 @@ export const SUFFIXES: AffixDefinition[] = [
      * is the first thing a caster needs and stays that way.
      */
     id: 'of-endurance',
-    rollsOn: 'physical',
+    rollsOn: ['physical'],
     kind: 'suffix',
     nameFragment: 'of Endurance',
     effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
@@ -434,7 +644,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-clarity',
-    rollsOn: 'magical',
+    rollsOn: ['magical'],
     kind: 'suffix',
     nameFragment: 'of Clarity',
     effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
@@ -445,7 +655,7 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-recovery',
-    rollsOn: 'gear',
+    rollsOn: ['helmet', 'belt', ...JEWELLERY],
     kind: 'suffix',
     nameFragment: 'of Recovery',
     effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
@@ -453,18 +663,18 @@ export const SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-mastery',
+    rollsOn: ['physical'],
     kind: 'suffix',
     nameFragment: 'of Mastery',
     effect: { kind: 'statMod', stat: 'physicalSkillLevel', op: 'flat' },
-    rollsOn: 'physical',
     tiers: tiers([1, 2, 3, 4]),
   },
   {
     id: 'of-attunement',
+    rollsOn: ['magical'],
     kind: 'suffix',
     nameFragment: 'of Attunement',
     effect: { kind: 'statMod', stat: 'magicalSkillLevel', op: 'flat' },
-    rollsOn: 'magical',
     tiers: tiers([1, 2, 3, 4]),
   },
   {
@@ -483,6 +693,7 @@ export const SUFFIXES: AffixDefinition[] = [
      * elements stop being a choice.
      */
     id: 'of-sundering',
+    rollsOn: ['gloves'],
     kind: 'suffix',
     nameFragment: 'of Sundering',
     effect: { kind: 'statMod', stat: 'penetration', op: 'flat' },
@@ -572,10 +783,10 @@ const ACCESSORY_SUFFIXES: AffixDefinition[] = [
      * duplicate-line guard against itself, which is the guard being right.
      */
     id: 'of-ascendancy',
+    rollsOn: JEWELLERY,
     kind: 'suffix',
     nameFragment: 'of Ascendancy',
     effect: { kind: 'statMod', stat: 'physicalSkillLevel', op: 'flat' },
-    rollsOn: 'accessory',
     tiers: [
       { minStage: ACCESSORY_GATES[0], value: 1 },
       { minStage: ACCESSORY_GATES[2], value: 2 },
@@ -583,10 +794,10 @@ const ACCESSORY_SUFFIXES: AffixDefinition[] = [
   },
   {
     id: 'of-communion',
+    rollsOn: JEWELLERY,
     kind: 'suffix',
     nameFragment: 'of Communion',
     effect: { kind: 'statMod', stat: 'magicalSkillLevel', op: 'flat' },
-    rollsOn: 'accessory',
     tiers: [
       { minStage: ACCESSORY_GATES[0], value: 1 },
       { minStage: ACCESSORY_GATES[2], value: 2 },
@@ -606,10 +817,10 @@ const ACCESSORY_SUFFIXES: AffixDefinition[] = [
      * against an offensive character taking skill levels.
      */
     id: 'of-warding',
+    rollsOn: JEWELLERY,
     kind: 'suffix',
     nameFragment: 'of Warding',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
-    rollsOn: 'accessory',
     tiers: accessoryTiers([0.045, 0.065, 0.09, 0.12]),
   },
 ];
@@ -664,7 +875,7 @@ const TABLET_PREFIXES: AffixDefinition[] = [
     kind: 'prefix',
     nameFragment: 'Bloated',
     effect: { kind: 'monsterBuff', axis: 'hp' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.15, 0.25, 0.35, 0.45]),
   },
   {
@@ -672,7 +883,7 @@ const TABLET_PREFIXES: AffixDefinition[] = [
     kind: 'prefix',
     nameFragment: 'Savage',
     effect: { kind: 'monsterBuff', axis: 'damage' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.12, 0.2, 0.28, 0.36]),
   },
   {
@@ -680,7 +891,7 @@ const TABLET_PREFIXES: AffixDefinition[] = [
     kind: 'prefix',
     nameFragment: 'Teeming',
     effect: { kind: 'monsterBuff', axis: 'count' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.14, 0.22, 0.3, 0.4]),
   },
   {
@@ -694,7 +905,7 @@ const TABLET_PREFIXES: AffixDefinition[] = [
     kind: 'prefix',
     nameFragment: 'Endless',
     effect: { kind: 'monsterBuff', axis: 'waves' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.2, 0.3, 0.4, 0.5]),
   },
 ];
@@ -705,7 +916,7 @@ const TABLET_SUFFIXES: AffixDefinition[] = [
     kind: 'suffix',
     nameFragment: 'of Stone',
     effect: { kind: 'monsterBuff', axis: 'hp' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.08, 0.13, 0.18, 0.24]),
   },
   {
@@ -713,7 +924,7 @@ const TABLET_SUFFIXES: AffixDefinition[] = [
     kind: 'suffix',
     nameFragment: 'of Fury',
     effect: { kind: 'monsterBuff', axis: 'damage' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.07, 0.11, 0.15, 0.2]),
   },
   {
@@ -721,7 +932,7 @@ const TABLET_SUFFIXES: AffixDefinition[] = [
     kind: 'suffix',
     nameFragment: 'of the Swarm',
     effect: { kind: 'monsterBuff', axis: 'count' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.09, 0.14, 0.19, 0.25]),
   },
   {
@@ -729,7 +940,7 @@ const TABLET_SUFFIXES: AffixDefinition[] = [
     kind: 'suffix',
     nameFragment: 'of Descent',
     effect: { kind: 'monsterBuff', axis: 'waves' },
-    rollsOn: 'tablet',
+    rollsOn: ['tablet'],
     tiers: tabletTiers([0.1, 0.16, 0.22, 0.28]),
   },
 ];

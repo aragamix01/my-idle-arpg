@@ -44,6 +44,9 @@ import {
   statsFromWire,
   critFactor,
   ACCESSORY_SLOT_KINDS,
+  ARMOUR_SLOT_KINDS,
+  armourSlotOf,
+  type ArmourSlot,
   type CurrencyId,
   type HudSnapshot,
   type ItemInstance,
@@ -56,6 +59,7 @@ import {
 import { AtlasSprite } from './atlasSprite';
 import { CraftModal } from './CraftModal';
 import {
+  ARMOUR_SLOT_LABEL,
   breakdownLines,
   compact,
   ELEMENT_STYLE,
@@ -111,18 +115,32 @@ function WeaponMark({ className = '' }: { className?: string }) {
 /**
  * Whether there is anywhere to put this item.
  *
- * Three answers, because there are three kinds of slot. A weapon always has somewhere -
- * equipping one is a straight swap, not a hunt - while gear and accessories each need a
- * free position of their own kind.
+ * A weapon or a piece of armour always has somewhere - each has exactly one slot, so
+ * equipping is a straight swap, not a hunt. Only accessories need a free position of
+ * their own kind, because there are two (or three) ring positions to choose between.
  */
 function hasFreeSlotFor(item: ItemInstance, hud: HudSnapshot): boolean {
   if (isWeaponBase(item.baseId)) return true;
   const wear = getBase(item.baseId)?.wear;
   if (wear) {
-    return ACCESSORY_SLOT_KINDS.some((kind, i) => kind === wear && hud.accessories[i] === null);
+    return ACCESSORY_SLOT_KINDS.some(
+      (kind, i) => i < hud.accessorySlots && kind === wear && hud.accessories[i] === null,
+    );
   }
-  return hud.loadout.includes(null);
+  return armourSlotOf(item) !== undefined;
 }
+
+/**
+ * Where each armour slot sits on the paper doll: helmet above, gloves - body - belt
+ * across the middle, boots below. Grid placement on a three-column grid.
+ */
+const DOLL_PLACE: Record<ArmourSlot, string> = {
+  helmet: 'col-start-2 row-start-1',
+  gloves: 'col-start-1 row-start-2',
+  body: 'col-start-2 row-start-2',
+  belt: 'col-start-3 row-start-2',
+  boots: 'col-start-2 row-start-3',
+};
 
 /** Descending, so "sort by rarity" puts the interesting end first. */
 const RARITY_ORDER: Record<Rarity, number> = { unique: 3, rare: 2, magic: 1, common: 0 };
@@ -368,7 +386,7 @@ export function InventoryTab({
       const slots = ACCESSORY_SLOT_KINDS.map((kind, i) => ({ kind, i })).filter(
         (s) => s.kind === wear,
       );
-      const free = slots.find((s) => hud.accessories[s.i] === null);
+      const free = slots.find((s) => s.i < hud.accessorySlots && hud.accessories[s.i] === null);
       // Full is a decision for the player, not an error to swallow - the same rule the
       // gear slots follow. Swapping into an occupied ring slot would silently choose
       // which of two rings to remove.
@@ -376,13 +394,13 @@ export function InventoryTab({
       return onEquipAccessory(free.i, uid);
     }
 
+    // Armour has exactly one slot, so equipping it is a swap: whatever was there goes
+    // back to the bag, still owned. Equipping what is already worn takes it off.
     const equippedSlot = hud.loadout.indexOf(uid);
     if (equippedSlot !== -1) return onEquip(equippedSlot, null);
-    const free = hud.loadout.indexOf(null);
-    // Every slot taken is a choice to make, not an error to swallow - the
-    // player unequips something first.
-    if (free === -1) return;
-    onEquip(free, uid);
+    const kind = item ? armourSlotOf(item) : undefined;
+    if (!kind) return;
+    onEquip(ARMOUR_SLOT_KINDS.indexOf(kind), uid);
   };
 
 
@@ -492,34 +510,36 @@ export function InventoryTab({
         </button>
       </Section>
 
-      <Section
-        title={`Equipped (${hud.loadout.slice(0, hud.equipSlots).filter(Boolean).length}/${hud.equipSlots})`}
-      >
-        <div className="grid grid-cols-4 gap-2">
-          {hud.loadout.map((uid, slot) => {
+      {/*
+        The paper doll, Phase 8. Five fixed slots, each labelled by what it takes,
+        laid out where the piece is worn. A sealed slot - Monomaniac's Shroud - is shown
+        rather than hidden: whatever sits in it is still owned and still refuses to be
+        dissembled, but contributes nothing, and a slot that silently vanished with an
+        item inside would be the worst possible reading of the seal.
+      */}
+      <Section title={`Armour (${hud.loadout.filter(Boolean).length}/${ARMOUR_SLOT_KINDS.length})`}>
+        <div className="mx-auto grid max-w-sm grid-cols-3 grid-rows-3 gap-2">
+          {ARMOUR_SLOT_KINDS.map((kind, slot) => {
+            const uid = hud.loadout[slot];
             const item = uid ? byUid.get(uid) : undefined;
-            // Past the live count the slot is locked: whatever is in it is still owned
-            // and still refuses to be dissembled, but contributes nothing. Rendered
-            // rather than hidden, because a slot that silently disappears with an item
-            // inside it is the worst possible reading of a slot-removing unique.
-            const locked = slot >= hud.equipSlots;
-            if (locked && !item) return null;
-
+            const sealed = hud.sealedSlots.includes(kind);
+            const label = ARMOUR_SLOT_LABEL[kind];
             return (
               <button
-                key={slot}
+                key={kind}
                 type="button"
                 disabled={busy || !item}
                 onClick={() => item && setSelected(item.uid)}
+                aria-label={`${label}: ${item ? itemName(item) : 'empty'}${sealed ? ', sealed' : ''}`}
                 title={
-                  locked
-                    ? `${item ? itemName(item) : 'Empty'} — slot locked, nothing here applies`
+                  sealed
+                    ? `${item ? itemName(item) : 'Empty'} — sealed, nothing here applies`
                     : item
                       ? itemName(item)
-                      : 'Empty slot'
+                      : `Empty ${label.toLowerCase()} slot`
                 }
-                className={`flex flex-col items-center gap-1 rounded border p-2 text-center ${
-                  locked
+                className={`${DOLL_PLACE[kind]} flex min-h-24 flex-col items-center justify-center gap-1 rounded border p-2 text-center ${
+                  sealed
                     ? 'border-dashed border-amber-800/70 bg-neutral-900/40 opacity-60'
                     : item
                       ? `${RARITY_STYLE[item.rarity].border} bg-neutral-900 hover:bg-neutral-800`
@@ -536,10 +556,10 @@ export function InventoryTab({
                 ) : (
                   <>
                     <div className="h-8 w-8" />
-                    <span className="text-[10px] text-neutral-600">empty</span>
+                    <span className="text-[10px] text-neutral-600">{label}</span>
                   </>
                 )}
-                {locked && <span className="text-[10px] text-amber-500">locked</span>}
+                {sealed && <span className="text-[10px] text-amber-500">sealed</span>}
               </button>
             );
           })}
@@ -549,17 +569,18 @@ export function InventoryTab({
       {/*
         Accessories, in their own row.
 
-        A fixed three, never locked and never granted - they sit outside the derived slot
-        count entirely, so there is no `x/y` here the way Equipped has one. Labelled by
-        KIND, because which position takes which is a rule the player has to be able to
-        see: an amulet dropped onto a ring slot is refused by the server, and a row that
-        did not say so would make that refusal look like a bug.
+        Three, or four while Traveller's Harness grants a ring position. Labelled by KIND,
+        because which position takes which is a rule the player has to be able to see: an
+        amulet dropped onto a ring slot is refused by the server, and a row that did not
+        say so would make that refusal look like a bug. The granted position shows only
+        while it is live - or while a ring is stranded in it, so it can be taken back.
       */}
       <Section title="Accessories">
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           {hud.accessories.map((uid, slot) => {
             const item = uid ? byUid.get(uid) : undefined;
             const kind = ACCESSORY_SLOT_KINDS[slot];
+            if (slot >= hud.accessorySlots && !item) return null;
             return (
               <button
                 key={slot}

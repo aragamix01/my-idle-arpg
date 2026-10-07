@@ -6,7 +6,7 @@ the queue and shipped as 5a-1 and 5a-2, and it is why weapons-and-skills now sit
 front of the uniques - a skill supplies the base that every modifier multiplies, so
 uniques authored first would be authored twice.
 
-Order:  1 -> 5a-1 -> 5a-2 -> 6a -> 6b -> 2 -> 5a-3 -> 3 -> 4 -> 5b -> 7 -> 5c
+Order:  1 -> 5a-1 -> 5a-2 -> 6a -> 6b -> 2 -> 5a-3 -> 3 -> 4 -> 5b -> 7 -> 8 -> 5c
         (7 absorbs 5c's panel: the upgrade screen is built in 7a)
 
 Status: [done] shipped and verified  [next] in progress or up next  [todo] not started
@@ -525,6 +525,94 @@ The canvas is a mockup and is WRONG about the game in places. Real data wins:
   AffixDefinition (lower for the defence affixes) and re-sweep. Then update the registry
   snapshot and balance golden, run tsc/eslint/vitest/e2e
 - Registry snapshot and balance golden are NOT updated yet - expect vitest to flag them
+
+
+## [next] Phase 8 - Real armour slots
+> Spoken decisions, 2026-10-07: **delete the relic gear outright** (Whetstone, Glove, Purse,
+> Sigil, Blade, Lens, Charm, Idol), replace with armour pieces, re-home every unique, keep
+> the 6-affix cap, defence from BOTH base implicits and affixes - some defence affixes on
+> one defence type only, some on one slot only. All four open questions answered "ok":
+> the three new stats go in, Harness = +1 ring slot, Shroud seals gloves+boots, and the
+> pool moves (penetration, gold find, skill levels) ship in this phase.
+
+Supersedes 7d's pacing problem: 7d added defence AFFIXES to one shared gear pool, so every
+piece lost offence rows. Here the defence layer is a base implicit and the defence affixes
+are gated to matching bases, so a defence roll no longer crowds out a damage roll anywhere.
+
+### Slots - nine, fixed
+Weapon, Helmet, Body, Gloves, Boots, Belt, Ring, Ring, Amulet. The derived slot count and
+its fixed point (`equipSlots`, `slotsFrom`, the window rule) go away: no item changes the
+count of armour slots any more.
+
+### Bases - the implicit IS the defence type
+| Slot   | Armour        | Evasion        | Energy shield |
+| Helmet | Iron Helm     | Leather Hood   | Silk Circlet  |
+| Body   | Plate Cuirass | Leather Jerkin | Silk Robe     |
+| Gloves | Gauntlets     | Leather Gloves | Silk Wraps    |
+| Boots  | Greaves       | Leather Boots  | Silk Slippers |
+- Body's implicit is about twice the other slots' - the body choice is the defence choice
+- Belt is utility: Heavy Belt (toughness), Leather Belt (max HP), Sash (resource regen)
+
+### Rows - max 6
+Unchanged: rare 3/3, magic 2/2, common 1/1. Accessories stay at 2/2 max.
+
+### Pools - three layers
+- **Any armour piece:** flat/% max HP, toughness (Armoured, Warded, Of Stone merge into one
+  prefix and one suffix)
+- **By defence type, matching base only:** armour - Plated (flat), Reinforced (%);
+  evasion - Of Mist (flat), Supple (%); ES - Runed (flat), Warded (%)
+- **By slot only:**
+  - Body: top tier of HP and of its own defence type; NEW: bosses deal X% less damage;
+    NEW: X% life restored per Abyss wave
+  - Helmet: crit chance, resource regen; +1-2 skill levels (weapons keep a lower tier)
+  - Gloves: attack speed, crit multi, flat damage, extra element; penetration (Of
+    Sundering moves here only)
+  - Boots: evasion lean; NEW: movement speed (less walking per floor - faster clears)
+  - Belt: life, toughness, resource; gold find (Of Avarice moves here); key find
+- Weapon: as today minus penetration. Rings/amulet: unchanged
+- Symmetry is measured over the WHOLE loadout, not per item
+
+### Uniques - all fourteen re-homed, rolls kept
+Whetstone Grips (gloves), Quickdraw Gauntlets (gloves), Berserker's Fists (gloves),
+Executioner's Hood (helmet), Swarm-Eye Circlet (helmet), Duelist's Visor (helmet),
+Bloodstone Carapace (body), Bulwark of the Deep (body), Monomaniac's Shroud (body: seals
+gloves+boots instead of -1 slot), Giantstride Greaves (boots), Deep Delver's Treads
+(boots), Bottomless Pouch (belt), Warden's Keyring (belt), Traveller's Harness (belt:
++1 ring slot instead of +1-2 slots). Gaps for later: a defensive unique per defence type,
+a third boots unique.
+
+### Status, 2026-10-07: committed, PACING NOT TUNED (spoken: "tune later, commit now")
+Shipped: the whole slot model, sim to UI, plus validateRegistry pool-size checks and a
+per-slot power-budget search (tests/sim.test.ts, scripts/budget-probe.ts). tsc and eslint
+clean; vitest 235/238 - the three failures are the registry snapshot, the balance
+golden, and "clear time stays watchable" (median 14.2s against a 15s floor).
+
+Diverged from the plan:
+- No per-slot tier caps. Body gets 2x implicits instead; % defence rolls on all four
+  defended slots; helmet skill levels are new affixes (Of Command / Of Insight) because
+  Of Ascendancy is Abyss-gated. Plated, Runed and Warded are RETIRED (rollsOn: []).
+- The first numbers measured offence 1.28 vs defence 3.81, so: defence implicits and
+  rolls cut to ~1/3 of the draft; toughness (Armoured, Of Stone) only on body, belt and
+  jewellery; Brutal/Honed/crit opened on helmet, boots and belt; a new prefix, Vicious,
+  on every slot but body. Body stays pure defence. Budget now: drop 2.43 x 2.65 = 6.43
+  (asym 0.09), crafted 6.75 (asym 0.07) - inside the old bands.
+- Crafting headroom fell to 1.05x over drops (band was 1.2). Narrow slot pools mean a
+  seventh row lands on a filler. Floor lowered to 1.03 with the reason in the test.
+- BUG FIXED, predates Phase 8: the rarity-upgrade ore rolled new rows WITHOUT the base,
+  so they came from every affix in the game. Regression test added.
+
+Pacing, measured BEFORE that fix (so not trustworthy): seeds 0-7 = 1.1/2.6/2.0/1.8/1.4/
+3.8/4.4/0.7 days, median ~1.9 against ~4.65 before; pre-80 p10 13-18s (fine), post-80
+p10 2.4-7.1s (was 8-11.5) - far too strong past the Abyss. The ladder run is also slower,
+~200s/seed (was ~100s), from the per-slot equip search.
+
+Next: re-sweep with the fix; if still fast, look at movement speed (shortens trash,
+outside the budget metric) and the guaranteed defence implicit on every common; then
+update the registry snapshot and balance golden, run Playwright, check the paper doll.
+
+### Saves
+CONTENT_VERSION 14. Old relic items (equipped or stored) are salvaged into currency; old
+uniques become their new counterparts with their rolled values kept.
 
 
 ## Later, not scheduled

@@ -4,7 +4,7 @@
  * A base contributes a name, an icon, and **one implicit affix fixed to that
  * base type**. The implicit is rolled once when the item drops and is never
  * rerollable - not by gold, not by any currency. That is what makes choosing a
- * Whetstone over an Idol a decision rather than a cosmetic preference: the
+ * Plate Cuirass over a Silk Robe a decision rather than a cosmetic preference: the
  * rolled affixes are a lottery, but the implicit is guaranteed and known.
  *
  * The implicit is deliberately weaker than a rolled affix of the same tier -
@@ -26,7 +26,7 @@
  * all-multiplier model a first pass at ~1.075 per item put the combined ceiling
  * at 8.8x on its own, spending the whole budget before currency existed.
  *
- * Names are plain nouns so composition reads: "Brutal Whetstone of Haste"
+ * Names are plain nouns so composition reads: "Brutal Gauntlets of Haste"
  * works, "Brutal Executioner's Mark of Haste" does not.
  */
 
@@ -79,66 +79,87 @@ const accessoryTiers = (values: readonly [number, number, number, number]) =>
  * templates, same display path - so nothing downstream needs to know an
  * implicit is special. Only the roll and reroll paths do.
  */
-export const BASE_AFFIXES: Record<string, AffixDefinition> = {
-  whetstone: {
-    id: 'implicit-damage',
+/*
+  Armour implicits, Phase 8.
+
+  **These are the defence, and that inverts the old rule for armour.** A relic's implicit
+  was a third of a rolled affix so the rolled half stayed the reason to farm. An armour
+  base's implicit is its defence layer - the thing that makes a Plate Cuirass a plate
+  cuirass - so it is the BIGGEST defence number on the piece, and the rolled flat defence
+  affixes are sized under it. Choosing the base is choosing the layer; the rolls refine it.
+
+  Body carries twice what a helmet, gloves or boots do: the body choice is the defence
+  choice, as it is in the games this is modelled on.
+
+  Belts are utility rather than a defence type, and their implicits stay at the old
+  third-of-an-affix size on the stats a belt is about.
+*/
+const DEFENCE_IMPLICIT = {
+  armour: { stat: 'armour', small: [0.9, 1.25, 1.6, 2], body: [1.6, 2.4, 3.2, 4] },
+  evasion: { stat: 'evasion', small: [0.9, 1.25, 1.6, 2], body: [1.6, 2.4, 3.2, 4] },
+  // A hundredth of the ratings: ES is a fraction of life, and a rating of R is worth
+  // about R/100 of effective HP while small - so the three layers start out level.
+  energyShield: { stat: 'energyShield', small: [0.009, 0.0125, 0.016, 0.02], body: [0.016, 0.024, 0.032, 0.04] },
+} as const;
+
+function defenceImplicit(
+  baseId: string,
+  defence: keyof typeof DEFENCE_IMPLICIT,
+  size: 'small' | 'body',
+): AffixDefinition {
+  const { stat } = DEFENCE_IMPLICIT[defence];
+  return {
+    id: `implicit-${baseId}`,
     kind: 'prefix',
     nameFragment: '',
-    effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
-    tiers: tiers([0.007, 0.01, 0.014, 0.018]),
-  },
-  glove: {
-    id: 'implicit-attack-speed',
-    kind: 'suffix',
-    nameFragment: '',
-    effect: { kind: 'statMod', stat: 'attackSpeed', op: 'increased' },
-    // No value here may equal one of of-Haste's, or an item carrying both renders
-    // the same line twice. validateRegistry enforces it across every tier pair.
-    tiers: tiers([0.005, 0.008, 0.01, 0.014]),
-  },
-  purse: {
-    id: 'implicit-gold-find',
-    kind: 'suffix',
-    nameFragment: '',
-    effect: { kind: 'statMod', stat: 'goldFind', op: 'increased' },
-    tiers: tiers([0.02, 0.03, 0.04, 0.05]),
-  },
-  sigil: {
-    id: 'implicit-crit-chance',
-    kind: 'suffix',
-    nameFragment: '',
-    effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
-    tiers: tiers([0.0025, 0.004, 0.006, 0.0075]),
-  },
-  blade: {
-    id: 'implicit-crit-mult',
-    kind: 'suffix',
-    nameFragment: '',
-    effect: { kind: 'statMod', stat: 'critMult', op: 'flat' },
-    tiers: tiers([0.033, 0.052, 0.073, 0.096]),
-  },
-  lens: {
-    id: 'implicit-area',
-    kind: 'prefix',
-    nameFragment: '',
-    effect: { kind: 'statMod', stat: 'area', op: 'flat' },
-    // Likewise 0.3 would collide with Sweeping's weakest tier.
-    tiers: tiers([0.1, 0.16, 0.22, 0.28]),
-  },
-  charm: {
-    id: 'implicit-max-hp',
-    kind: 'prefix',
-    nameFragment: '',
-    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
-    tiers: tiers([0.005, 0.008, 0.011, 0.015]),
-  },
-  idol: {
-    id: 'implicit-toughness',
+    effect: { kind: 'statMod', stat, op: 'flat' },
+    // Implicits are keyed by base, never drawn from a pool - see rollsOn.
+    rollsOn: [],
+    tiers: tiers(DEFENCE_IMPLICIT[defence][size]),
+  };
+}
+
+const ARMOUR_IMPLICITS: Record<string, AffixDefinition> = {
+  'iron-helm': defenceImplicit('iron-helm', 'armour', 'small'),
+  'leather-hood': defenceImplicit('leather-hood', 'evasion', 'small'),
+  'silk-circlet': defenceImplicit('silk-circlet', 'energyShield', 'small'),
+  'plate-cuirass': defenceImplicit('plate-cuirass', 'armour', 'body'),
+  'leather-jerkin': defenceImplicit('leather-jerkin', 'evasion', 'body'),
+  'silk-robe': defenceImplicit('silk-robe', 'energyShield', 'body'),
+  gauntlets: defenceImplicit('gauntlets', 'armour', 'small'),
+  'leather-gloves': defenceImplicit('leather-gloves', 'evasion', 'small'),
+  'silk-wraps': defenceImplicit('silk-wraps', 'energyShield', 'small'),
+  greaves: defenceImplicit('greaves', 'armour', 'small'),
+  'leather-boots': defenceImplicit('leather-boots', 'evasion', 'small'),
+  'silk-slippers': defenceImplicit('silk-slippers', 'energyShield', 'small'),
+  'heavy-belt': {
+    id: 'implicit-heavy-belt',
     kind: 'prefix',
     nameFragment: '',
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
+    rollsOn: [],
     tiers: tiers([0.005, 0.008, 0.011, 0.014]),
   },
+  'leather-belt': {
+    id: 'implicit-leather-belt',
+    kind: 'prefix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
+    rollsOn: [],
+    tiers: tiers([0.005, 0.008, 0.011, 0.015]),
+  },
+  sash: {
+    id: 'implicit-sash',
+    kind: 'suffix',
+    nameFragment: '',
+    effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
+    rollsOn: [],
+    tiers: tiers([0.01, 0.016, 0.022, 0.03]),
+  },
+};
+
+export const BASE_AFFIXES: Record<string, AffixDefinition> = {
+  ...ARMOUR_IMPLICITS,
 
   /**
    * Weapon implicits.
@@ -152,6 +173,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-axe-crit',
     kind: 'suffix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
     // Must collide with neither the Sigil's crit implicit nor of-Precision at any
     // tier. 0.007 was of-Precision's weakest roll, and the guard caught it.
@@ -161,6 +183,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-wand-area',
     kind: 'prefix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'area', op: 'increased' },
     // 0.05 was Titanic's weakest roll, so a Wand carrying both rendered "5.0%
     // increased Area" twice. Caught by the guard, and by a rendering test.
@@ -170,6 +193,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-maul-area',
     kind: 'prefix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'area', op: 'flat' },
     tiers: tiers([0.09, 0.14, 0.19, 0.25]),
   },
@@ -179,6 +203,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-staff-regen',
     kind: 'suffix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'resourceRegen', op: 'increased' },
     // Held to about a third of Of Recovery, the weakest rolled peer on this stat.
     tiers: tiers([0.012, 0.02, 0.028, 0.036]),
@@ -213,6 +238,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-signet-damage',
     kind: 'prefix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'damage', op: 'increased' },
     tiers: accessoryTiers([0.0088, 0.013, 0.0172, 0.0231]),
   },
@@ -220,6 +246,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-band-hp',
     kind: 'prefix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'maxHp', op: 'increased' },
     // Sized against of-Vigour rather than Vital: the bound is measured against the
     // WEAKEST rolled peer on the stat, so the peer that matters is whichever that is.
@@ -229,6 +256,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-seal-crit',
     kind: 'suffix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'critChance', op: 'flat' },
     tiers: accessoryTiers([0.0029, 0.0055, 0.0076, 0.0092]),
   },
@@ -236,6 +264,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-pendant-speed',
     kind: 'suffix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'attackSpeed', op: 'increased' },
     tiers: accessoryTiers([0.0063, 0.0097, 0.013, 0.0176]),
   },
@@ -243,6 +272,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-locket-toughness',
     kind: 'suffix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'toughness', op: 'increased' },
     tiers: accessoryTiers([0.0063, 0.0101, 0.0139, 0.0181]),
   },
@@ -250,6 +280,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-talisman-gold',
     kind: 'suffix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'statMod', stat: 'goldFind', op: 'increased' },
     tiers: accessoryTiers([0.026, 0.039, 0.051, 0.064]),
   },
@@ -270,6 +301,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-tablet-quantity',
     kind: 'prefix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'tabletReward' },
     tiers: tabletTiers([0.3, 0.5, 0.7, 0.9]),
   },
@@ -281,6 +313,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-tablet-rarity',
     kind: 'prefix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'tabletReward' },
     tiers: tabletTiers([0.2, 0.32, 0.44, 0.56]),
   },
@@ -290,6 +323,7 @@ export const BASE_AFFIXES: Record<string, AffixDefinition> = {
     id: 'implicit-tablet-gold',
     kind: 'prefix',
     nameFragment: '',
+    rollsOn: [],
     effect: { kind: 'tabletReward' },
     tiers: tabletTiers([0.5, 0.85, 1.2, 1.55]),
   },
@@ -313,15 +347,30 @@ export const WEAPON_BASES: ItemBase[] = [
   { id: 'staff', name: 'Staff', sprite: 'item.staff', skillId: 'frost-nova' },
 ];
 
-export const GEAR_BASES: ItemBase[] = [
-  { id: 'whetstone', name: 'Whetstone', sprite: 'item.whetstone' },
-  { id: 'glove', name: 'Glove', sprite: 'item.quickdraw_glove' },
-  { id: 'purse', name: 'Purse', sprite: 'item.coin_purse' },
-  { id: 'sigil', name: 'Sigil', sprite: 'item.executioners_mark' },
-  { id: 'blade', name: 'Blade', sprite: 'item.giant_slayer' },
-  { id: 'lens', name: 'Lens', sprite: 'item.swarm_lens' },
-  { id: 'charm', name: 'Charm', sprite: 'item.bloodstone' },
-  { id: 'idol', name: 'Idol', sprite: 'item.deep_delvers_idol' },
+/**
+ * Armour bases, Phase 8. Three per slot, one per defence layer, plus three belts.
+ *
+ * Replaced the eight relic bases (Whetstone, Glove, Purse, Sigil, Blade, Lens, Charm,
+ * Idol), which all rolled one shared pool and fitted any of four slots - so no piece was
+ * anything in particular. Each of these fits exactly one slot and its implicit is the
+ * defence layer it is built around. See `armour` and `defence` on ItemBase.
+ */
+export const ARMOUR_BASES: ItemBase[] = [
+  { id: 'iron-helm', name: 'Iron Helm', sprite: 'item.iron_helm', armour: 'helmet', defence: 'armour' },
+  { id: 'leather-hood', name: 'Leather Hood', sprite: 'item.leather_hood', armour: 'helmet', defence: 'evasion' },
+  { id: 'silk-circlet', name: 'Silk Circlet', sprite: 'item.silk_circlet', armour: 'helmet', defence: 'energyShield' },
+  { id: 'plate-cuirass', name: 'Plate Cuirass', sprite: 'item.plate_cuirass', armour: 'body', defence: 'armour' },
+  { id: 'leather-jerkin', name: 'Leather Jerkin', sprite: 'item.leather_jerkin', armour: 'body', defence: 'evasion' },
+  { id: 'silk-robe', name: 'Silk Robe', sprite: 'item.silk_robe', armour: 'body', defence: 'energyShield' },
+  { id: 'gauntlets', name: 'Gauntlets', sprite: 'item.gauntlets', armour: 'gloves', defence: 'armour' },
+  { id: 'leather-gloves', name: 'Leather Gloves', sprite: 'item.leather_gloves', armour: 'gloves', defence: 'evasion' },
+  { id: 'silk-wraps', name: 'Silk Wraps', sprite: 'item.silk_wraps', armour: 'gloves', defence: 'energyShield' },
+  { id: 'greaves', name: 'Greaves', sprite: 'item.greaves', armour: 'boots', defence: 'armour' },
+  { id: 'leather-boots', name: 'Leather Boots', sprite: 'item.leather_boots', armour: 'boots', defence: 'evasion' },
+  { id: 'silk-slippers', name: 'Silk Slippers', sprite: 'item.silk_slippers', armour: 'boots', defence: 'energyShield' },
+  { id: 'heavy-belt', name: 'Heavy Belt', sprite: 'item.heavy_belt', armour: 'belt' },
+  { id: 'leather-belt', name: 'Leather Belt', sprite: 'item.leather_belt', armour: 'belt' },
+  { id: 'sash', name: 'Sash', sprite: 'item.sash', armour: 'belt' },
 ];
 
 /**
@@ -346,7 +395,7 @@ export const GEAR_BASES: ItemBase[] = [
  * about what kind of thing this is.
  *
  * Three of each, because the implicit is the half of an item you CHOOSE - picking a Band
- * over a Signet is the same decision as picking a Whetstone over a Purse, and one base
+ * over a Signet is the same decision as picking a Plate Cuirass over a Silk Robe, and one base
  * per slot would make that decision disappear.
  *
  * Names are plain nouns so composition reads: "Brutal Signet of Haste" works. The art is
@@ -368,19 +417,19 @@ export const AMULET_BASES: ItemBase[] = [
 export const ACCESSORY_BASES: ItemBase[] = [...RING_BASES, ...AMULET_BASES];
 
 export const TABLET_BASES: ItemBase[] = [
-  { id: 'hoarding-tablet', name: 'Hoarding Tablet', sprite: 'item.deep_delvers_idol', pays: 'quantity' },
-  { id: 'auspicious-tablet', name: 'Auspicious Tablet', sprite: 'item.swarm_lens', pays: 'rarity' },
-  { id: 'gilded-tablet', name: 'Gilded Tablet', sprite: 'item.coin_purse', pays: 'gold' },
+  { id: 'hoarding-tablet', name: 'Hoarding Tablet', sprite: 'item.hoarding_tablet', pays: 'quantity' },
+  { id: 'auspicious-tablet', name: 'Auspicious Tablet', sprite: 'item.auspicious_tablet', pays: 'rarity' },
+  { id: 'gilded-tablet', name: 'Gilded Tablet', sprite: 'item.gilded_tablet', pays: 'gold' },
 ];
 
 /**
- * Every base: gear, weapon, accessory and tablet.
+ * Every base: armour, weapon, accessory and tablet.
  *
  * Kept as the flat list it always was, so validation, sprite checks and the display
  * path do not have to know the split exists. Only the roll path does.
  */
 export const BASES: ItemBase[] = [
-  ...GEAR_BASES,
+  ...ARMOUR_BASES,
   ...WEAPON_BASES,
   ...ACCESSORY_BASES,
   ...TABLET_BASES,

@@ -123,25 +123,50 @@ export const RAVEN_FANTASY_ICONS: GridSource = {
     // drawn every frame of every fight and should not compete with the loot.
     'weapon.sword': 1440,
 
-    // Gear bases. Each shares its icon with the unique of the same name, which is a
-    // property of the content rather than a shortcut: The Whetstone IS a whetstone.
-    'item.whetstone': 208,
-    'item.quickdraw_glove': 1487,
-    'item.coin_purse': 157,
-    'item.executioners_mark': 316,
-    'item.giant_slayer': 1455,
-    'item.swarm_lens': 292,
-    'item.bloodstone': 162,
-    'item.deep_delvers_idol': 134,
+    /*
+      Armour, Phase 8. The pack draws a full matching set per material - steel helm,
+      cuirass and greaves in one palette, cloth hood and shoes in another - and the bases
+      are picked so each DEFENCE LAYER reads as one set: steel for armour, leather for
+      evasion, blue cloth and crystal for energy shield. At 16px the material is most of
+      what a player can tell apart.
+    */
+    'item.iron_helm': 1904,
+    'item.leather_hood': 1952,
+    'item.silk_circlet': 1834,
+    'item.plate_cuirass': 1920,
+    'item.leather_jerkin': 1973,
+    'item.silk_robe': 2017,
+    'item.gauntlets': 1487,
+    'item.leather_gloves': 2172,
+    'item.silk_wraps': 1647,
+    'item.greaves': 1936,
+    'item.leather_boots': 1989,
+    'item.silk_slippers': 1988,
+    'item.heavy_belt': 2191,
+    'item.leather_belt': 2067,
+    'item.sash': 2190,
 
-    // The remaining uniques, picked on meaning: an anvil for the Anvil, a visored helm
-    // for the Visor, a round shield for the Bulwark, a signet for the Seal.
-    'item.berserkers_anvil': 124,
+    // Uniques, re-homed onto armour: each is drawn as the piece it is now worn as,
+    // and in a hotter palette than any base of its slot so it reads as special.
+    'item.whetstone_grips': 2170,
+    'item.quickdraw_gauntlets': 2168,
+    'item.berserkers_fists': 2171,
+    'item.executioners_hood': 2074,
+    'item.swarm_eye_circlet': 1839,
     'item.duelists_visor': 2051,
-    'item.wardens_coffer': 304,
-    'item.bulwark_of_the_deep': 2114,
-    'item.travellers_harness': 2092,
-    'item.monomaniacs_seal': 2060,
+    'item.bloodstone_carapace': 1924,
+    'item.bulwark_of_the_deep': 1934,
+    'item.monomaniacs_shroud': 2092,
+    'item.giantstride_greaves': 2163,
+    'item.deep_delvers_treads': 2162,
+    'item.bottomless_pouch': 157,
+    'item.wardens_keyring': 177,
+    'item.travellers_harness': 2068,
+
+    // Tablets are runestones - the pack's own carved slabs, one glyph per reward.
+    'item.hoarding_tablet': 316,
+    'item.auspicious_tablet': 318,
+    'item.gilded_tablet': 319,
 
     /*
       Accessories.

@@ -12,7 +12,9 @@
  */
 
 import { z } from 'zod';
-import { STAT_KEYS, type StatKey } from '../types';
+import { ARMOUR_SLOT_KINDS, STAT_KEYS, type ArmourSlot, type StatKey } from '../types';
+
+export const ArmourSlotSchema = z.enum(ARMOUR_SLOT_KINDS);
 
 export const StatKeySchema = z.enum(STAT_KEYS);
 
@@ -115,18 +117,30 @@ export const EffectSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
   /**
-   * Changes how many gear slots the character has.
+   * Opens accessory positions past the base three - see ACCESSORY_SLOT_KINDS.
    *
-   * A fourth kind rather than a stat, for the same reason keyDrop is one: a slot count
-   * is an integer the layer machinery has nothing to say about. Running it through
-   * `(base + flat) x (1 + increased) x more` would mean a loadout of 4.7 slots.
-   *
-   * Only items in the first ITEM_SLOTS positions are consulted - see equipSlots().
+   * A kind rather than a stat, for the same reason keyDrop is one: a slot count is an
+   * integer the layer machinery has nothing to say about. Only an armour piece may carry
+   * it, which is what keeps it from feeding back into itself - see accessorySlots().
    */
   z
     .object({
-      kind: z.literal('equipSlots'),
+      kind: z.literal('ringSlots'),
       delta: z.number().int(),
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  /**
+   * Switches armour slots OFF while worn. Whatever sits in them contributes nothing.
+   *
+   * Which slots is the item's identity, so it is authored and never rolled. Only a body
+   * piece carries it, and a body can never seal the body slot - so the sealer cannot
+   * seal itself and there is nothing to iterate.
+   */
+  z
+    .object({
+      kind: z.literal('sealSlots'),
+      slots: z.array(ArmourSlotSchema).min(1),
       when: ConditionSchema.optional(),
     })
     .strict(),
@@ -312,6 +326,8 @@ export type AffixKind = 'prefix' | 'suffix';
 export type AffixEffectTemplate =
   | { kind: 'statMod'; stat: StatKey; op: ModLayer }
   | { kind: 'goldOnKill' }
+  /** The tier value is the EXTRA chance, so 0.1 resolves to a keyDrop multiplier of 1.1. */
+  | { kind: 'keyDrop' }
   /** The element is part of the affix's identity; only the fraction comes from a tier. */
   | { kind: 'extraElement'; element: Element }
   /**
@@ -375,28 +391,38 @@ export interface AffixDefinition {
   nameFragment: string;
   effect: AffixEffectTemplate;
   /**
-   * Where this affix may roll. Absent means anywhere a CHARACTER can wear it.
+   * Every kind of item this affix may roll on, listed outright. Phase 8.
    *
-   * More than two values, because "gear only" is as load-bearing as "weapons only".
-   * Without it a weapon rolls everything gear does plus its own exclusives, so gear is
-   * strictly a weapon with fewer options - and the four gear slots become a place to
-   * put leftovers.
+   * A list rather than the old one-word tag ('gear', 'accessory', a skill kind), because
+   * the armour slots made the question per-slot: Brutal rolls on weapons, gloves and
+   * jewellery and NOT on a helmet. A tag scheme that can say that is a list wearing a
+   * disguise. Spelled out per affix, the whole pool is one reviewable table.
    *
-   * The division is offence-and-resource against defence-and-economy. A weapon
-   * cannot roll max HP or gold find; gear cannot roll skill levels. So the two are
-   * different objects rather than the same object with different numbers, and
-   * `+2 to Physical Skill Levels` never appears on a wand as a dead row.
+   * `'physical'` and `'magical'` are weapons of that skill kind. `'tablet'` must stand
+   * alone - a tablet rolls only tablet affixes and nothing else ever rolls one, and
+   * validateRegistry holds both halves of that partition.
    *
-   * `'tablet'` is the one value that partitions rather than divides. "Absent means
-   * anywhere" would otherwise let every gear affix roll on a tablet, so `eligibleAffixes`
-   * treats it as a closed set in both directions: a tablet rolls only tablet affixes, and
-   * nothing else ever rolls one. `validateRegistry` asserts both halves - the partition
-   * is what makes a tablet safe to store as an ItemInstance.
+   * EMPTY means retired: the affix still resolves on items that already carry it, and
+   * never rolls again. That is how an affix leaves the pool without restatting a save.
    */
-  rollsOn?: 'gear' | 'tablet' | 'accessory' | SkillKind;
+  rollsOn: readonly RollTarget[];
+  /**
+   * On armour, only bases of this defence type roll it. Absent means any.
+   *
+   * What keeps evasion off a Plate Cuirass: the base's implicit says what the piece IS,
+   * and its defence affixes agree with it rather than diluting it.
+   */
+  defence?: DefenceType;
   /** Ascending by strength. Index 0 is the weakest and always available. */
   tiers: AffixTier[];
 }
+
+/** What an affix can be eligible on. See AffixDefinition.rollsOn. */
+export type RollTarget = SkillKind | ArmourSlot | AccessorySlot | 'tablet';
+
+/** The defence layer an armour base is built around. */
+export const DEFENCE_TYPES = ['armour', 'evasion', 'energyShield'] as const;
+export type DefenceType = (typeof DEFENCE_TYPES)[number];
 
 /** A rolled affix as stored on an item. */
 export const RolledAffixSchema = z
@@ -512,6 +538,15 @@ export interface ItemBase {
    * there is no separate flag to keep in agreement with it.
    */
   wear?: AccessorySlot;
+  /**
+   * Which armour slot this base goes in. Absent on everything else.
+   *
+   * The fourth field in the `skillId` / `pays` / `wear` family: presence makes a base
+   * armour, and the value says where it is worn.
+   */
+  armour?: ArmourSlot;
+  /** The defence layer this armour base's implicit grants. Absent on belts. */
+  defence?: DefenceType;
 }
 
 /**
@@ -679,7 +714,16 @@ export const UniqueEffectSchema = z.discriminatedUnion('kind', [
     .strict(),
   z
     .object({
-      kind: z.literal('equipSlots'),
+      kind: z.literal('ringSlots'),
+      roll: RollRangeSchema,
+      when: ConditionSchema.optional(),
+    })
+    .strict(),
+  /** Which slots is authored. The roll is a placeholder that keeps `uniqueRolls` aligned. */
+  z
+    .object({
+      kind: z.literal('sealSlots'),
+      slots: z.array(ArmourSlotSchema).min(1),
       roll: RollRangeSchema,
       when: ConditionSchema.optional(),
     })
@@ -719,6 +763,8 @@ export const UniqueSchema = z
     dropStage: z.number().int().min(1),
     /** Drop weight, independent of the stage gate. */
     tier: UniqueTierSchema,
+    /** The armour slot it is worn in. Every unique is armour since Phase 8. */
+    slot: ArmourSlotSchema,
     effects: z.array(UniqueEffectSchema).min(1),
   })
   .strict();

@@ -30,24 +30,49 @@ export const SPRITE_IDS = [
   'weapon.sword',
 
   // Items - must stay in step with src/sim/content/bases.ts and uniques.ts.
-  'item.whetstone',
-  'item.quickdraw_glove',
-  'item.coin_purse',
-  'item.executioners_mark',
-  'item.giant_slayer',
-  'item.swarm_lens',
-  'item.bloodstone',
-  'item.deep_delvers_idol',
-  'item.berserkers_anvil',
-  'item.duelists_visor',
-  'item.wardens_coffer',
-  'item.bulwark_of_the_deep',
-  'item.travellers_harness',
-  'item.monomaniacs_seal',
+  // Weapons.
   'item.axe',
   'item.wand',
   'item.maul',
   'item.staff',
+
+  // Armour bases, Phase 8 - three per slot, one per defence layer, and three belts.
+  'item.iron_helm',
+  'item.leather_hood',
+  'item.silk_circlet',
+  'item.plate_cuirass',
+  'item.leather_jerkin',
+  'item.silk_robe',
+  'item.gauntlets',
+  'item.leather_gloves',
+  'item.silk_wraps',
+  'item.greaves',
+  'item.leather_boots',
+  'item.silk_slippers',
+  'item.heavy_belt',
+  'item.leather_belt',
+  'item.sash',
+
+  // Uniques, each drawn as the piece it is worn as.
+  'item.whetstone_grips',
+  'item.quickdraw_gauntlets',
+  'item.berserkers_fists',
+  'item.executioners_hood',
+  'item.swarm_eye_circlet',
+  'item.duelists_visor',
+  'item.bloodstone_carapace',
+  'item.bulwark_of_the_deep',
+  'item.monomaniacs_shroud',
+  'item.giantstride_greaves',
+  'item.deep_delvers_treads',
+  'item.bottomless_pouch',
+  'item.wardens_keyring',
+  'item.travellers_harness',
+
+  // Tablets. They borrowed relic art until the relics were deleted.
+  'item.hoarding_tablet',
+  'item.auspicious_tablet',
+  'item.gilded_tablet',
 
   // Accessories. Rings and amulets, from the Abyss only.
   'item.band',

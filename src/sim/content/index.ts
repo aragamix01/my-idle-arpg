@@ -12,6 +12,7 @@
 
 import { AFFIXES, ALL_PREFIXES, ALL_SUFFIXES, IMPLICIT_AFFIXES } from './affixes';
 import { eligibleAffixes } from '../items';
+import { ACCESSORY_AFFIX_LIMITS, DEFENCE_TYPES } from './schema';
 import { BASE_AFFIXES, BASES, getBase } from './bases';
 import { CURRENCIES, DISSEMBLE_YIELD, RARITY_RANK } from './currency';
 import { UNIQUES } from './uniques';
@@ -38,7 +39,8 @@ import { ABYSS_UNLOCK_STAGE, BASE_STATS, MAX_TABLET_TIER } from '../types';
 /** 11: a tablet is an item - rarity for rows, an implicit that pays, explicits that buff monsters. */
 /** 12: accessories - two rings and an amulet, from the Abyss only. */
 /** 13: defence layers - energy shield, armour and evasion, each with an affix. */
-export const CONTENT_VERSION = 13;
+/** 14: armour slots - helmet, body, gloves, boots, belt - replace the four relic slots. */
+export const CONTENT_VERSION = 14;
 
 export * from './schema';
 export * from './affixes';
@@ -55,7 +57,11 @@ export * from './tablets';
  * scale an implicit's gates are on. Rolled affixes read it off `rollsOn`.
  */
 function affixFloor(affix: AffixDefinition): number {
-  if (affix.rollsOn === 'accessory') return ABYSS_UNLOCK_STAGE;
+  // Only jewellery drops from the Abyss alone; anything that can also roll on a piece
+  // dropped from stage 1 is floored at stage 1.
+  const jewelleryOnly =
+    affix.rollsOn.length > 0 && affix.rollsOn.every((t) => t === 'ring' || t === 'amulet');
+  if (jewelleryOnly) return ABYSS_UNLOCK_STAGE;
   // Implicits carry no `rollsOn` - they are keyed by base id - so the base is what says
   // which scale their gates are on.
   const owner = Object.entries(BASE_AFFIXES).find(([, a]) => a.id === affix.id)?.[0];
@@ -79,10 +85,21 @@ function affixFloor(affix: AffixDefinition): number {
  * disagree.
  */
 function canCoRoll(a: AffixDefinition, b: AffixDefinition): boolean {
+  // An implicit is on exactly one base and never in a pool, so it co-rolls with whatever
+  // that base can roll - and never with another implicit.
+  const ownerA = implicitOwner(a);
+  const ownerB = implicitOwner(b);
+  if (ownerA && ownerB) return false;
+  if (ownerA) return eligibleAffixes([b], ownerA).length === 1;
+  if (ownerB) return eligibleAffixes([a], ownerB).length === 1;
   return BASES.some((base) => {
     const eligible = eligibleAffixes([a, b], base.id);
     return eligible.length === 2;
   });
+}
+
+function implicitOwner(affix: AffixDefinition): string | undefined {
+  return Object.entries(BASE_AFFIXES).find(([, a]) => a.id === affix.id)?.[0];
 }
 
 /**
@@ -140,7 +157,11 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     // handing one increased crit chance, or a Whetstone rolling "monsters have 40% more
     // health". Storing tablets in a separate type used to enforce it; a pair of checks
     // that run on every build enforces it better, and without the duplicate type.
-    if ((affix.effect.kind === 'monsterBuff') !== (affix.rollsOn === 'tablet')) {
+    const onTablet = affix.rollsOn.includes('tablet');
+    if (onTablet && affix.rollsOn.length > 1) {
+      errors.push(`${affix.id}: a tablet affix may roll on nothing but tablets`);
+    }
+    if ((affix.effect.kind === 'monsterBuff') !== onTablet) {
       errors.push(
         affix.effect.kind === 'monsterBuff'
           ? `${affix.id}: buffs monsters but is not tagged rollsOn: 'tablet'`
@@ -153,10 +174,17 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
     // nothing here to parse; the partition check above is what holds them in place.
     const template = affix.effect;
     const runOnly = template.kind === 'monsterBuff' || template.kind === 'tabletReward';
-    if (template.kind === 'goldOnKill' || template.kind === 'extraElement' || template.kind === 'statMod') {
+    if (
+      template.kind === 'goldOnKill' ||
+      template.kind === 'keyDrop' ||
+      template.kind === 'extraElement' ||
+      template.kind === 'statMod'
+    ) {
       const sample =
         template.kind === 'goldOnKill'
           ? { kind: 'goldOnKill' as const, multiplier: affix.tiers[0].value }
+          : template.kind === 'keyDrop'
+            ? { kind: 'keyDrop' as const, multiplier: 1 + affix.tiers[0].value }
           : template.kind === 'extraElement'
             ? {
                 kind: 'extraElement' as const,
@@ -200,7 +228,11 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
       // The mirror of the rule above. Penetration's base is zero, so a percentage of
       // it is zero forever - an affix that reads as a bonus and does literally nothing,
       // which is worse than one that is merely weak.
-      if (op !== 'flat' && BASE_STATS[stat] === 0) {
+      //
+      // The three defence layers are the exception: an armour piece always carries a
+      // flat rating in its implicit, so a percentage of the piece is never of nothing.
+      const percentOfImplicit = (DEFENCE_TYPES as readonly string[]).includes(stat);
+      if (op !== 'flat' && BASE_STATS[stat] === 0 && !percentOfImplicit) {
         errors.push(`${affix.id}: ${stat} has a base of zero, so only a flat layer moves it`);
       }
 
@@ -310,9 +342,11 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
         const sample =
           effect.kind === 'statMod'
             ? { kind: 'statMod' as const, stat: effect.stat, op: effect.op, value }
-            : effect.kind === 'equipSlots'
-              ? { kind: 'equipSlots' as const, delta: Math.round(value) }
-              : { kind: effect.kind as 'goldOnKill' | 'keyDrop' | 'amplifyOthers', multiplier: value };
+            : effect.kind === 'ringSlots'
+              ? { kind: 'ringSlots' as const, delta: Math.round(value) }
+              : effect.kind === 'sealSlots'
+                ? { kind: 'sealSlots' as const, slots: [...effect.slots] }
+                : { kind: effect.kind as 'goldOnKill' | 'keyDrop' | 'amplifyOthers', multiplier: value };
         if (!EffectSchema.safeParse(sample).success) {
           errors.push(`${unique.id} effect ${i}: ${value} produces an invalid effect`);
         }
@@ -341,7 +375,23 @@ export function validateRegistry(): { ok: true } | { ok: false; errors: string[]
 
   // A rare needs three rows per side, so the tablet pool has to hold at least that many
   // on each - otherwise a rare tablet silently rolls fewer modifiers than it claims.
-  const tabletPool = AFFIXES.filter((a) => a.rollsOn === 'tablet');
+  /*
+    Every base must be able to fill a rare's rows from its own pool, or a rare silently
+    rolls fewer modifiers than it claims. Phase 8 made this a real risk: the armour pools
+    are per slot and per defence type, so a narrow one is one edit away from too small.
+  */
+  for (const base of BASES.filter((b) => !b.pays)) {
+    const limits = base.wear ? ACCESSORY_AFFIX_LIMITS.rare : AFFIX_LIMITS.rare;
+    for (const side of ['prefix', 'suffix'] as const) {
+      const pool = side === 'prefix' ? ALL_PREFIXES : ALL_SUFFIXES;
+      const available = eligibleAffixes(pool, base.id).length;
+      if (available < limits[side]) {
+        errors.push(`${base.id}: a rare needs ${limits[side]} ${side}es, the pool has ${available}`);
+      }
+    }
+  }
+
+  const tabletPool = AFFIXES.filter((a) => a.rollsOn.includes('tablet'));
   for (const side of ['prefix', 'suffix'] as const) {
     const available = tabletPool.filter((a) => a.kind === side).length;
     const needed = AFFIX_LIMITS.rare[side];

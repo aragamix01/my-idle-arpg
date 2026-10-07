@@ -150,7 +150,10 @@ export function resolveStage(save: SaveState, stage: number): StageOutcome {
   // it, so a stage is one elemental problem rather than two.
   const resist = stageResistances(stage);
   const trashPoolHp = enemyHp(stage).mul(count).mul(hpMult);
-  const trashPhaseSeconds = timeToKill(save, trashPoolHp, stage, false, aoeTargets, resist);
+  // Boots' movement speed shortens the walk between packs - the trash phase, never the
+  // boss duel. With none it divides by one.
+  const trashPhaseSeconds =
+    timeToKill(save, trashPoolHp, stage, false, aoeTargets, resist) / (1 + stats.moveSpeed);
 
   const bossStats = deriveStats(save, ctxFor(stage, true, 1));
   const bossPhaseSeconds = timeToKill(save, bossHp(stage).mul(hpMult), stage, true, 1, resist);
@@ -319,14 +322,20 @@ function resolveDelve(
   const aoeTargets = Math.min(stats.area, count);
   const wavePoolHp = enemyHp(stage).mul(count).mul(1 + danger.hp);
   const perWaveSeconds =
-    waves > 0 ? timeToKill(save, wavePoolHp, stage, false, aoeTargets, resist) : 0;
+    waves > 0
+      ? timeToKill(save, wavePoolHp, stage, false, aoeTargets, resist) / (1 + stats.moveSpeed)
+      : 0;
   const waveIncoming = enemyDps(stage)
     .mul(contactCount(stage))
     .mul(1 + danger.damage);
 
   const trashPhaseSeconds = perWaveSeconds * waves;
   const perWaveDamage = waveIncoming.mul(perWaveSeconds);
-  const lifeLossPerWave = bigMax(0, perWaveDamage.sub(shieldPool));
+  // Body armour's wave recovery hands back a slice of life after each wave. Folded into
+  // the per-wave loss, which is exact while a wave costs more than it returns and merely
+  // generous (never past full) when it does not.
+  const recoveredPerWave = lifePool.mul(stats.waveRecovery);
+  const lifeLossPerWave = bigMax(0, perWaveDamage.sub(shieldPool).sub(recoveredPerWave));
   const damageDuringTrash = lifeLossPerWave.mul(waves);
 
   // --- The boss ----------------------------------------------------------
@@ -477,5 +486,6 @@ export function killsPerSecond(save: SaveState, stage: number): number {
   );
   if (!Number.isFinite(secondsPerWave) || secondsPerWave <= 0) return 0;
 
-  return aoeTargets / secondsPerWave;
+  // Farming is all trash, so movement speed counts in full.
+  return (aoeTargets / secondsPerWave) * (1 + stats.moveSpeed);
 }

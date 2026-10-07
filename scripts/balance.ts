@@ -29,14 +29,14 @@ import {
   getAffix,
   getBase,
   getCurrency,
-  ACCESSORY_SLOTS,
   ACCESSORY_SLOT_KINDS,
   INVENTORY_CAP,
   isUpgradeMaxed,
-  equipSlots,
+  accessorySlots,
+  armourSlotOf,
+  ARMOUR_SLOT_KINDS,
   ITEM_SLOTS,
   isWeaponBase,
-  itemEffects,
   itemPower,
   newSave,
   rerollAffixes,
@@ -58,7 +58,6 @@ import {
   UPGRADE_KEYS,
   type Big,
   type CurrencyId,
-  type ItemInstance,
   type SaveState,
   type UpgradeKey,
 } from '../src/sim';
@@ -496,15 +495,13 @@ function spendCurrency(save: SaveState, stage: number): SaveState {
 }
 
 /**
- * How many bench items the agent will weigh against a slot.
+ * How many candidates per armour slot the greedy search tries.
  *
- * Not the whole inventory. Every candidate costs a resolveStage through
- * value(), so an exhaustive search is O(slots x items x passes) per clear -
- * which at a 200-slot inventory pushed the golden-snapshot test past its
- * timeout. It is also a poor model: a player triages by eye and tries the
- * promising few, rather than evaluating two hundred items against four slots.
+ * Per SLOT rather than one window over the whole inventory, since Phase 8: a piece fits
+ * exactly one slot, and a global top-24 by itemPower filled up with body armour - the
+ * biggest implicits - and never offered the search a belt at all.
  */
-const LOADOUT_CANDIDATES = 24;
+const CANDIDATES_PER_SLOT = 6;
 
 /**
  * Equip whatever raises the objective.
@@ -512,102 +509,45 @@ const LOADOUT_CANDIDATES = 24;
  * Repeated single swaps rather than a search over all combinations - the
  * agent is greedy everywhere else and this keeps it comparable.
  */
-/**
- * Greedily fill any live-but-empty gear slot from `candidates`.
- *
- * The second ply of the slot-granter evaluation above: a slot is worth nothing until
- * something is in it, so the granter has to be judged on the loadout it enables rather
- * than the one it arrives in.
- */
-function fillEmptySlots(save: SaveState, stage: number, candidates: ItemInstance[]): SaveState {
-  let current = save;
-  const slots = equipSlots(current, { stage, isBoss: false, enemyHpFraction: 1 });
-
-  for (let slot = 0; slot < slots; slot++) {
-    if (current.loadout[slot]) continue;
-    let best: SaveState | null = null;
-    let bestValue = value(current, stage);
-
-    for (const item of candidates) {
-      if (current.loadout.includes(item.uid) || isWeaponBase(item.baseId)) continue;
-      const loadout = [...current.loadout];
-      loadout[slot] = item.uid;
-      const candidate = { ...current, loadout };
-      const v = value(candidate, stage);
-      if (v > bestValue) {
-        bestValue = v;
-        best = candidate;
-      }
-    }
-    if (best) current = best;
-  }
-  return current;
-}
-
 function improveLoadout(save: SaveState, stage: number): SaveState {
   let current = save;
+  const ctx = { stage, isBoss: false, enemyHpFraction: 1 };
 
   for (let pass = 0; pass < ITEM_SLOTS * 2; pass++) {
     const baseline = value(current, stage);
     let best: { save: SaveState; gain: number } | null = null;
 
-    // Ranked by the same crude heuristic the discard logic uses. It can miss an
-    // item that is weak overall but ideal for this build; that is the cost of
-    // not evaluating everything, and 24 candidates for 4 slots is generous.
+    // Ranked by the same crude heuristic the discard logic uses, a few per slot. It can
+    // miss a piece that is weak overall but ideal for this build; that is the cost of
+    // not evaluating everything.
     const ranked = [...current.items].sort((a, b) => itemPower(b) - itemPower(a));
-    // Slot granters are added back regardless of rank. itemPower is a per-item
-    // heuristic and a slot's worth is a property of the whole loadout, so it ranked
-    // the harness 25th of 200 - one place outside the window - and the agent never
-    // saw the item at all. "The search rejected it" and "the search never looked"
-    // are very different findings, and only one of them is about balance.
-    const granters = ranked.filter((item) =>
-      itemEffects(item).some((e) => e.kind === 'equipSlots' && e.delta > 0),
-    );
-    const candidates = [
-      ...new Set([...ranked.slice(0, LOADOUT_CANDIDATES), ...granters]),
-    ];
-
-    // The LIVE count, not the base one. A unique that grants slots would otherwise
-    // give the agent positions it never tries to fill, and the harness would report
-    // the item as worthless because nothing ever went in the slots it opened.
-    const slots = equipSlots(current, { stage, isBoss: false, enemyHpFraction: 1 });
-    for (let slot = 0; slot < slots; slot++) {
+    for (const [slot, kind] of ARMOUR_SLOT_KINDS.entries()) {
+      const candidates = ranked
+        .filter((item) => armourSlotOf(item) === kind && current.loadout[slot] !== item.uid)
+        .slice(0, CANDIDATES_PER_SLOT);
       for (const item of candidates) {
-        if (current.loadout.includes(item.uid)) continue;
-        // Weapons and accessories both have their own slots, and applyCommand refuses
-        // either in a gear position - so trying one here would model a move the game
-        // does not allow.
-        if (isWeaponBase(item.baseId) || getBase(item.baseId)?.wear) continue;
         const loadout = [...current.loadout];
+        const wasEmpty = loadout[slot] === null;
         loadout[slot] = item.uid;
-        const candidate = { ...current, loadout };
+        let candidate: SaveState = { ...current, loadout };
+
+        /*
+          A ring-slot granter needs TWO plies, and this is not an optimisation.
+
+          Equipping Traveller's Harness costs damage immediately and pays only once a
+          ring goes in the position it opened. A greedy one-swap search never takes a
+          step down, so it would reject the item every time. So the move is evaluated as
+          "wear it AND put the best spare ring in the new position", which is what a
+          player would actually do. One extra ply, granters only.
+        */
+        if (accessorySlots(candidate, ctx) > accessorySlots(current, ctx)) {
+          candidate = fillGrantedRing(candidate, stage);
+        }
+
         const gain = value(candidate, stage) - baseline;
-        if (gain > 0 && (!best || gain > best.gain)) best = { save: candidate, gain };
-      }
-    }
-
-    /*
-      Slot granters need TWO plies, and this is not an optimisation.
-
-      Equipping one costs value immediately - Traveller's Harness is 30% less damage -
-      and pays only once something goes in the slot it opened. A greedy one-swap search
-      never takes a step down, so it rejected the item every time: the golden run
-      OWNED one for a hundred stages and wore four slots the whole way, which made the
-      item untestable rather than balanced.
-
-      So the move is evaluated as "equip it AND fill what it opened", which is what a
-      player would actually do. One extra ply, granters only, no recursion.
-    */
-    for (const item of candidates) {
-      if (current.loadout.includes(item.uid) || isWeaponBase(item.baseId)) continue;
-      if (!itemEffects(item).some((e) => e.kind === 'equipSlots' && e.delta > 0)) continue;
-
-      for (let slot = 0; slot < slots; slot++) {
-        const loadout = [...current.loadout];
-        loadout[slot] = item.uid;
-        const filled = fillEmptySlots({ ...current, loadout }, stage, candidates);
-        const gain = value(filled, stage) - baseline;
-        if (gain > 0 && (!best || gain > best.gain)) best = { save: filled, gain };
+        // An EMPTY slot is filled on a tie, for the reason the accessories record below.
+        const worth = wasEmpty ? gain >= 0 : gain > 0;
+        if (worth && (!best || gain > best.gain)) best = { save: candidate, gain };
       }
     }
 
@@ -638,7 +578,7 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
     for (const item of current.items) {
       const wear = getBase(item.baseId)?.wear;
       if (!wear || current.accessories.includes(item.uid)) continue;
-      for (let slot = 0; slot < ACCESSORY_SLOTS; slot++) {
+      for (let slot = 0; slot < accessorySlots(current, ctx); slot++) {
         if (ACCESSORY_SLOT_KINDS[slot] !== wear) continue;
         const accessories = [...current.accessories];
         const wasEmpty = accessories[slot] === null;
@@ -667,6 +607,29 @@ function improveLoadout(save: SaveState, stage: number): SaveState {
   }
 
   return current;
+}
+
+/** Put the best unworn ring in the first live, empty ring position. */
+function fillGrantedRing(save: SaveState, stage: number): SaveState {
+  const live = accessorySlots(save, { stage, isBoss: false, enemyHpFraction: 1 });
+  const slot = ACCESSORY_SLOT_KINDS.findIndex(
+    (kind, i) => i < live && kind === 'ring' && save.accessories[i] === null,
+  );
+  if (slot === -1) return save;
+  let best = save;
+  let bestValue = value(save, stage);
+  for (const item of save.items) {
+    if (getBase(item.baseId)?.wear !== 'ring' || save.accessories.includes(item.uid)) continue;
+    const accessories = [...save.accessories];
+    accessories[slot] = item.uid;
+    const candidate = { ...save, accessories };
+    const v = value(candidate, stage);
+    if (v > bestValue) {
+      bestValue = v;
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 /**

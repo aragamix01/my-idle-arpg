@@ -18,13 +18,14 @@ import {
   UPGRADE_TRACKS,
 } from './curves';
 import { computeOffline } from './offline';
-import { deriveStats, equipSlots } from './stats';
+import { accessorySlots, deriveStats, sealedSlots } from './stats';
 import {
   ABYSS_UNLOCK_STAGE,
   ACCESSORY_SLOTS,
   INVENTORY_CAP,
   TABLET_CAP,
   UPGRADE_KEYS,
+  type ArmourSlot,
   type MagnitudeStatKey,
   type SaveState,
   type StatKey,
@@ -112,22 +113,20 @@ export interface HudSnapshot {
    */
   pendingOfflineSeconds: number;
   offlineCapReached: boolean;
+  /** One uid per ARMOUR_SLOT_KINDS position, in that order. */
   loadout: (string | null)[];
   /**
-   * How many of those positions are live.
-   *
-   * Derived rather than constant now that a unique can grant or remove slots, and
-   * sent rather than recomputed in the panel so the two cannot disagree about which
-   * slots exist.
+   * Armour slots switched off by what is worn - Monomaniac's Shroud. Empty for almost
+   * everyone. Sent rather than recomputed in the panel so the two cannot disagree.
    */
-  equipSlots: number;
+  sealedSlots: ArmourSlot[];
+  /** How many accessory positions are live: three, or four with Traveller's Harness. */
+  accessorySlots: number;
   /** Equipped weapon uid, or null for unarmed. */
   weapon: string | null;
   /**
-   * Worn accessory uids: two rings, then the amulet. ACCESSORY_SLOTS long.
-   *
-   * A fixed count, so unlike `loadout` there is no companion number saying how many are
-   * live - see ACCESSORY_SLOT_KINDS for which position is which.
+   * Worn accessory uids: two rings, the amulet, then a granted ring. ACCESSORY_SLOTS
+   * long; `accessorySlots` says how many are live.
    */
   accessories: (string | null)[];
   /**
@@ -222,7 +221,8 @@ export function getHudSnapshot(save: SaveState, nowMs: number): HudSnapshot {
     pendingOfflineSeconds: offline.creditedSeconds,
     offlineCapReached: offline.elapsedSeconds > OFFLINE_CAP_SECONDS,
     loadout: save.loadout,
-    equipSlots: equipSlots(save, ctx),
+    sealedSlots: [...sealedSlots(save, ctx)],
+    accessorySlots: accessorySlots(save, ctx),
     weapon: save.weapon,
     // Padded rather than sent raw: a save that has not been through the v12 migration
     // yet - which the client can hold briefly on the optimistic path - would otherwise

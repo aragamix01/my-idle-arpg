@@ -10,6 +10,7 @@
 
 import {
   ACCESSORY_SLOT_KINDS,
+  ARMOUR_SLOT_KINDS,
   baseSkillId,
   CURRENCIES,
   effectiveHp,
@@ -25,9 +26,9 @@ import {
 } from '@/sim';
 import { AtlasSprite } from './atlasSprite';
 import type { FeedEntry, FeedTone } from './feed';
-import { elementName, ELEMENT_STYLE, RARITY_STYLE, statEntries } from './format';
+import { ARMOUR_SLOT_LABEL, elementName, ELEMENT_STYLE, RARITY_STYLE, statEntries } from './format';
 
-/** The four gear positions, the weapon and the three accessories, as one row of tiles. */
+/** The weapon, the five armour slots and the live accessories, as a grid of tiles. */
 export function EquipmentTiles({
   hud,
   onPick,
@@ -39,12 +40,22 @@ export function EquipmentTiles({
 }) {
   const byUid = new Map(hud.items.map((item) => [item.uid, item]));
   const weapon = hud.weapon ? byUid.get(hud.weapon) : undefined;
-  const gear = hud.loadout.slice(0, hud.equipSlots).map((uid) => (uid ? byUid.get(uid) : undefined));
-  const accessories = hud.accessories.map((uid) => (uid ? byUid.get(uid) : undefined));
+  const armour = ARMOUR_SLOT_KINDS.map((kind, i) => ({
+    kind,
+    item: hud.loadout[i] ? byUid.get(hud.loadout[i]!) : undefined,
+  }));
+  const accessories = hud.accessories
+    .slice(0, hud.accessorySlots)
+    .map((uid) => (uid ? byUid.get(uid) : undefined));
 
   const tiles: { key: string; label: string; item: ItemInstance | undefined }[] = [
     { key: 'weapon', label: 'Weapon', item: weapon },
-    ...gear.map((item, i) => ({ key: `gear-${i}`, label: `Gear ${i + 1}`, item })),
+    ...armour.map(({ kind, item }) => ({
+      key: kind,
+      // The doll's long name does not fit under a 56px tile; the slot word does.
+      label: kind === 'body' ? 'Body' : ARMOUR_SLOT_LABEL[kind],
+      item,
+    })),
     ...accessories.map((item, i) => ({
       key: `acc-${i}`,
       label: ACCESSORY_SLOT_KINDS[i] === 'amulet' ? 'Amulet' : 'Ring',
@@ -54,7 +65,7 @@ export function EquipmentTiles({
 
   const box = size === 'lg' ? 'h-16 w-16' : 'h-14 w-14';
   return (
-    <ul className="grid grid-cols-4 gap-2" aria-label="Equipped">
+    <ul className="grid grid-cols-5 gap-2" aria-label="Equipped">
       {tiles.map((tile) => (
         <li key={tile.key} className="flex flex-col items-center gap-1">
           <button

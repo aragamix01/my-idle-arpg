@@ -41,14 +41,21 @@ import {
   effectiveHp,
   enemyCount,
   enemyHp,
-  equipSlots,
+  accessorySlots,
+  armourSlotOf,
+  sealedSlots,
+  ARMOUR_BASES,
+  ARMOUR_SLOT_KINDS,
+  BASE_ACCESSORY_SLOTS,
   farmRate,
   feedbackExponent,
   FRAGMENTS_PER_CLEAR,
   getAffix,
   getBaseAffix,
   eligibleAffixes,
-  GEAR_BASES,
+  keyDropMultiplier,
+  applyCurrencyToItem,
+  ACCESSORY_SLOT_KINDS,
   ACCESSORY_BASES,
   RING_BASES,
   AMULET_BASES,
@@ -76,7 +83,6 @@ import {
   INVENTORY_CAP,
   itemEffects,
   ITEM_SLOTS,
-  MAX_ITEM_SLOTS,
   MAX_TABLET_TIER,
   ABYSS_UNLOCK_STAGE,
   ABYSSAL_PROFILE,
@@ -86,6 +92,8 @@ import {
   rollWaveTablets,
   rollAbyssalTablets,
   type ItemInstance,
+  type Rarity,
+  type Stats,
   tabletReward,
   totalDanger,
   wavesForTier,
@@ -135,6 +143,15 @@ function play(save: SaveState, commands: Command[], nowMs = T0): SaveState {
     state = result.value.state;
   }
   return state;
+}
+
+/** The first ARMOUR drop for a seed, and the loadout index it is worn at. */
+function firstArmour(seed: number, level: number): { item: ItemInstance; slot: number } {
+  for (let uid = 1; ; uid++) {
+    const item = rollItem(seed, uid, level);
+    const kind = armourSlotOf(item);
+    if (kind) return { item, slot: ARMOUR_SLOT_KINDS.indexOf(kind) };
+  }
 }
 
 describe('determinism', () => {
@@ -388,14 +405,17 @@ describe('command validation', () => {
   });
 
   it('does not let an item occupy two slots', () => {
-    const item = rollItem(1, 1, 10);
+    // Phase 8: a piece has exactly one slot, so the second equip is refused outright
+    // rather than moving it - and the loadout still holds it once.
+    const { item, slot } = firstArmour(1, 10);
     let save: SaveState = { ...newSave(1, T0), items: [item] };
-    save = play(save, [
-      { type: 'equipItem', slot: 0, itemId: item.uid },
-      { type: 'equipItem', slot: 2, itemId: item.uid },
-    ]);
+    save = play(save, [{ type: 'equipItem', slot, itemId: item.uid }]);
+    const other = (slot + 1) % ITEM_SLOTS;
+    expect(applyCommand(save, { type: 'equipItem', slot: other, itemId: item.uid }, T0).ok).toBe(
+      false,
+    );
     expect(save.loadout.filter((uid) => uid === item.uid)).toHaveLength(1);
-    expect(save.loadout[2]).toBe(item.uid);
+    expect(save.loadout[slot]).toBe(item.uid);
   });
 });
 
@@ -427,11 +447,9 @@ describe('content registry', () => {
         crafts: 0,
         uniqueId: unique.id,
       };
-      const equipped: SaveState = {
-        ...base,
-        items: [item],
-        loadout: [item.uid, null, null, null],
-      };
+      const loadout = Array<string | null>(ITEM_SLOTS).fill(null);
+      loadout[ARMOUR_SLOT_KINDS.indexOf(unique.slot)] = item.uid;
+      const equipped: SaveState = { ...base, items: [item], loadout };
       const outcome = resolveStage(equipped, 45);
       const changed =
         outcome.seconds !== baseline.seconds || outcome.goldEarned !== baseline.goldEarned;
@@ -440,64 +458,96 @@ describe('content registry', () => {
   });
 
   it('every affix changes at least one outcome', () => {
-    // No shared baseline: each affix is now compared against its own reference
-    // build, because what counts as "the same build minus this affix" depends on
-    // where the affix can roll and whether its stat is even live.
+    // No shared baseline: each affix is compared against its own reference build,
+    // because what counts as "the same build minus this affix" depends on where the
+    // affix can roll and whether its stat is even live.
     const base: SaveState = { ...newSave(1, T0), bestStage: 45, currentStage: 45 };
+    const ctx = { stage: 45, isBoss: false, enemyHpFraction: 1 };
 
-    for (const affix of AFFIXES) {
+    // Retired affixes never roll, so there is nothing for this test to say about them.
+    for (const affix of AFFIXES.filter((a) => a.rollsOn.length > 0 && !a.rollsOn.includes('tablet'))) {
       const top = affix.tiers.length - 1;
-      // A weapon-locked affix has to be hosted on a weapon of its kind and worn in
-      // the weapon slot, or it is inert for a reason that says nothing about the
-      // affix. `+4 to Physical Skill Levels` on a Whetstone in a gear slot does
-      // exactly nothing, and that is the rule working rather than a content bug.
-      const weaponHost =
-        affix.rollsOn && affix.rollsOn !== 'gear'
-          ? WEAPON_BASES.find((b) => getSkill(b.skillId!)!.kind === affix.rollsOn)!
-          : undefined;
-      const host = weaponHost ?? { id: 'whetstone', skillId: undefined };
+      // Hosted on the first base that can roll it and worn where that base is worn, or
+      // it is inert for a reason that says nothing about the affix. A weapon-locked
+      // skill level on a helmet does nothing, and that is the rule working.
+      const host = BASES.find((b) => !b.pays && eligibleAffixes([affix], b.id).length === 1)!;
+      expect(host, `${affix.id} rolls on no base`).toBeDefined();
 
       // A resource affix does nothing unless the resource is what limits you, and on
-      // a fresh build it usually is not - Unarmed and Sunder both regenerate faster
-      // than they spend, deliberately. So the reference build for a regen affix
-      // carries enough attack speed that the resource has started to bind. Measuring
-      // stamina regen on a base-speed Axe would correctly report zero and tell you
-      // nothing about the affix.
+      // a fresh build it usually is not. So the reference build for a regen affix
+      // carries enough attack speed that the resource has started to bind.
       const needsBinding = affix.effect.kind === 'statMod' && affix.effect.stat === 'resourceRegen';
       const bindingWeapon = WEAPON_BASES.find((b) => getSkill(b.skillId!)!.kind === 'magical')!;
       const fast: SaveState = needsBinding
         ? { ...base, upgrades: { ...base.upgrades, attackSpeed: 30 } }
         : base;
-      const item = {
+      // The host's implicit rides along in BOTH builds: a percentage of a defence rating
+      // is a percentage of the implicit, and without it there is nothing to scale.
+      const implicit = getBaseAffix(host.id);
+      const item: ItemInstance = {
         uid: 'test',
         baseId: host.id,
-        rarity: 'common' as const,
-        itemLevel: 100,
+        rarity: 'common',
+        itemLevel: host.wear ? 300 : 100,
         affixes: [{ affixId: affix.id, tier: top, value: affix.tiers[top].value }],
+        baseAffix: implicit
+          ? { affixId: implicit.id, tier: 3, value: implicit.tiers[3].value }
+          : undefined,
         rerolls: 0,
         crafts: 0,
       };
-      // Compared against a baseline in the same build, so what is measured is the
-      // affix and not the skill the weapon happens to grant.
-      const bare = { ...item, uid: 'bare', affixes: [] };
-      const carrier = needsBinding && !weaponHost
-        ? { uid: 'carrier', baseId: bindingWeapon.id, rarity: 'common' as const, itemLevel: 100,
-            affixes: [], rerolls: 0, crafts: 0 }
-        : undefined;
+      const bare: ItemInstance = { ...item, uid: 'bare', affixes: [] };
+      const levelKind =
+        affix.effect.kind === 'statMod' && affix.effect.stat === 'physicalSkillLevel'
+          ? 'physical'
+          : affix.effect.kind === 'statMod' && affix.effect.stat === 'magicalSkillLevel'
+            ? 'magical'
+            : undefined;
+      const carrierBase = needsBinding
+        ? bindingWeapon
+        : levelKind
+          ? WEAPON_BASES.find((b) => getSkill(b.skillId!)!.kind === levelKind)!
+          : undefined;
+      const carrier: ItemInstance | undefined =
+        carrierBase && !host.skillId
+          ? { uid: 'carrier', baseId: carrierBase.id, rarity: 'common', itemLevel: 100,
+              affixes: [], rerolls: 0, crafts: 0 }
+          : undefined;
 
-      const build = (piece: typeof item): SaveState =>
-        weaponHost
-          ? { ...fast, items: [piece], weapon: piece.uid }
-          : {
-              ...fast,
-              items: carrier ? [piece, carrier] : [piece],
-              loadout: [piece.uid, null, null, null],
-              weapon: carrier ? carrier.uid : null,
-            };
+      const build = (piece: ItemInstance): SaveState => {
+        const items = carrier ? [piece, carrier] : [piece];
+        if (host.skillId) return { ...fast, items, weapon: piece.uid };
+        const weapon = carrier ? carrier.uid : null;
+        if (host.wear) {
+          const accessories = [...fast.accessories];
+          accessories[ACCESSORY_SLOT_KINDS.indexOf(host.wear)] = piece.uid;
+          return { ...fast, items, weapon, accessories };
+        }
+        const loadout = Array<string | null>(ITEM_SLOTS).fill(null);
+        loadout[ARMOUR_SLOT_KINDS.indexOf(host.armour!)] = piece.uid;
+        return { ...fast, items, weapon, loadout };
+      };
+
+      // Two stats only move something outside a ladder stage, so they are measured where
+      // they act: key find on the boss's key roll, wave recovery inside a delve.
+      if (affix.effect.kind === 'keyDrop') {
+        expect(keyDropMultiplier(build(item), ctx)).toBeGreaterThan(keyDropMultiplier(build(bare), ctx));
+        continue;
+      }
+      if (affix.effect.kind === 'statMod' && affix.effect.stat === 'waveRecovery') {
+        const tablet = rollTablet(1, 900, 3);
+        const delve = (save: SaveState) =>
+          resolveAbyssal({ ...save, bestStage: ABYSS_UNLOCK_STAGE }, tablet).damageTakenFraction;
+        expect(delve(build(item))).toBeLessThan(delve(build(bare)));
+        continue;
+      }
 
       const ref = resolveStage(build(bare), 45);
       const outcome = resolveStage(build(item), 45);
-      const changed = outcome.seconds !== ref.seconds || outcome.goldEarned !== ref.goldEarned;
+      const changed =
+        outcome.seconds !== ref.seconds ||
+        outcome.goldEarned.toString() !== ref.goldEarned.toString() ||
+        outcome.damageTakenFraction !== ref.damageTakenFraction;
       expect(changed, `${affix.id} has no measurable effect`).toBe(true);
     }
   });
@@ -584,7 +634,7 @@ describe('item rolling', () => {
     // a tier badge, and picking between two of the same base stops mattering.
     const tiers = new Set(
       Array.from({ length: 600 }, (_, i) => rollItem(31, i + 1, 200))
-        .filter((item) => item.baseId === 'whetstone' && item.baseAffix)
+        .filter((item) => item.baseId === 'plate-cuirass' && item.baseAffix)
         .map((item) => item.baseAffix!.tier),
     );
     expect(tiers.size).toBeGreaterThan(1);
@@ -748,48 +798,31 @@ describe('item rolling', () => {
   });
 });
 
-describe('equip slots', () => {
+describe('armour slots', () => {
   const CTX = { stage: 1, isBoss: false, enemyHpFraction: 1 };
 
-  /** A save wearing `item` at a chosen index of the widened loadout array. */
-  const wearingAt = (index: number, item: ReturnType<typeof rollItem>): SaveState => {
-    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
-    loadout[index] = item.uid;
-    return { ...newSave(5, T0), items: [item], loadout };
+  /** A magic piece of the given base carrying one Vital and its top implicit. */
+  const piece = (baseId: string, uid: string): ItemInstance => {
+    const implicit = getBaseAffix(baseId)!;
+    return {
+      uid,
+      baseId,
+      rarity: 'magic',
+      itemLevel: 60,
+      rerolls: 0,
+      crafts: 0,
+      affixes: [{ affixId: 'vital', tier: 2, value: getAffix('vital')!.tiers[2].value }],
+      baseAffix: { affixId: implicit.id, tier: 2, value: implicit.tiers[2].value },
+    };
   };
 
-  it('starts at the base count with nothing granting slots', () => {
-    expect(equipSlots(newSave(1, T0), CTX)).toBe(ITEM_SLOTS);
-  });
-
-  it('ignores an item parked past the live count', () => {
-    // The array is seven long; only the first four positions are live. An item in
-    // position six is owned, visible and completely inert - which is the whole
-    // mechanism a slot-removing unique relies on.
-    // Fingerprinted across every stat rather than a chosen one: which stats an
-    // arbitrary drop touches is a property of the roll, and picking damage made the
-    // control half of this test pass or fail on what the RNG happened to produce.
-    const fingerprint = (save: SaveState) =>
-      STAT_KEYS.map((key) => String(deriveStats(save, CTX)[key])).join('|');
-
-    const item = rollItem(5, 1, 60);
-    const bare = fingerprint(newSave(5, T0));
-
-    expect(fingerprint(wearingAt(MAX_ITEM_SLOTS - 1, item)), 'a parked item changed a stat').toBe(
-      bare,
-    );
-    // And the same item in a live slot does something, or the assertion above proves
-    // nothing about slots and everything about the item being inert to begin with.
-    expect(fingerprint(wearingAt(0, item))).not.toBe(bare);
-  });
-
   /** A unique instance rolled at the top of every range. */
-  const uniqueItem = (id: string, uid = 'u1') => {
+  const uniqueItem = (id: string, uid = 'u1'): ItemInstance => {
     const unique = getUnique(id)!;
     return {
       uid,
       baseId: id,
-      rarity: 'unique' as const,
+      rarity: 'unique',
       itemLevel: 60,
       affixes: [],
       rerolls: 0,
@@ -799,85 +832,142 @@ describe('equip slots', () => {
     };
   };
 
-  it('grants slots from a base position and ignores one parked past the window', () => {
-    // The rule that stops the fixed point running away. A granter inside the first
-    // four positions works; the same item at index 4 is inert, because it would
-    // otherwise grant the slot that makes it live and then grant it again.
-    const granter = uniqueItem('travellers-harness');
-    const granted = granter.uniqueRolls[0];
-    expect(granted).toBeGreaterThan(0);
+  /** A save wearing each item in its own slot. */
+  const wearing = (...items: ItemInstance[]): SaveState => {
+    const loadout = Array<string | null>(ITEM_SLOTS).fill(null);
+    for (const item of items) loadout[ARMOUR_SLOT_KINDS.indexOf(armourSlotOf(item)!)] = item.uid;
+    return { ...newSave(5, T0), items, loadout };
+  };
 
-    expect(equipSlots(wearingAt(0, granter), CTX)).toBe(ITEM_SLOTS + granted);
-    expect(equipSlots(wearingAt(ITEM_SLOTS, granter), CTX)).toBe(ITEM_SLOTS);
+  const fingerprint = (save: SaveState) =>
+    STAT_KEYS.map((key) => String(deriveStats(save, CTX)[key])).join('|');
+
+  it('gives every character one position per armour slot', () => {
+    expect(newSave(1, T0).loadout).toEqual(Array(ARMOUR_SLOT_KINDS.length).fill(null));
+    expect(ITEM_SLOTS).toBe(5);
   });
 
-  it('settles rather than oscillating when a taker is worn', () => {
-    // Removing slots shrinks the window, which can only ever remove more granters -
-    // monotone, so it converges. Two takers cannot take the count below one.
-    const taker = uniqueItem('monomaniacs-seal', 'a');
-    const other = { ...uniqueItem('monomaniacs-seal', 'b') };
+  it('puts every armour base and every unique in exactly one slot', () => {
+    for (const base of ARMOUR_BASES) expect(ARMOUR_SLOT_KINDS).toContain(base.armour);
+    for (const unique of UNIQUES) expect(ARMOUR_SLOT_KINDS).toContain(unique.slot);
+    // Twelve defended bases, three belts with no defence type.
+    expect(ARMOUR_BASES.filter((b) => b.defence).length).toBe(12);
+    expect(ARMOUR_BASES.filter((b) => b.armour === 'belt' && !b.defence).length).toBe(3);
+  });
 
-    const one = wearingAt(0, taker);
-    expect(equipSlots(one, CTX)).toBe(ITEM_SLOTS - 1);
+  it('refuses a piece in the wrong slot, with the reason', () => {
+    const helm = piece('iron-helm', '1');
+    const save: SaveState = { ...newSave(5, T0), items: [helm] };
+    const boots = ARMOUR_SLOT_KINDS.indexOf('boots');
+    const result = applyCommand(save, { type: 'equipItem', slot: boots, itemId: helm.uid }, T0);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/helmet, not the boots/);
 
-    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
-    loadout[0] = taker.uid;
-    loadout[1] = other.uid;
-    const both: SaveState = { ...newSave(5, T0), items: [taker, other], loadout };
-    expect(equipSlots(both, CTX)).toBe(ITEM_SLOTS - 2);
-    // And calling it repeatedly gives the same answer - a fixed point, not a step.
-    expect(equipSlots(both, CTX)).toBe(equipSlots(both, CTX));
+    const ok = applyCommand(save, { type: 'equipItem', slot: 0, itemId: helm.uid }, T0);
+    expect(ok.ok).toBe(true);
+  });
+
+  it('refuses a weapon or an accessory in an armour slot', () => {
+    const axe: ItemInstance = { ...piece('iron-helm', '1'), baseId: 'axe', baseAffix: undefined };
+    const ring: ItemInstance = { ...piece('iron-helm', '2'), baseId: 'band', baseAffix: undefined };
+    const save: SaveState = { ...newSave(5, T0), items: [axe, ring] };
+    expect(applyCommand(save, { type: 'equipItem', slot: 0, itemId: axe.uid }, T0).ok).toBe(false);
+    expect(applyCommand(save, { type: 'equipItem', slot: 0, itemId: ring.uid }, T0).ok).toBe(false);
+  });
+
+  it('seals the gloves and boots under the Shroud, and nothing else', () => {
+    const shroud = uniqueItem('monomaniacs-seal', 's');
+    const gloves = piece('gauntlets', 'g');
+    const helm = piece('iron-helm', 'h');
+
+    expect([...sealedSlots(wearing(shroud), CTX)].sort()).toEqual(['boots', 'gloves']);
+    expect(sealedSlots(wearing(gloves, helm), CTX).size).toBe(0);
+
+    // Sealed gloves contribute nothing: Shroud + gloves derives what Shroud alone does.
+    expect(fingerprint(wearing(shroud, gloves))).toBe(fingerprint(wearing(shroud)));
+    // A helmet is not sealed, so it still counts.
+    expect(fingerprint(wearing(shroud, helm))).not.toBe(fingerprint(wearing(shroud)));
   });
 
   it('amplifies other items but never itself', () => {
     // The amplifier's own effects are excluded, or it would scale its own downside
     // and two copies would compound against each other - the shape a rollable `more`
     // is banned for.
-    const seal = uniqueItem('monomaniacs-seal', 'seal');
-    const gear = rollItem(5, 1, 60);
-
-    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
-    loadout[0] = seal.uid;
-    loadout[1] = gear.uid;
-    const withBoth: SaveState = { ...newSave(5, T0), items: [seal, gear], loadout };
-
-    const alone = deriveStats({ ...newSave(5, T0), items: [gear], loadout: [gear.uid] }, CTX);
+    const shroud = uniqueItem('monomaniacs-seal', 's');
+    const helm = piece('iron-helm', 'h');
     const bare = deriveStats(newSave(5, T0), CTX);
-    const amplified = deriveStats(withBoth, CTX);
 
-    // Whatever the gear contributed on its own is now worth more.
-    const gearGain = statsDps(alone).div(statsDps(bare)).toNumber();
-    const bothGain = statsDps(amplified).div(statsDps(bare)).toNumber();
-    if (gearGain > 1.0001) expect(bothGain).toBeGreaterThan(gearGain);
+    const alone = deriveStats(wearing(helm), CTX);
+    const amplified = deriveStats(wearing(shroud, helm), CTX);
+    const hpGain = (s: Stats) => s.maxHp.div(bare.maxHp).toNumber() - 1;
+    expect(hpGain(amplified)).toBeGreaterThan(hpGain(alone));
 
-    // Wearing the seal ALONE is exactly a bare character minus a slot: it has nothing
-    // to amplify, and it must not amplify itself into mattering.
-    const sealOnly = deriveStats(wearingAt(0, seal), CTX);
-    expect(statsDps(sealOnly).eq(statsDps(bare))).toBe(true);
+    // Wearing it ALONE is exactly a bare character: nothing to amplify, and it must not
+    // amplify itself into mattering.
+    expect(fingerprint(wearing(shroud))).toBe(fingerprint(newSave(5, T0)));
   });
 
-  it('refuses to equip into a locked slot, on the server', () => {
-    const item = rollItem(5, 1, 60);
-    const save: SaveState = { ...newSave(5, T0), items: [item] };
+  it('opens a fourth ring position only while the Harness is worn', () => {
+    const harness = uniqueItem('travellers-harness', 'th');
+    const ring: ItemInstance = { ...piece('iron-helm', 'r'), baseId: 'band', itemLevel: 100 };
+    ring.baseAffix = undefined;
 
-    // The schema allows the index - the array is that long - so this has to be the
-    // command layer refusing, not zod. A client one swap out of date would otherwise
-    // equip into a slot that stopped existing.
-    expect(CommandSchema.safeParse({ type: 'equipItem', slot: 5, itemId: item.uid }).success).toBe(
+    expect(accessorySlots(newSave(5, T0), CTX)).toBe(BASE_ACCESSORY_SLOTS);
+    expect(accessorySlots(wearing(harness), CTX)).toBe(BASE_ACCESSORY_SLOTS + 1);
+
+    // Without it the fourth position refuses a ring; with it, it takes one.
+    const without: SaveState = { ...newSave(5, T0), items: [ring] };
+    const refused = applyCommand(without, { type: 'equipAccessory', slot: 3, itemId: ring.uid }, T0);
+    expect(refused.ok).toBe(false);
+    const withIt: SaveState = { ...wearing(harness), items: [harness, ring] };
+    expect(applyCommand(withIt, { type: 'equipAccessory', slot: 3, itemId: ring.uid }, T0).ok).toBe(
       true,
     );
-    const result = applyCommand(save, { type: 'equipItem', slot: 5, itemId: item.uid }, T0);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toMatch(/locked/);
+
+    // A ring left in the fourth position after the Harness comes off is inert.
+    const stranded: SaveState = {
+      ...newSave(5, T0),
+      items: [ring],
+      accessories: [null, null, null, ring.uid],
+    };
+    expect(fingerprint(stranded)).toBe(fingerprint(newSave(5, T0)));
   });
 
-  it('still refuses to dissemble an item sitting in a locked slot', () => {
-    // Inert is not the same as unequipped. Destroying what someone is wearing because
-    // a unique changed the slot count is the worst possible reading of "inert".
-    const item = rollItem(5, 1, 60);
-    const save = wearingAt(MAX_ITEM_SLOTS - 1, item);
-    const result = applyCommand(save, { type: 'dissembleItems', uids: [item.uid] }, T0);
+  it('never lets a craft add a row the base could not have rolled', () => {
+    // Found by the ladder, not by a test: the rarity upgrade rolled its new rows without
+    // the base, so an upgraded Silk Robe gained penetration and a belt the body-only
+    // wave recovery. Every crafting path must draw from the base's own pool.
+    for (const currency of CURRENCIES.filter((c) => c.action.kind === 'upgradeRarity')) {
+      const action = currency.action as { kind: 'upgradeRarity'; from: Rarity };
+      for (const b of [...ARMOUR_BASES, ...WEAPON_BASES, ...ACCESSORY_BASES]) {
+        const allowed = new Set(
+          eligibleAffixes(AFFIXES, b.id).map((a) => a.id),
+        );
+        for (let uid = 1; uid <= 20; uid++) {
+          const start: ItemInstance = {
+            uid: String(uid),
+            baseId: b.id,
+            rarity: action.from,
+            itemLevel: 120,
+            rerolls: 0,
+            crafts: 0,
+            affixes: [],
+          };
+          const crafted = applyCurrencyToItem(9, start, currency).item!;
+          for (const rolled of crafted.affixes) {
+            expect(allowed.has(rolled.affixId), `${rolled.affixId} on ${b.id}`).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  it('still refuses to dissemble a piece sitting in a sealed slot', () => {
+    // Inert is not the same as unequipped. Destroying what someone is wearing because a
+    // unique sealed its slot is the worst possible reading of "inert".
+    const save = wearing(uniqueItem('monomaniacs-seal', 's'), piece('gauntlets', 'g'));
+    const result = applyCommand(save, { type: 'dissembleItems', uids: ['g'] }, T0);
     expect(result.ok).toBe(false);
   });
 });
@@ -1012,7 +1102,7 @@ describe('elements', () => {
       baseAffix: undefined,
       affixes: [{ affixId: affix.id, tier: top, value: affix.tiers[top].value }],
     };
-    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    const loadout = Array<string | null>(ITEM_SLOTS).fill(null);
     loadout[0] = item.uid;
     const save: SaveState = { ...newSave(9, T0), items: [item], loadout };
 
@@ -1306,15 +1396,15 @@ describe('inventory', () => {
   it('refuses to discard an equipped item', () => {
     // Destroying what you are currently wearing is the most expensive misclick
     // available, and an unequip step costs nothing to undo.
-    const item = rollItem(2, 1, 10);
+    const { item, slot } = firstArmour(2, 10);
     const save: SaveState = { ...newSave(2, T0), items: [item] };
-    const equipped = play(save, [{ type: 'equipItem', slot: 1, itemId: item.uid }]);
+    const equipped = play(save, [{ type: 'equipItem', slot, itemId: item.uid }]);
 
     const refused = applyCommand(equipped, { type: 'dissembleItems', uids: [item.uid] }, T0);
     expect(refused.ok).toBe(false);
 
     const after = play(equipped, [
-      { type: 'equipItem', slot: 1, itemId: null },
+      { type: 'equipItem', slot, itemId: null },
       { type: 'dissembleItems', uids: [item.uid] },
     ]);
     expect(after.items).toHaveLength(0);
@@ -1771,7 +1861,7 @@ describe('accessories', () => {
     const ok = applyCommand(save, { type: 'equipAccessory', slot: 0, itemId: ring.uid }, T0);
     expect(ok.ok).toBe(true);
     if (!ok.ok) return;
-    expect(ok.value.state.accessories).toEqual([ring.uid, null, null]);
+    expect(ok.value.state.accessories).toEqual([ring.uid, null, null, null]);
 
     // The refusals say WHY. "Nothing happened" is the worst possible answer to a player
     // dragging a pendant onto a ring slot.
@@ -1804,7 +1894,7 @@ describe('accessories', () => {
     );
     expect(second.ok).toBe(true);
     if (!second.ok) return;
-    expect(second.value.state.accessories).toEqual([null, ring.uid, null]);
+    expect(second.value.state.accessories).toEqual([null, ring.uid, null, null]);
   });
 
   it('contributes its implicit to the sheet, and only while worn', () => {
@@ -1824,10 +1914,10 @@ describe('accessories', () => {
     expect(deriveStats(worn.value.state, ctx).damage.gt(bare.damage)).toBe(true);
   });
 
-  it('cannot change the equip slot count', () => {
-    // Accessories sit outside `slotsFrom`'s fixed point on purpose - a second one feeding
-    // through the first is a shape nobody wants to reason about. Asserted on the CONTENT
-    // rather than the code, so authoring an equipSlots accessory affix fails here.
+  it('cannot grant ring positions', () => {
+    // Only armour may open a ring position, so the count is read off the armour once and
+    // cannot feed back into itself. Asserted on the CONTENT rather than the code, so
+    // authoring a ringSlots accessory affix fails here.
     for (const base of ACCESSORY_BASES) {
       const implicit = BASE_AFFIXES[base.id];
       expect(implicit, `${base.id} has no implicit`).toBeDefined();
@@ -1835,7 +1925,9 @@ describe('accessories', () => {
     }
     const ring = accessory('signet');
     const worn: SaveState = { ...owning([ring]), accessories: [ring.uid, null, null] };
-    expect(equipSlots(worn, { stage: 1, isBoss: false, enemyHpFraction: 1 })).toBe(ITEM_SLOTS);
+    expect(accessorySlots(worn, { stage: 1, isBoss: false, enemyHpFraction: 1 })).toBe(
+      BASE_ACCESSORY_SLOTS,
+    );
   });
 
   it('refuses to dissemble one you are wearing', () => {
@@ -1846,28 +1938,25 @@ describe('accessories', () => {
     if (!result.ok) expect(result.error).toBe('unequip it first');
   });
 
-  it('adds to the gear pool rather than replacing it', () => {
+  it('rolls jewellery-only extras that nothing else can carry', () => {
     /*
-      THE difference between `'accessory'` and `'tablet'`, asserted.
-
-      A tablet PARTITIONS - it rolls its own pool and nothing else. An accessory ADDS: it
-      rolls everything a Whetstone can, plus its own extras. Getting these the same way
-      round would make a ring either a Whetstone with a nicer icon or an item with four
-      possible modifiers.
+      Phase 8: every affix lists its targets, so jewellery no longer "adds to the gear
+      pool" - it rolls whatever lists `'ring'` or `'amulet'`. What still has to hold is
+      that the jewellery-only extras exist, roll on jewellery, and never leak anywhere
+      else, and that the slot-bound armour rolls never reach a ring.
     */
-    const extras = AFFIXES.filter((a) => a.rollsOn === 'accessory').map((a) => a.id);
+    const jewelleryOnly = (a: { rollsOn: readonly string[] }) =>
+      a.rollsOn.length > 0 && a.rollsOn.every((t) => t === 'ring' || t === 'amulet');
+    const extras = AFFIXES.filter(jewelleryOnly).map((a) => a.id);
     expect(extras.length).toBeGreaterThan(0);
 
     const onRing = eligibleAffixes(AFFIXES, 'signet').map((a) => a.id);
-    const onGear = eligibleAffixes(AFFIXES, 'whetstone').map((a) => a.id);
-
-    // Everything gear can roll, and then some.
-    for (const id of onGear) expect(onRing, `${id} missing from the ring pool`).toContain(id);
     for (const id of extras) expect(onRing).toContain(id);
-    expect(onRing.length).toBeGreaterThan(onGear.length);
+    for (const id of ['stalwart', 'of-renewal', 'of-the-wind', 'of-the-keeper', 'of-sundering']) {
+      expect(onRing, `${id} rolled on a ring`).not.toContain(id);
+    }
 
-    // And closed the other way: an accessory extra never appears anywhere else.
-    for (const baseId of [...GEAR_BASES, ...WEAPON_BASES, ...TABLET_BASES].map((b) => b.id)) {
+    for (const baseId of [...ARMOUR_BASES, ...WEAPON_BASES, ...TABLET_BASES].map((b) => b.id)) {
       const pool = eligibleAffixes(AFFIXES, baseId).map((a) => a.id);
       for (const id of extras) expect(pool, `${id} leaked onto ${baseId}`).not.toContain(id);
     }
@@ -1943,7 +2032,9 @@ describe('accessories', () => {
       took the ladder from 15.4 days to 2.0. What is here is what gear CANNOT have, and
       offence and defence each need one or the invariant breaks structurally.
     */
-    const extras = AFFIXES.filter((a) => a.rollsOn === 'accessory');
+    const extras = AFFIXES.filter(
+      (a) => a.rollsOn.length > 0 && a.rollsOn.every((t) => t === 'ring' || t === 'amulet'),
+    );
     const stats = extras.flatMap((a) => (a.effect.kind === 'statMod' ? [a.effect.stat] : []));
     expect(stats.some((s) => OFFENSIVE.has(s)), 'no offensive accessory extra').toBe(true);
     expect(stats.some((s) => DEFENSIVE.has(s)), 'no defensive accessory extra').toBe(true);
@@ -2020,12 +2111,12 @@ describe('accessories', () => {
     const save: SaveState = { ...owning([ring]), accessories: [ring.uid, null, null] };
     const hud = getHudSnapshot(save, T0);
 
-    expect(hud.accessories).toEqual([ring.uid, null, null]);
+    expect(hud.accessories).toEqual([ring.uid, null, null, null]);
     // Padded to the full slot count even from a save that predates them, because the
     // client holds an unmigrated save briefly on the optimistic path.
     const legacy = { ...owning([]) } as SaveState;
     delete (legacy as Partial<SaveState>).accessories;
-    expect(getHudSnapshot(legacy, T0).accessories).toEqual([null, null, null]);
+    expect(getHudSnapshot(legacy, T0).accessories).toEqual([null, null, null, null]);
   });
 
   it('prices a ring against a ring slot, not a gear slot', () => {
@@ -2052,7 +2143,7 @@ describe('accessories', () => {
 
     const { state, migrated } = migrateSave(v11 as SaveState);
     expect(migrated).toBe(true);
-    expect(state.accessories).toEqual([null, null, null]);
+    expect(state.accessories).toEqual([null, null, null, null]);
     expect(state.items).toEqual(v11.items);
     expect(state.loadout).toEqual(v11.loadout);
   });
@@ -2060,7 +2151,7 @@ describe('accessories', () => {
 
 describe('tablets', () => {
   /** Every affix in the game that is meant for a tablet, and nothing else. */
-  const tabletPool = () => AFFIXES.filter((a) => a.rollsOn === 'tablet');
+  const tabletPool = () => AFFIXES.filter((a) => a.rollsOn.includes('tablet'));
 
   it('keeps the two pools apart, in both directions', () => {
     /*
@@ -2076,7 +2167,7 @@ describe('tablets', () => {
     for (let uid = 1; uid <= 400; uid++) {
       const tablet = rollTablet(7, uid, 8);
       for (const rolled of tablet.affixes) {
-        expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).toBe('tablet');
+        expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).toEqual(['tablet']);
       }
       // And a tablet modifier never reaches the character sheet, because there is no
       // Effect for one - not a rule, a missing code path.
@@ -2084,7 +2175,7 @@ describe('tablets', () => {
 
       const gear = rollItem(7, uid, 120);
       for (const rolled of gear.affixes) {
-        expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).not.toBe('tablet');
+        expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).not.toContain('tablet');
       }
     }
   });
@@ -2399,7 +2490,7 @@ describe('tablets', () => {
     // Still only tablet modifiers. A reroll reaching the gear pool is the exact failure
     // that made the first cut give tablets their own type.
     for (const rolled of crafted.affixes) {
-      expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).toBe('tablet');
+      expect(getAffix(rolled.affixId)?.rollsOn, rolled.affixId).toEqual(['tablet']);
     }
     // The suffixes are byte-identical - a targeted reroll is the point of the idols.
     const suffixes = (item: ItemInstance) =>
@@ -2780,21 +2871,23 @@ describe('power budget', () => {
     return { affixId: id, tier: top, value: affix.tiers[top].value };
   };
 
-  /** Four rares on the same base, every affix and implicit at its best tier. */
-  const loadoutOf = (baseId: string, affixIds: string[]): SaveState => {
-    const implicit = BASE_AFFIXES[baseId];
-    const items = [0, 1, 2, 3].map((i) => ({
-      uid: `best-${i}`,
-      baseId,
-      rarity: 'rare' as const,
-      itemLevel: 100,
-      rerolls: 0,
-      crafts: 0,
-      affixes: affixIds.map(topRoll),
-      baseAffix: topRoll(implicit.id),
-    }));
-    return { ...base, items, loadout: items.map((i) => i.uid) };
-  };
+  /** A rare for one armour slot, every affix and the implicit at its best tier. */
+  const piece = (slot: number, baseId: string, affixIds: string[]): ItemInstance => ({
+    uid: `best-${slot}`,
+    baseId,
+    rarity: 'rare',
+    itemLevel: 100,
+    rerolls: 0,
+    crafts: 0,
+    affixes: affixIds.map(topRoll),
+    baseAffix: topRoll(BASE_AFFIXES[baseId].id),
+  });
+
+  const wearing = (pieces: (ItemInstance | null)[]): SaveState => ({
+    ...base,
+    items: pieces.filter((p): p is ItemInstance => p !== null),
+    loadout: pieces.map((p) => p?.uid ?? null),
+  });
 
   // Ratios of two Bigs, collapsed to ordinary numbers. That is the shape the whole
   // power budget is expressed in, and the reason the magnitudes themselves can be
@@ -2810,67 +2903,101 @@ describe('power budget', () => {
       : xs.flatMap((x, i) => combos(xs.slice(i + 1), k - 1).map((rest) => [x, ...rest]));
 
   /**
-   * The strongest loadout actually assemblable, found by searching the pool.
+   * The strongest armour loadout actually assemblable, found by searching the pool.
    *
-   * These lists used to be hand-written, and they went stale the moment the pool
-   * changed: the offensive pick paired Brutal with Sweeping, so once a flat
-   * damage prefix existed it was measuring the second-best build while claiming
-   * to measure the ceiling - and the ceiling test passed for the wrong reason.
-   * A search cannot go stale.
+   * Phase 8: five DIFFERENT slots, each with its own pool, rather than four copies of one
+   * relic. So the search is coordinate ascent - each slot in turn takes its best base and
+   * affix combination given the other four, twice round. Exact per slot; the second pass
+   * is what lets the slots agree with each other.
    *
-   * `extraRow` is the fifth row only a dune spirit grants, taken on whichever
-   * half is worth more. Never as a duplicate: rollAffixes picks distinct affixes
-   * within an item, so a loadout carrying two Honeds is not reachable and must
-   * not be measured.
+   * Only affixes that can actually roll on each base, which is what keeps the search from
+   * measuring a loadout nobody can assemble. The weapon and jewellery are separate axes
+   * and the ladder measures them.
+   *
    */
-  const bestLoadout = (metric: (s: SaveState) => number, extraRow: boolean) => {
-    // Read off AFFIX_LIMITS rather than written down. Hard-coded shapes were the
-    // other half of how these tests went stale: widening a rare's rows would have
-    // left the search measuring a four-affix item and still calling it the ceiling.
+  const bestLoadout = (metric: (s: SaveState) => number) => {
+    // Read off AFFIX_LIMITS rather than written down, so widening a rare's rows cannot
+    // leave the search measuring a smaller item and still calling it the ceiling.
     const { prefix, suffix } = AFFIX_LIMITS.rare;
-    const shapes: [number, number][] = extraRow
-      ? [
-          [prefix + 1, suffix],
-          [prefix, suffix + 1],
-        ]
-      : [[prefix, suffix]];
-    let best = { value: 0, save: base, label: '' };
-    // Gear bases only, and only affixes that can actually roll on them.
-    //
-    // This measures the AFFIX POOL's ceiling, which is what the budget has always
-    // been about; the weapon is a separate axis and the ladder measures it. Without
-    // the eligibility filter the search happily built a Whetstone carrying Savage
-    // and Arcane - two weapon-only affixes on a piece of gear - and reported an
-    // offensive ceiling of 3.5x for a loadout nobody can ever assemble.
-    for (const baseId of GEAR_BASES.map((b) => b.id)) {
-      const prefixes = eligibleAffixes(PREFIXES, baseId).map((a) => a.id);
-      const suffixes = eligibleAffixes(SUFFIXES, baseId).map((a) => a.id);
-      for (const [np, ns] of shapes) {
-        for (const ps of combos(prefixes, np)) {
-          for (const ss of combos(suffixes, ns)) {
-            const ids = [...ps, ...ss];
-            const save = loadoutOf(baseId, ids);
-            const value = metric(save);
-            if (value > best.value) best = { value, save, label: `${baseId}: ${ids.join('+')}` };
+    const shapes: [number, number][] = [[prefix, suffix]];
+    const pieces: (ItemInstance | null)[] = Array(ITEM_SLOTS).fill(null);
+    const labels: string[] = Array(ITEM_SLOTS).fill('-');
+    let value = metric(wearing(pieces));
+    for (let pass = 0; pass < 2; pass++) {
+      for (const [slot, kind] of ARMOUR_SLOT_KINDS.entries()) {
+        for (const b of ARMOUR_BASES.filter((x) => x.armour === kind)) {
+          const prefixes = eligibleAffixes(PREFIXES, b.id).map((a) => a.id);
+          const suffixes = eligibleAffixes(SUFFIXES, b.id).map((a) => a.id);
+          for (const [np, ns] of shapes) {
+            for (const ps of combos(prefixes, np)) {
+              for (const ss of combos(suffixes, ns)) {
+                const trial = [...pieces];
+                trial[slot] = piece(slot, b.id, [...ps, ...ss]);
+                const v = metric(wearing(trial));
+                if (v > value) {
+                  value = v;
+                  pieces[slot] = trial[slot];
+                  labels[slot] = `${b.id}: ${[...ps, ...ss].join('+')}`;
+                }
+              }
+            }
           }
         }
       }
     }
-    return best;
+    return { value, save: wearing(pieces), label: labels.join(' | ') };
   };
 
-  const offence = bestLoadout(dpsRatio, false);
-  const defence = bestLoadout(ehpRatio, false);
-  const craftedOffence = bestLoadout(dpsRatio, true);
-  const craftedDefence = bestLoadout(ehpRatio, true);
 
-  it('a best-in-slot loadout from drops alone is worth roughly 5.7x total power', () => {
-    // Measured as offence x defence, because that is what "total power" means
-    // for a build that has to both kill and survive.
-    //
-    // This is the DROP ceiling. The agreed overall ceiling is ~8x, and the
-    // headroom between the two is what the extra affix row spirits grant is
-    // allowed to occupy - it is not spare budget for bigger affixes.
+  /**
+   * The crafted ceiling: the drop ceiling plus the seventh row a dune spirit grants, on
+   * whichever piece and with whichever eligible affix is worth most. Searched as "take
+   * the best drop loadout and add a row", which is what crafting it would be - and it is
+   * what kept this suite inside its time budget once five slots each had a pool.
+   */
+  const withExtraRow = (
+    drop: { save: SaveState; label: string },
+    metric: (s: SaveState) => number,
+  ) => {
+    const pieces = ARMOUR_SLOT_KINDS.map((_, i) => {
+      const uid = drop.save.loadout[i];
+      return uid ? drop.save.items.find((item) => item.uid === uid)! : null;
+    });
+    let value = metric(drop.save);
+    let label = drop.label;
+    for (let pass = 0; pass < 2; pass++) {
+      for (const [slot, current] of pieces.entries()) {
+        if (!current || current.affixes.length > AFFIX_LIMITS.rare.prefix + AFFIX_LIMITS.rare.suffix) continue;
+        const owned = new Set(current.affixes.map((a) => a.affixId));
+        const pool = [...eligibleAffixes(PREFIXES, current.baseId), ...eligibleAffixes(SUFFIXES, current.baseId)];
+        let bestPiece: ItemInstance | null = null;
+        for (const affix of pool) {
+          if (owned.has(affix.id)) continue;
+          const trial = [...pieces];
+          trial[slot] = { ...current, affixes: [...current.affixes, topRoll(affix.id)] };
+          const v = metric(wearing(trial));
+          if (v > value) {
+            value = v;
+            bestPiece = trial[slot];
+            label = `${drop.label} + ${affix.id} on ${current.baseId}`;
+          }
+        }
+        if (bestPiece) pieces[slot] = bestPiece;
+      }
+    }
+    return { value, save: wearing(pieces), label };
+  };
+
+  const offence = bestLoadout(dpsRatio);
+  const defence = bestLoadout(ehpRatio);
+  const craftedOffence = withExtraRow(offence, dpsRatio);
+  const craftedDefence = withExtraRow(defence, ehpRatio);
+
+  it('a best-in-slot loadout from drops alone is worth roughly 6x total power', () => {
+    // Measured as offence x defence, because that is what "total power" means for a
+    // build that has to both kill and survive. The band is the one the four relic slots
+    // were held to; the armour slots were tuned INTO it rather than the band moved, so
+    // the ladder is still measured against the same ceiling.
     const total = offence.value * defence.value;
     expect(total, `${offence.label} x ${defence.label}`).toBeGreaterThan(5.0);
     expect(total).toBeLessThan(6.5);
@@ -2878,130 +3005,128 @@ describe('power budget', () => {
 
   it('does not put the whole budget on damage', () => {
     // Clear time holds steady only while offence and defence grow together.
-    // The first cut of the affix pool loaded everything onto DPS and the
-    // harness caught it: stage 222 resolved in 11.9s against a 20s floor.
     expect(offence.value).toBeLessThan(2.6);
   });
 
   it('grows offence and defence at matching rates', () => {
-    // The absolute ceiling above cannot tell 2.4/2.4 from 3.4/1.7 - both are
-    // 5.7x. This is the check that actually encodes the invariant, and it is
-    // the one to read first when clear times move.
+    // The check that actually encodes the invariant, and the one to read first when
+    // clear times move. Since Phase 8 it is a LOADOUT property: the body cannot build
+    // offence at all, and it is the other four slots that have to make up for it.
     const detail = `offence ${offence.value.toFixed(3)} (${offence.label}) vs defence ${defence.value.toFixed(3)} (${defence.label})`;
     expect(Math.abs(Math.log(offence.value / defence.value)), detail).toBeLessThan(0.15);
   });
 
-  it('a fully crafted loadout is worth roughly 8x, the agreed ceiling', () => {
-    // The craft ceiling: everything the drop ceiling has, plus the fifth affix
-    // row only a dune spirit can grant. This is the number the whole currency
-    // system was budgeted against, and the one that decides whether the ladder
-    // still paces.
+  it('a fully crafted loadout stays inside the agreed ceiling', () => {
     const total = craftedOffence.value * craftedDefence.value;
     expect(total, `${craftedOffence.label} x ${craftedDefence.label}`).toBeGreaterThan(6.5);
     expect(total).toBeLessThan(9.5);
   });
 
-  it('leaves crafting real headroom over dropping, but not a different game', () => {
-    // Both sides measured, not assumed. If crafting did not beat what drops,
-    // the currency would be decoration; if it beat it by too much, every
-    // dropped item would be litter and the ladder would need retuning around
-    // the crafted player instead of the real spread of players.
+  it('leaves crafting some headroom over dropping, but not a different game', () => {
+    /*
+      The floor here was 1.2 under the relic slots and is 1.03 now, and that is a
+      measured consequence rather than a tuning choice.
+
+      Each armour slot rolls a NARROW pool on purpose - that is what makes a slot a slot
+      - so a rare's six rows already take everything a slot has that is worth taking,
+      and the seventh row a dune spirit grants lands on a filler. Under the relic slots
+      every piece drew from one wide pool and the seventh row was another real roll.
+      Crafting's worth on armour is now in hitting the right six, not in a seventh.
+    */
     const dropped = offence.value * defence.value;
     const crafted = craftedOffence.value * craftedDefence.value;
-    expect(crafted / dropped).toBeGreaterThan(1.2);
+    expect(crafted / dropped).toBeGreaterThan(1.03);
     expect(crafted / dropped).toBeLessThan(1.9);
   });
 
   it('keeps offence and defence matched at the craft ceiling too', () => {
-    // The symmetry invariant does not stop applying because an item was
-    // crafted. A fifth row that only ever went on offence would be the
-    // stage-222 failure arriving by a third route.
     const detail = `offence ${craftedOffence.value.toFixed(3)} (${craftedOffence.label}) vs defence ${craftedDefence.value.toFixed(3)} (${craftedDefence.label})`;
     expect(Math.abs(Math.log(craftedOffence.value / craftedDefence.value)), detail).toBeLessThan(0.2);
   });
 
-  it('does not let stacked uniques beat a crafted loadout on total power', () => {
-    // Four of the same unique is the cheapest possible "build": no crafting, no
-    // currency, no decisions. It is allowed to win on one axis - four
-    // Whetstones out-damage a crafted rare set, and that is the point of a
-    // chase item - but it must not win overall, or the entire currency system
-    // is dead content for anyone who optimises.
-    //
-    // It does not, because no unique carries defence: Bloodstone actively
-    // trades max HP away, and the rest are neutral.
-    const stacked = (id: string): SaveState => {
-      const items = [0, 1, 2, 3].map((i) => ({
-        uid: `u${i}`,
-        baseId: id,
-        rarity: 'unique' as const,
-        itemLevel: 100,
-        affixes: [],
-        rerolls: 0,
-        crafts: 0,
-        uniqueId: id,
-      }));
-      return { ...base, items, loadout: items.map((item) => item.uid) };
-    };
-
-    const bestUniqueTotal = Math.max(
-      ...UNIQUES.map((u) => dpsRatio(stacked(u.id)) * ehpRatio(stacked(u.id))),
-    );
+  it('does not let a loadout of uniques beat a crafted loadout on total power', () => {
+    // The cheapest possible "build": the best unique for each slot, no crafting, no
+    // currency, no decisions. It may win on one axis - that is the point of a chase
+    // item - but it must not win overall, or the currency system is dead content.
+    const uniqueFor = (id: string): ItemInstance => ({
+      uid: `u-${id}`,
+      baseId: id,
+      rarity: 'unique',
+      itemLevel: 100,
+      affixes: [],
+      rerolls: 0,
+      crafts: 0,
+      uniqueId: id,
+    });
+    const pieces: (ItemInstance | null)[] = Array(ITEM_SLOTS).fill(null);
+    const total = (s: SaveState) => dpsRatio(s) * ehpRatio(s);
+    for (const [slot, kind] of ARMOUR_SLOT_KINDS.entries()) {
+      let best = total(wearing(pieces));
+      for (const u of UNIQUES.filter((x) => x.slot === kind)) {
+        const trial = [...pieces];
+        trial[slot] = uniqueFor(u.id);
+        if (total(wearing(trial)) > best) {
+          best = total(wearing(trial));
+          pieces[slot] = trial[slot];
+        }
+      }
+    }
     const crafted = craftedOffence.value * craftedDefence.value;
-    expect(bestUniqueTotal).toBeLessThan(crafted);
+    expect(total(wearing(pieces))).toBeLessThan(crafted);
   });
 
-  it('keeps every base implicit near a third of the rolled affix on its stat', () => {
-    // This replaces a DPS-contribution band, and the instrument was replaced
-    // rather than the threshold widened.
+  it('keeps every non-armour implicit near a third of the rolled affix on its stat', () => {
+    // A guaranteed mod that was also the strongest mod would make the rolled half
+    // decorative. Asserted off the tables, independent of any one loadout.
     //
-    // The old check measured dps(with implicits) / dps(without) and demanded
-    // 1.1-1.25. Under the all-multiplier model that ratio was exactly the
-    // implicit's own compounding - 1.038^4 = 1.16 - because the rolled affixes
-    // multiplied too and cancelled out of the fraction. Under layers they land in
-    // the same sum, so the same design ratio now reads as 1.075: the implicit is
-    // deliberately *diluted* by the rolled half, which is the diminishing-returns
-    // property working as intended. Hitting 1.1 again would need implicits at
-    // ~43% of a rolled affix, breaking the rule this test exists to enforce.
-    //
-    // So assert the rule itself, off the tables. It is also a stronger check:
-    // independent of how many other affixes an item happens to carry, and it
-    // covers every stat rather than only the ones on one measured loadout.
+    // ARMOUR implicits are exempt, and inverted: since Phase 8 the implicit IS the
+    // piece's defence layer. That rule has its own test below.
     const rolledPeers = (stat: string, op: string) =>
       AFFIXES.filter(
-        (a) => a.effect.kind === 'statMod' && a.effect.stat === stat && a.effect.op === op,
+        (a) =>
+          a.rollsOn.length > 0 &&
+          a.effect.kind === 'statMod' &&
+          a.effect.stat === stat &&
+          a.effect.op === op,
       );
+    const armourImplicits = new Set(ARMOUR_BASES.filter((b) => b.defence).map((b) => BASE_AFFIXES[b.id].id));
 
     for (const implicit of IMPLICIT_AFFIXES) {
-      if (implicit.effect.kind !== 'statMod') continue;
+      if (implicit.effect.kind !== 'statMod' || armourImplicits.has(implicit.id)) continue;
       const { stat, op } = implicit.effect;
       const peers = rolledPeers(stat, op);
-      // An implicit with no rolled counterpart cannot be priced against anything,
-      // which is how an implicit quietly becomes the strongest mod on its stat.
       expect(peers.length, `${implicit.id} has no rolled counterpart on ${stat}`).toBeGreaterThan(0);
 
-      // Compared against the weakest peer, so the bound holds however many
-      // rolled affixes share the stat.
       const top = (a: (typeof peers)[number]) => a.tiers[a.tiers.length - 1].value;
       const weakest = peers.reduce((a, b) => (top(a) < top(b) ? a : b));
 
       for (let tier = 0; tier < implicit.tiers.length; tier++) {
-        const ratio = implicit.tiers[tier].value / weakest.tiers[tier].value;
+        const peerTier = weakest.tiers[Math.min(tier, weakest.tiers.length - 1)];
+        const ratio = implicit.tiers[tier].value / peerTier.value;
         expect(ratio, `${implicit.id} T${tier} vs ${weakest.id}`).toBeGreaterThan(0.25);
         expect(ratio, `${implicit.id} T${tier} vs ${weakest.id}`).toBeLessThan(0.45);
       }
     }
   });
 
-  it('lets the rolled half dilute the implicit, rather than the reverse', () => {
-    // The outcome the ratio test above implies, measured end to end so the two
-    // cannot drift: guaranteed power stays a minority of an item's contribution.
-    const stripped = {
-      ...offence.save,
-      items: offence.save.items.map((item) => ({ ...item, baseAffix: undefined })),
-    };
-    const contribution = dpsRatio(offence.save) / dpsRatio(stripped);
-    expect(contribution).toBeGreaterThan(1.04);
-    expect(contribution).toBeLessThan(1.15);
+  it('makes an armour base its biggest defence roll', () => {
+    // The inverted rule for armour: choosing the base is choosing the layer, so the
+    // implicit outweighs the rolled flat rating on the same stat at every tier.
+    for (const b of ARMOUR_BASES.filter((x) => x.defence)) {
+      const implicit = BASE_AFFIXES[b.id];
+      if (implicit.effect.kind !== 'statMod') continue;
+      const { stat } = implicit.effect;
+      const flat = AFFIXES.find(
+        (a) =>
+          a.defence === b.defence &&
+          a.effect.kind === 'statMod' &&
+          a.effect.stat === stat &&
+          a.effect.op === 'flat',
+      )!;
+      for (let tier = 0; tier < implicit.tiers.length; tier++) {
+        expect(implicit.tiers[tier].value, `${b.id} T${tier}`).toBeGreaterThan(flat.tiers[tier].value);
+      }
+    }
   });
 });
 
@@ -3088,10 +3213,10 @@ describe('migration', () => {
 
     expect(migrated).toBe(true);
     expect(state.items).toEqual([]);
-    // The array is MAX_ITEM_SLOTS long now, not ITEM_SLOTS: positions past the live
+    // The array is ITEM_SLOTS long now, not ITEM_SLOTS: positions past the live
     // count exist and are simply inert, which is what lets a unique grant slots
     // without a migration every time.
-    expect(state.loadout).toEqual(Array(MAX_ITEM_SLOTS).fill(null));
+    expect(state.loadout).toEqual(Array(ITEM_SLOTS).fill(null));
     expect(state.nextItemId).toBe(1);
     // The fixture holds a legacy NUMBER; migration leaves a string of equal value.
     expect(fromSave(state.gold).eq(big(12345))).toBe(true);
@@ -3242,7 +3367,7 @@ describe('stat breakdown', () => {
       baseAffix: undefined,
       affixes: [{ affixId: 'brutal', tier: 1, value: 0.031 }],
     };
-    const loadout = Array<string | null>(MAX_ITEM_SLOTS).fill(null);
+    const loadout = Array<string | null>(ITEM_SLOTS).fill(null);
     loadout[0] = gear.uid;
     return {
       ...newSave(7, T0),

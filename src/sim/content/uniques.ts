@@ -36,32 +36,36 @@ import { UNIQUE_TIER_WEIGHTS, type Effect, type Unique, type UniqueTier } from '
 export const UNIQUES = [
   {
     id: 'whetstone',
-    name: 'The Whetstone',
-    sprite: 'item.whetstone',
+    name: 'Whetstone Grips',
+    sprite: 'item.whetstone_grips',
+    slot: 'gloves',
     dropStage: 1,
     tier: 'lesser',
     effects: [{ kind: 'statMod', stat: 'damage', op: 'more', roll: { min: 1.2, max: 1.5 } }],
   },
   {
     id: 'quickdraw-glove',
-    name: 'Quickdraw Glove',
-    sprite: 'item.quickdraw_glove',
+    name: 'Quickdraw Gauntlets',
+    sprite: 'item.quickdraw_gauntlets',
+    slot: 'gloves',
     dropStage: 1,
     tier: 'lesser',
     effects: [{ kind: 'statMod', stat: 'attackSpeed', op: 'more', roll: { min: 1.18, max: 1.42 } }],
   },
   {
     id: 'coin-purse',
-    name: 'Bottomless Purse',
-    sprite: 'item.coin_purse',
+    name: 'Bottomless Pouch',
+    sprite: 'item.bottomless_pouch',
+    slot: 'belt',
     dropStage: 3,
     tier: 'lesser',
     effects: [{ kind: 'goldOnKill', roll: { min: 0.4, max: 0.8 } }],
   },
   {
     id: 'executioners-mark',
-    name: "Executioner's Mark",
-    sprite: 'item.executioners_mark',
+    name: "Executioner's Hood",
+    sprite: 'item.executioners_hood',
+    slot: 'helmet',
     dropStage: 8,
     tier: 'greater',
     effects: [
@@ -76,8 +80,9 @@ export const UNIQUES = [
   },
   {
     id: 'giant-slayer',
-    name: 'Giant Slayer',
-    sprite: 'item.giant_slayer',
+    name: 'Giantstride Greaves',
+    sprite: 'item.giantstride_greaves',
+    slot: 'boots',
     dropStage: 12,
     tier: 'greater',
     effects: [
@@ -96,8 +101,9 @@ export const UNIQUES = [
   },
   {
     id: 'swarm-lens',
-    name: 'Swarm Lens',
-    sprite: 'item.swarm_lens',
+    name: 'Swarm-Eye Circlet',
+    sprite: 'item.swarm_eye_circlet',
+    slot: 'helmet',
     dropStage: 20,
     tier: 'greater',
     effects: [
@@ -107,8 +113,9 @@ export const UNIQUES = [
   },
   {
     id: 'bloodstone',
-    name: 'Bloodstone',
-    sprite: 'item.bloodstone',
+    name: 'Bloodstone Carapace',
+    sprite: 'item.bloodstone_carapace',
+    slot: 'body',
     dropStage: 25,
     tier: 'ancient',
     effects: [
@@ -119,8 +126,9 @@ export const UNIQUES = [
   },
   {
     id: 'deep-delvers-idol',
-    name: "Deep Delver's Idol",
-    sprite: 'item.deep_delvers_idol',
+    name: "Deep Delver's Treads",
+    sprite: 'item.deep_delvers_treads',
+    slot: 'boots',
     dropStage: 40,
     tier: 'ancient',
     effects: [
@@ -152,8 +160,9 @@ export const UNIQUES = [
      * ceiling is the same one the affix pool already lives under.
      */
     id: 'berserkers-anvil',
-    name: "Berserker's Anvil",
-    sprite: 'item.berserkers_anvil',
+    name: "Berserker's Fists",
+    sprite: 'item.berserkers_fists',
+    slot: 'gloves',
     dropStage: 15,
     tier: 'greater',
     effects: [
@@ -172,6 +181,7 @@ export const UNIQUES = [
     id: 'duelists-visor',
     name: "Duelist's Visor",
     sprite: 'item.duelists_visor',
+    slot: 'helmet',
     dropStage: 18,
     tier: 'greater',
     effects: [
@@ -189,8 +199,9 @@ export const UNIQUES = [
      * with farm rate, which is a different axis from every other unique in the list.
      */
     id: 'wardens-coffer',
-    name: "Warden's Coffer",
-    sprite: 'item.wardens_coffer',
+    name: "Warden's Keyring",
+    sprite: 'item.wardens_keyring',
+    slot: 'belt',
     dropStage: 22,
     tier: 'greater',
     effects: [
@@ -217,6 +228,7 @@ export const UNIQUES = [
     id: 'bulwark-of-the-deep',
     name: 'Bulwark of the Deep',
     sprite: 'item.bulwark_of_the_deep',
+    slot: 'body',
     dropStage: 30,
     tier: 'ancient',
     effects: [
@@ -228,18 +240,22 @@ export const UNIQUES = [
     /**
      * More room to wear things, paid for in raw output.
      *
-     * A slot is worth roughly a whole item, so this is the largest single upgrade in
-     * the roster - and it has to be, because the cost is charged immediately while the
-     * benefit only arrives once you own something good enough to put in the new slot.
-     * A player who finds this early gets an empty slot and a damage penalty.
+     * Phase 8: a fourth RING position rather than one or two gear slots - the armour
+     * slots are fixed, and a belt that granted a helmet slot would be nonsense. A ring is
+     * worth less than the old gear slot, so the damage price is smaller and it now rolls:
+     * the slot is the constant half, and the price is what a lucky drop improves.
+     *
+     * The cost is still charged immediately while the benefit only arrives once you own
+     * a ring good enough to put in the new position.
      */
     id: 'travellers-harness',
     name: "Traveller's Harness",
     sprite: 'item.travellers_harness',
+    slot: 'belt',
     dropStage: 35,
     tier: 'ancient',
     effects: [
-      { kind: 'equipSlots', roll: { min: 1, max: 2 } },
+      { kind: 'ringSlots', roll: { min: 1, max: 1 } },
       // 15%, not the 30% this was first authored at.
       //
       // A fifth slot adds roughly a quarter of a fully geared character's item
@@ -247,13 +263,18 @@ export const UNIQUES = [
       // owned one for a hundred stages and correctly refused to wear it, even when
       // taught to evaluate equipping it and filling the new slot as a single move.
       // The trade has to be smaller than what a slot is worth or it is not a trade.
-      { kind: 'statMod', stat: 'damage', op: 'more', roll: { min: 0.92, max: 0.92 } },
+      { kind: 'statMod', stat: 'damage', op: 'more', roll: { min: 0.9, max: 0.95 } },
     ],
   },
   {
     /**
      * The inverse trade, and the most interesting item here: fewer slots, but what
      * remains counts for far more.
+     *
+     * Phase 8: a body piece that SEALS the gloves and boots rather than removing "a
+     * slot" - the slots are fixed now, so the loss has to name which. Gloves are the one
+     * offensive armour slot and boots carry movement speed, so the trade still costs
+     * real things.
      *
      * Amplification lands on `flat` and `increased` only - see amplifyOthers in
      * schema.ts. It also never applies to this item's own effects, which is what stops
@@ -264,13 +285,14 @@ export const UNIQUES = [
      * decision this item exists to pose.
      */
     id: 'monomaniacs-seal',
-    name: "Monomaniac's Seal",
-    sprite: 'item.monomaniacs_seal',
+    name: "Monomaniac's Shroud",
+    sprite: 'item.monomaniacs_shroud',
+    slot: 'body',
     dropStage: 45,
     tier: 'ancient',
     effects: [
       { kind: 'amplifyOthers', roll: { min: 1.6, max: 2.4 } },
-      { kind: 'equipSlots', roll: { min: -1, max: -1 } },
+      { kind: 'sealSlots', slots: ['gloves', 'boots'], roll: { min: 1, max: 1 } },
     ],
   },
 ] as const satisfies readonly Unique[];
@@ -359,8 +381,12 @@ export function uniqueEffects(unique: Unique, rolls: number[] | undefined): Effe
     if (effect.kind === 'keyDrop') return { kind: 'keyDrop', multiplier: value, ...when };
     // Rounded, because a slot count is an integer and a range like 1..3 would
     // otherwise resolve to 2.4 slots at the midpoint.
-    if (effect.kind === 'equipSlots') {
-      return { kind: 'equipSlots', delta: Math.round(value), ...when };
+    if (effect.kind === 'ringSlots') {
+      return { kind: 'ringSlots', delta: Math.round(value), ...when };
+    }
+    // Which slots is authored; the roll is a placeholder that keeps the rolls aligned.
+    if (effect.kind === 'sealSlots') {
+      return { kind: 'sealSlots', slots: [...effect.slots], ...when };
     }
     if (effect.kind === 'amplifyOthers') {
       return { kind: 'amplifyOthers', multiplier: value, ...when };

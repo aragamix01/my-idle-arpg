@@ -157,7 +157,7 @@ export function CraftModal({
           {rerollable && (
             <li>
               <OptionRow
-                sprite="item.coin_purse"
+                sprite="item.bottomless_pouch"
                 name="Gold Reroll"
                 description="Rerolls every modifier except the implicit. There is no way to keep one."
                 // A unique has no gold price at all, and a formatted Infinity reads as a

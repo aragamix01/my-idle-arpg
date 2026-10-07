@@ -25,7 +25,7 @@ import {
   UPGRADE_TRACKS,
   type Resistances,
 } from './curves';
-import { itemEffects, itemPower } from './items';
+import { armourSlotOf, itemEffects } from './items';
 import { big, bigMax, BIG_ONE, type Big } from './big';
 import {
   ACCESSORY_SLOTS,
@@ -36,10 +36,13 @@ import {
   BOSS_HIT_SCALE,
   EVASION_CAP,
   EVASION_K,
-  ITEM_SLOTS,
+  ARMOUR_SLOT_KINDS,
+  BASE_ACCESSORY_SLOTS,
+  BOSS_MITIGATION_CAP,
   MAGNITUDE_STAT_KEYS,
-  MAX_ITEM_SLOTS,
   STAT_KEYS,
+  WAVE_RECOVERY_CAP,
+  type ArmourSlot,
   type MagnitudeStatKey,
   type EffectContext,
   type SaveState,
@@ -157,10 +160,15 @@ export function equippedWeapon(save: SaveState): ItemInstance | undefined {
   return save.weapon ? findItem(save, save.weapon) : undefined;
 }
 
-/** Accessories currently worn, in slot order. Empty positions are simply absent. */
-export function equippedAccessories(save: SaveState): ItemInstance[] {
+/**
+ * Accessories currently worn, in slot order. Empty positions are simply absent.
+ *
+ * `live` is how many positions count - the base three unless armour grants more. See
+ * accessorySlots.
+ */
+export function equippedAccessories(save: SaveState, live = BASE_ACCESSORY_SLOTS): ItemInstance[] {
   const out: ItemInstance[] = [];
-  for (let i = 0; i < ACCESSORY_SLOTS; i++) {
+  for (let i = 0; i < Math.min(live, ACCESSORY_SLOTS); i++) {
     const uid = save.accessories?.[i];
     // Optional-chained because a save written before accessories existed has no array at
     // all, and deriveStats runs before migrate on the optimistic client path.
@@ -171,23 +179,7 @@ export function equippedAccessories(save: SaveState): ItemInstance[] {
   return out;
 }
 
-/**
- * How many gear slots are live right now.
- *
- * Derived rather than constant, because a unique can grant or remove them. The rule
- * that makes this terminate is that **only items in the first ITEM_SLOTS positions may
- * change the count**.
- *
- * Without it the fixed point runs away: a `+1 slot` item parked at index 4 is inert at
- * four slots, becomes live the moment the count reaches five, and grants the fifth slot
- * that made it live. With the window pinned at `min(ITEM_SLOTS, slots)` the count can
- * only ever shrink below four, so two passes are enough and there is nothing to
- * oscillate between.
- *
- * Reads items directly instead of calling equippedEffects, which calls this - the
- * recursion would be immediate.
- */
-/** What one gear position contributes. Empty, or pointing at a discarded item, is []. */
+/** What one armour position contributes. Empty, or pointing at a discarded item, is []. */
 function slotEffects(save: SaveState, index: number): Effect[] {
   const uid = save.loadout[index];
   if (!uid) return [];
@@ -196,101 +188,76 @@ function slotEffects(save: SaveState, index: number): Effect[] {
 }
 
 /**
- * The first ITEM_SLOTS positions - the only ones that can change the slot count.
+ * The armour slots switched off by what is worn - Monomaniac's Shroud. Phase 8.
  *
- * Deliberately not the whole array. Positions past the base four exist in every save
- * but are empty for every character without a slot-granting unique, and resolving
- * their effects on every deriveStats call is work the overwhelming majority of saves
- * do not need.
+ * Read from the positions' own effects, and a position can never seal itself: the one
+ * item that seals is a body piece and seals gloves and boots. So there is no fixed point
+ * to resolve - unlike the derived slot count this replaced, one pass is the answer.
  */
-function baseGearEffects(save: SaveState): Effect[][] {
-  const out: Effect[][] = [];
-  for (let i = 0; i < ITEM_SLOTS; i++) out.push(slotEffects(save, i));
-  return out;
+function sealedFrom(armour: Effect[][], ctx: EffectContext): Set<ArmourSlot> {
+  const sealed = new Set<ArmourSlot>();
+  armour.forEach((effects, i) => {
+    for (const e of effects) {
+      if (e.kind !== 'sealSlots' || !conditionHolds(e, ctx)) continue;
+      for (const slot of e.slots) if (slot !== ARMOUR_SLOT_KINDS[i]) sealed.add(slot);
+    }
+  });
+  return sealed;
+}
+
+/** The armour slots currently sealed. Empty for every character without the Shroud. */
+export function sealedSlots(save: SaveState, ctx: EffectContext): Set<ArmourSlot> {
+  return sealedFrom(ARMOUR_SLOT_KINDS.map((_, i) => slotEffects(save, i)), ctx);
 }
 
 /**
- * Resolve the slot count from per-position effects that have already been gathered.
+ * How many accessory positions are live: the base three, plus what armour grants.
  *
- * Deltas are read once and the window is then walked over that array, rather than
- * re-deriving item effects per pass. deriveStats runs this on every call and the
- * balance harness runs deriveStats thousands of times per stage; the first cut walked
- * every equipped item twice and put the 300-stage sweep over its minute budget.
+ * Only ARMOUR can grant one - no accessory carries `ringSlots` - so the count is read off
+ * the armour once and cannot feed back into itself. A sealed slot grants nothing.
  */
-function slotsFrom(gear: Effect[][], ctx: EffectContext): number {
-  const deltas = gear.map((effects) =>
-    effects.reduce(
-      (sum, e) => (e.kind === 'equipSlots' && conditionHolds(e, ctx) ? sum + e.delta : sum),
-      0,
-    ),
-  );
-
-  // Nothing worn changes the count, which is every save until a slot unique drops.
-  if (deltas.every((d) => d === 0)) return ITEM_SLOTS;
-
-  let slots = ITEM_SLOTS;
-  for (let pass = 0; pass < 2; pass++) {
-    const window = Math.max(0, Math.min(ITEM_SLOTS, slots));
-    const next = ITEM_SLOTS + deltas.slice(0, window).reduce((a, b) => a + b, 0);
-    if (next === slots) break;
-    slots = next;
-  }
-
-  // At least one slot, and never more than the array holds. A character with zero
-  // slots would be stuck; the ceiling is what MAX_ITEM_SLOTS is for.
-  return Math.max(1, Math.min(MAX_ITEM_SLOTS, slots));
+function accessorySlotsFrom(armour: Effect[][], sealed: Set<ArmourSlot>, ctx: EffectContext): number {
+  let slots = BASE_ACCESSORY_SLOTS;
+  armour.forEach((effects, i) => {
+    if (sealed.has(ARMOUR_SLOT_KINDS[i])) return;
+    for (const e of effects) if (e.kind === 'ringSlots' && conditionHolds(e, ctx)) slots += e.delta;
+  });
+  return Math.max(BASE_ACCESSORY_SLOTS, Math.min(ACCESSORY_SLOTS, slots));
 }
 
-/**
- * How many gear slots are live right now.
- *
- * Derived rather than constant, because a unique can grant or remove them. The rule
- * that makes this terminate is that **only items in the first ITEM_SLOTS positions may
- * change the count**.
- *
- * Without it the fixed point runs away: a `+1 slot` item parked at index 4 is inert at
- * four slots, becomes live the moment the count reaches five, and grants the fifth slot
- * that made it live. With the window pinned at `min(ITEM_SLOTS, slots)` the count can
- * only ever shrink below four, so two passes are enough and there is nothing to
- * oscillate between.
- */
-export function equipSlots(save: SaveState, ctx: EffectContext): number {
-  return slotsFrom(baseGearEffects(save), ctx);
+export function accessorySlots(save: SaveState, ctx: EffectContext): number {
+  const armour = ARMOUR_SLOT_KINDS.map((_, i) => slotEffects(save, i));
+  return accessorySlotsFrom(armour, sealedFrom(armour, ctx), ctx);
 }
 
 /**
  * Effects from currently equipped items only — owned-but-unequipped do nothing.
  *
- * "Equipped" means inside the live slot count. An item sitting past it is still owned
- * and still worn in the sense that dissembling refuses it, but it contributes nothing -
- * which is what makes a slot-removing unique a real cost rather than a free swap.
+ * "Equipped" means worn in a live position. A piece in a sealed slot is still worn in
+ * the sense that dissembling refuses it, but it contributes nothing - which is what
+ * makes the Shroud's seal a real cost rather than a free swap. Likewise a ring in the
+ * fourth position only counts while something grants that position.
  *
- * The gear is walked ONCE and both answers come out of that walk. Asking equipSlots
- * separately would mean resolving every item's effects twice on the hottest path in
- * the sim.
+ * The armour is walked ONCE and every answer comes out of that walk. Asking the sealed
+ * set and the ring count separately would resolve every item's effects three times on
+ * the hottest path in the sim.
  *
  * The weapon counts. It is an ordinary item that happens to also grant a skill, so
  * its affixes and implicit contribute exactly like any other equipped item's.
  */
 export function equippedGroups(save: SaveState, ctx: EffectContext): Effect[][] {
-  const base = baseGearEffects(save);
-  const slots = slotsFrom(base, ctx);
+  const armour = ARMOUR_SLOT_KINDS.map((_, i) => slotEffects(save, i));
+  const sealed = sealedFrom(armour, ctx);
 
-  const out: Effect[][] = [];
-  for (let i = 0; i < Math.min(slots, ITEM_SLOTS); i++) out.push(base[i]);
-  // Positions past the base four are only resolved when something actually granted
-  // them, which is the uncommon case.
-  for (let i = ITEM_SLOTS; i < slots; i++) out.push(slotEffects(save, i));
+  const out: Effect[][] = armour.filter((_, i) => !sealed.has(ARMOUR_SLOT_KINDS[i]));
 
   const weapon = equippedWeapon(save);
   if (weapon) out.push(itemEffects(weapon));
   // Accessories are ordinary equipped items in every way that matters here - their own
-  // group each, so `amplifyOthers` counts them the way it counts gear.
-  //
-  // They cannot change the slot count and are deliberately resolved AFTER it: no
-  // accessory affix carries `equipSlots`, and keeping them out of `slotsFrom`'s window
-  // is what stops a second fixed point feeding through the first.
-  for (const accessory of equippedAccessories(save)) out.push(itemEffects(accessory));
+  // group each, so `amplifyOthers` counts them the way it counts armour.
+  for (const accessory of equippedAccessories(save, accessorySlotsFrom(armour, sealed, ctx))) {
+    out.push(itemEffects(accessory));
+  }
   return out;
 }
 
@@ -511,10 +478,23 @@ function applyLimits(
   // The defence layers floor at zero for the same reason. The ceilings are not here:
   // they are on what each one ACHIEVES (EVASION_CAP, ARMOUR_CAP in effectiveHp), so a
   // huge rating is wasted rather than wrong.
-  for (const key of ['energyShield', 'armour', 'evasion'] as const) {
+  for (const key of ['energyShield', 'armour', 'evasion', 'moveSpeed'] as const) {
     if (stats[key] < 0) {
       stats[key] = 0;
       if (capped) capped[key] = 'cannot be negative';
+    }
+  }
+
+  // The two slot-only fractions are capped where they are stored: what they achieve IS
+  // the stored number, so there is no later formula to cap it in.
+  const fractionCaps = { bossMitigation: BOSS_MITIGATION_CAP, waveRecovery: WAVE_RECOVERY_CAP } as const;
+  for (const [key, cap] of Object.entries(fractionCaps) as [keyof typeof fractionCaps, number][]) {
+    if (stats[key] < 0) {
+      stats[key] = 0;
+      if (capped) capped[key] = 'cannot be negative';
+    } else if (stats[key] > cap) {
+      stats[key] = cap;
+      if (capped) capped[key] = `capped at ${Math.round(cap * 100)}%`;
     }
   }
 
@@ -662,33 +642,15 @@ export function previewEquip(
     return { ...save, items: owned, accessories };
   }
 
+  // Armour has exactly one place to go, so "if you equipped it" is a plain swap into
+  // its slot. The context is unused now that no slot is derived; kept so callers that
+  // price a drop at a given stage do not change shape.
+  void ctx;
+  const slot = armourSlotOf(item);
+  const index = slot ? ARMOUR_SLOT_KINDS.indexOf(slot) : -1;
+  if (index === -1) return save;
   const loadout = [...save.loadout];
-  const slots = equipSlots(save, ctx);
-
-  const worn = loadout.indexOf(item.uid);
-  if (worn !== -1) return { ...save, items: owned, loadout };
-
-  const free = loadout.slice(0, slots).indexOf(null);
-  if (free !== -1) {
-    loadout[free] = item.uid;
-    return { ...save, items: owned, loadout };
-  }
-
-  // Full. Replacing the weakest live slot is the honest comparison - against the best
-  // one, every drop would look like a downgrade and the number would be useless.
-  let weakest = 0;
-  let weakestPower = Infinity;
-  for (let i = 0; i < slots; i++) {
-    const uid = loadout[i];
-    const current = uid ? findItem(save, uid) : undefined;
-    // An empty live slot is weaker than anything, so it wins the swap outright.
-    const power = current ? itemPower(current) : -Infinity;
-    if (power < weakestPower) {
-      weakestPower = power;
-      weakest = i;
-    }
-  }
-  loadout[weakest] = item.uid;
+  loadout[index] = item.uid;
   return { ...save, items: owned, loadout };
 }
 
@@ -763,12 +725,14 @@ export function shieldShare(stats: Stats): number {
  *
  *   (life + shield) x toughness / ((1 - evade) x (1 - armourCut))
  *
- * `against` only changes armour - see BOSS_HIT_SCALE. Everything that reads one number
+ * `against` changes armour - see BOSS_HIT_SCALE - and applies body armour's boss cut. Everything that reads one number
  * for "how tanky am I" reads the trash figure, which is what a run spends most of its
  * time taking.
  */
 export function effectiveHp(stats: Stats, against: 'trash' | 'boss' = 'trash'): Big {
-  const avoided = (1 - evadeChance(stats)) * (1 - armourCut(stats, against));
+  // Body armour's boss cut is one more factor of the same shape - a scale on what lands.
+  const mitigated = against === 'boss' ? 1 - stats.bossMitigation : 1;
+  const avoided = (1 - evadeChance(stats)) * (1 - armourCut(stats, against)) * mitigated;
   return stats.maxHp
     .mul(1 + stats.energyShield)
     .mul(stats.toughness)

@@ -76,6 +76,23 @@ export const STAT_KEYS = [
   'armour',
   /** A rating. A chance to avoid a hit outright, capped. */
   'evasion',
+  /*
+    Three slot-only stats, Phase 8. Each lives on exactly one armour slot's pool, so a
+    slot carries something no other piece can - see the affix table in affixes.ts. Base
+    zero and flat only, like the defence layers above.
+  */
+  /** Fraction of a boss's damage prevented. Body armour only. Capped. */
+  'bossMitigation',
+  /** Fraction of life restored after each Abyss wave. Body armour only. Capped. */
+  'waveRecovery',
+  /**
+   * Fraction faster between packs. Boots only.
+   *
+   * Shortens the TRASH phase and farming, never the boss duel - you reach the next pack
+   * sooner, you do not kill a boss sooner. That is what keeps it a different stat from
+   * attack speed rather than attack speed with a boot on.
+   */
+  'moveSpeed',
 ] as const;
 
 export type StatKey = (typeof STAT_KEYS)[number];
@@ -151,6 +168,9 @@ export const BASE_STATS: Stats = {
   energyShield: 0,
   armour: 0,
   evasion: 0,
+  bossMitigation: 0,
+  waveRecovery: 0,
+  moveSpeed: 0,
 };
 
 /*
@@ -173,6 +193,10 @@ export const ARMOUR_CAP = 0.9;
  * area-versus-single-target axis the skills are built on, now on the defence side too.
  */
 export const BOSS_HIT_SCALE = 4;
+/** A boss always lands at least half its damage, however the body armour rolled. */
+export const BOSS_MITIGATION_CAP = 0.5;
+/** No more than half of life back per wave, or the waves axis stops being dangerous. */
+export const WAVE_RECOVERY_CAP = 0.5;
 
 /** The stats an equipped skill supplies the base for, instead of BASE_STATS. */
 export const SKILL_BASE_STATS = ['damage', 'attackSpeed', 'critChance', 'area'] as const;
@@ -193,37 +217,34 @@ export type UpgradeKey = (typeof UPGRADE_KEYS)[number];
 export type UpgradeLevels = Record<UpgradeKey, number>;
 
 /**
- * Item slots a character has before anything modifies the count.
+ * The armour slots, in loadout order. Phase 8.
  *
- * The BASE, not the total - see equipSlots() in stats.ts. It is also the window
- * within which an item is allowed to change the count at all, which is the rule that
- * keeps that calculation from running away.
+ * FIXED, unlike the four derived relic slots they replaced. A unique used to grant or
+ * remove a slot, which made the count a fixed point with a window rule holding it
+ * together; now each position takes exactly one kind of piece and nothing changes how
+ * many there are. The two uniques that did are re-authored around the fixed slots - the
+ * Harness grants a ring position, the Shroud seals two of these.
  */
-export const ITEM_SLOTS = 4;
+export const ARMOUR_SLOT_KINDS = ['helmet', 'body', 'gloves', 'boots', 'belt'] as const;
+export type ArmourSlot = (typeof ARMOUR_SLOT_KINDS)[number];
+
+/** Length of `loadout`: one position per armour slot. */
+export const ITEM_SLOTS = ARMOUR_SLOT_KINDS.length;
 
 /**
- * Hard ceiling on the loadout array, and therefore on what any item can grant.
+ * Accessory positions: two rings, the amulet, then a third ring.
  *
- * The array is this long in every save; positions past the live count hold items that
- * are simply inert. A fixed length is what makes the slot count a derived number
- * instead of a save migration every time a unique changes it.
+ * The fourth position is live only while something grants it - Traveller's Harness, a
+ * belt. That cannot loop: a ring position can never hold a belt, and no accessory
+ * grants ring positions, so the count is read straight off the belt slot.
+ *
+ * Their own array rather than more `loadout` positions. Sharing `loadout` would mean
+ * every equip, sort, dissemble and slot path filtering rings back out.
  */
-export const MAX_ITEM_SLOTS = 7;
-
-/**
- * Accessory positions: two rings, then the amulet.
- *
- * A FIXED count, unlike the gear slots. The loadout's count is derived because a unique
- * can grant or remove one, and that derivation is a fixed point with a window rule
- * holding it together - see `slotsFrom` in stats.ts. Accessories deliberately sit outside
- * it: a unique that granted a ring slot would feed a second fixed point through the
- * first, and the mechanic buys nothing that a stronger accessory does not.
- *
- * Their own array for the same reason. Sharing `loadout` would mean every equip, sort,
- * dissemble and slot-count path filtering rings back out.
- */
-export const ACCESSORY_SLOT_KINDS = ['ring', 'ring', 'amulet'] as const;
+export const ACCESSORY_SLOT_KINDS = ['ring', 'ring', 'amulet', 'ring'] as const;
 export const ACCESSORY_SLOTS = ACCESSORY_SLOT_KINDS.length;
+/** Accessory positions every character has; the rest need a grant. */
+export const BASE_ACCESSORY_SLOTS = 3;
 
 /**
  * Floor from which the Abyss exists at all.
@@ -330,7 +351,7 @@ export interface SaveState {
    * object, so a hoarder costs the save blob a handful of integers.
    */
   currency: CurrencyPurse;
-  /** Fixed-length; holds item uids. null = empty slot. */
+  /** One uid per ARMOUR_SLOT_KINDS position, in that order. null = empty slot. */
   loadout: (string | null)[];
   /**
    * The equipped weapon's uid, or null for unarmed.
